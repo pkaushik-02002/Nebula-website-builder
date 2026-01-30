@@ -1,0 +1,242 @@
+"use client"
+
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react"
+import {
+  onAuthStateChanged,
+  signInWithPopup,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signOut as firebaseSignOut,
+  type User,
+} from "firebase/auth"
+import { doc, getDoc, setDoc, updateDoc, serverTimestamp, onSnapshot } from "firebase/firestore"
+import { auth, db, googleProvider, githubProvider, type UserPlan, PLAN_TOKEN_LIMITS, DEFAULT_PLANS } from "@/lib/firebase"
+
+interface TokenUsage {
+  used: number
+  remaining: number
+  periodStart: Date
+  periodEnd: Date
+}
+
+interface UserData {
+  uid: string
+  email: string | null
+  displayName: string | null
+  photoURL: string | null
+  planId: string
+  planName?: string
+  tokenUsage: TokenUsage
+  tokensLimit: number
+  createdAt: Date
+}
+
+interface AuthContextType {
+  user: User | null
+  userData: UserData | null
+  loading: boolean
+  signInWithGoogle: () => Promise<void>
+  signInWithGithub: () => Promise<void>
+  signInWithEmail: (email: string, password: string) => Promise<void>
+  signUpWithEmail: (email: string, password: string) => Promise<void>
+  signOut: () => Promise<void>
+  updateTokensUsed: (tokens: number) => Promise<void>
+  hasTokens: (required: number) => boolean
+  remainingTokens: number
+}
+
+const AuthContext = createContext<AuthContextType | undefined>(undefined)
+
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const [user, setUser] = useState<User | null>(null)
+  const [userData, setUserData] = useState<UserData | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  // Ensure user doc exists and set up onSnapshot listener
+  const ensureUserDoc = async (firebaseUser: User) => {
+    const userRef = doc(db, "users", firebaseUser.uid)
+    const userSnap = await getDoc(userRef)
+
+    if (!userSnap.exists()) {
+      const now = new Date()
+      const planId = 'free'
+      const plan = DEFAULT_PLANS[planId as UserPlan]
+      const initial = {
+        uid: firebaseUser.uid,
+        email: firebaseUser.email,
+        displayName: firebaseUser.displayName,
+        photoURL: firebaseUser.photoURL,
+        planId,
+        tokenUsage: {
+          used: 0,
+          remaining: plan.tokensPerMonth,
+          periodStart: serverTimestamp(),
+          periodEnd: serverTimestamp(),
+        },
+        createdAt: serverTimestamp(),
+      }
+      await setDoc(userRef, initial)
+    }
+  }
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      setUser(firebaseUser)
+      
+      if (firebaseUser) {
+        try {
+          await ensureUserDoc(firebaseUser)
+
+          const userRef = doc(db, "users", firebaseUser.uid)
+          const unsubscribeUser = onSnapshot(userRef, async (snap) => {
+            if (!snap.exists()) return
+            const data = snap.data()
+
+            const planId = data.planId || 'free'
+            let planName = DEFAULT_PLANS[planId as UserPlan]?.name
+            let tokensLimit = DEFAULT_PLANS[planId as UserPlan]?.tokensPerMonth || PLAN_TOKEN_LIMITS.free
+
+            // Try to read plan doc if exists
+            try {
+              const planRef = doc(db, 'plans', planId)
+              const planSnap = await getDoc(planRef)
+              if (planSnap.exists()) {
+                const p = planSnap.data()
+                planName = p.name || planName
+                tokensLimit = p.tokensPerMonth || tokensLimit
+              }
+            } catch (e) {
+              // ignore
+            }
+
+            const tokenUsage = data.tokenUsage || { used: data.tokensUsed || 0, remaining: tokensLimit - (data.tokensUsed || 0), periodStart: new Date(), periodEnd: new Date() }
+
+            setUserData({
+              uid: firebaseUser.uid,
+              email: data.email,
+              displayName: data.displayName,
+              photoURL: data.photoURL,
+              planId,
+              planName,
+              tokenUsage: {
+                used: tokenUsage.used || 0,
+                remaining: tokenUsage.remaining ?? Math.max(0, tokensLimit - (tokenUsage.used || 0)),
+                periodStart: tokenUsage.periodStart?.toDate ? tokenUsage.periodStart.toDate() : new Date(tokenUsage.periodStart),
+                periodEnd: tokenUsage.periodEnd?.toDate ? tokenUsage.periodEnd.toDate() : new Date(tokenUsage.periodEnd),
+              },
+              tokensLimit,
+              createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date(),
+            })
+          })
+
+          // keep unsubscribe reference
+          ;(unsubscribe as any)._unsubscribeUser = unsubscribeUser
+        } catch (error) {
+          console.error("Error fetching user data:", error)
+        }
+      } else {
+        setUserData(null)
+      }
+
+      setLoading(false)
+    })
+
+    return () => {
+      // cleanup auth listener
+      unsubscribe()
+    }
+  }, [])
+
+  const signInWithGoogle = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider)
+    } catch (error) {
+      console.error("Google sign in error:", error)
+      throw error
+    }
+  }
+
+  const signInWithGithub = async () => {
+    try {
+      await signInWithPopup(auth, githubProvider)
+    } catch (error) {
+      console.error("GitHub sign in error:", error)
+      throw error
+    }
+  }
+
+  const signInWithEmail = async (email: string, password: string) => {
+    try {
+      await signInWithEmailAndPassword(auth, email, password)
+    } catch (error) {
+      console.error("Email sign in error:", error)
+      throw error
+    }
+  }
+
+  const signUpWithEmail = async (email: string, password: string) => {
+    try {
+      await createUserWithEmailAndPassword(auth, email, password)
+    } catch (error) {
+      console.error("Email sign up error:", error)
+      throw error
+    }
+  }
+
+  const signOut = async () => {
+    try {
+      await firebaseSignOut(auth)
+    } catch (error) {
+      console.error("Sign out error:", error)
+      throw error
+    }
+  }
+
+  const updateTokensUsed = async (tokens: number) => {
+    if (!user || !userData) return
+
+    const userRef = doc(db, "users", user.uid)
+    // client-side best-effort update; server-side transaction should be authoritative
+    await updateDoc(userRef, {
+      'tokenUsage.used': (userData.tokenUsage.used || 0) + tokens,
+      'tokenUsage.remaining': (userData.tokenUsage.remaining || 0) - tokens,
+    } as any)
+
+    setUserData(prev => prev ? { ...prev, tokenUsage: { ...prev.tokenUsage, used: prev.tokenUsage.used + tokens, remaining: prev.tokenUsage.remaining - tokens } } : null)
+  }
+
+  const hasTokens = (required: number): boolean => {
+    if (!userData) return false
+    return (userData.tokenUsage.remaining || 0) >= required
+  }
+
+  const remainingTokens = userData ? userData.tokenUsage.remaining : 0
+
+  return (
+    <AuthContext.Provider
+      value={{
+        user,
+        userData,
+        loading,
+        signInWithGoogle,
+        signInWithGithub,
+        signInWithEmail,
+        signUpWithEmail,
+        signOut,
+        updateTokensUsed,
+        hasTokens,
+        remainingTokens,
+      }}
+    >
+      {children}
+    </AuthContext.Provider>
+  )
+}
+
+export function useAuth() {
+  const context = useContext(AuthContext)
+  if (context === undefined) {
+    throw new Error("useAuth must be used within an AuthProvider")
+  }
+  return context
+}
