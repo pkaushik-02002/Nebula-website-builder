@@ -3,15 +3,15 @@ import { Github, Twitter, Linkedin } from "lucide-react"
 
 const footerLinks = {
   product: [
-    { label: "Features", href: "#features" },
-    { label: "Pricing", href: "#pricing" },
+    { label: "Features", href: "/#features" },
+    { label: "Pricing", href: "/pricing" },
     { label: "Templates", href: "#" },
-    { label: "Documentation", href: "#" },
+    { label: "Documentation", href: "/help" },
   ],
   resources: [
     { label: "Blog", href: "#" },
     { label: "Tutorials", href: "#" },
-    { label: "Examples", href: "#" },
+    { label: "Help & Support", href: "/help" },
     { label: "API Reference", href: "#" },
   ],
   legal: [

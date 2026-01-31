@@ -12,7 +12,7 @@ import {
 
 import { useEffect, useState, useRef, useCallback } from "react"
 import { useParams, useRouter } from "next/navigation"
-import { doc, getDoc, updateDoc, onSnapshot, collection, addDoc, serverTimestamp } from "firebase/firestore"
+import { doc, getDoc, updateDoc, onSnapshot, collection, addDoc, serverTimestamp, deleteField } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import JSZip from "jszip"
 import Spline from '@splinetool/react-spline'
@@ -50,12 +50,16 @@ import {
   HelpCircle,
   Rocket,
   Share,
-  Search,
   Lightbulb,
-  Target
+  Database,
+  Plus,
+  X,
+  LayoutGrid,
+  Key
 } from "lucide-react"
 import { TextShimmer } from "@/components/prompt-kit/text-shimmer"
-import { Tool } from "@/components/prompt-kit/tool"
+import { ThinkingBar } from "@/components/prompt-kit/thinking-bar"
+import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/prompt-kit/reasoning"
 import { Button } from "@/components/ui/button"
 import { AnimatedAIInput } from "@/components/ui/animated-ai-input"
 import { BuildTimeline, type TimelineStep } from "@/components/preview/build-timeline"
@@ -67,9 +71,9 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable"
-import { ProtectedRoute } from "@/components/auth/protected-route"
 import { useAuth } from "@/contexts/auth-context"
 import { motion, AnimatePresence } from "framer-motion"
+import { applyPatch } from "diff"
 import Editor from "@monaco-editor/react"
 
 interface GeneratedFile {
@@ -83,7 +87,10 @@ interface Message {
   content: string
   files?: string[]
   isStreaming?: boolean
+  timestamp?: string
 }
+
+type ProjectVisibility = "public" | "private" | "link-only"
 
 interface Project {
   id: string
@@ -98,6 +105,14 @@ interface Project {
   messages?: Message[]
   error?: string
   tokensUsed?: number
+  githubRepoUrl?: string
+  githubRepoFullName?: string
+  githubSyncedAt?: Date | { toDate: () => Date }
+  suggestsBackend?: boolean
+  supabaseUrl?: string
+  visibility?: ProjectVisibility
+  ownerId?: string
+  editorIds?: string[]
 }
 
 // File tree structure
@@ -108,6 +123,31 @@ interface FileNode {
   children?: FileNode[]
   content?: string
   isGenerating?: boolean
+}
+
+function formatMessageTime(iso: string): string {
+  try {
+    const d = new Date(iso)
+    const h = d.getHours()
+    const m = d.getMinutes()
+    const day = d.getDate()
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    const month = months[d.getMonth()]
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")} • ${day} ${month}`
+  } catch {
+    return ""
+  }
+}
+
+function extractAgentMessage(content: string): { agentMessage: string | null; contentWithoutAgent: string } {
+  const start = "===AGENT_MESSAGE==="
+  const end = "===END_AGENT_MESSAGE==="
+  const i = content.indexOf(start)
+  const j = content.indexOf(end, i)
+  if (i === -1 || j === -1) return { agentMessage: null, contentWithoutAgent: content }
+  const agentMessage = content.slice(i + start.length, j).trim()
+  const contentWithoutAgent = content.slice(0, i).trim() + "\n" + content.slice(j + end.length).trim()
+  return { agentMessage: agentMessage || null, contentWithoutAgent }
 }
 
 function buildFileTree(files: GeneratedFile[]): FileNode[] {
@@ -456,6 +496,11 @@ function ChatMessage({
         
         {!isUser && message.content && (
           <div className="bg-zinc-800/50 rounded-2xl rounded-tl-sm border border-zinc-700/50 p-3 sm:p-4 mb-3">
+            {(message as Message & { timestamp?: string }).timestamp && (
+              <p className="text-[11px] sm:text-xs text-zinc-500 mb-2">
+                {formatMessageTime((message as Message & { timestamp?: string }).timestamp!)}
+              </p>
+            )}
             <div className="flex items-center gap-2 mb-2 sm:mb-3">
               <div className="w-5 h-5 sm:w-6 sm:h-6 rounded-lg bg-zinc-700 flex items-center justify-center">
                 <Lightbulb className="w-2.5 h-2.5 sm:w-3 sm:h-3 text-zinc-300" />
@@ -574,186 +619,11 @@ function ChatMessage({
   )
 }
 
-// Agent Status Component with Modern UI and Tools
-function AgentStatus({ status, currentFile }: { status: string; currentFile?: string }) {
-  const getStatusSteps = () => {
-    if (status.includes("Analyzing")) {
-      return [
-        { icon: <Search className="w-4 h-4" />, title: "Analyzing your request", description: "Processing requirements and understanding scope" },
-        { icon: <Lightbulb className="w-4 h-4" />, title: "Planning approach", description: "Identifying components and architecture" }
-      ]
-    }
-    
-    if (status.includes("Generating")) {
-      return [
-        { icon: <Lightbulb className="w-4 h-4" />, title: "Planning structure", description: "Designing component hierarchy" },
-        { icon: <Target className="w-4 h-4" />, title: "Generating files", description: currentFile ? `Working on: ${currentFile}` : "Creating application files" }
-      ]
-    }
-    
-    if (status.includes("Finalizing")) {
-      return [
-        { icon: <Target className="w-4 h-4" />, title: "Finalizing project", description: "Reviewing code quality" },
-        { icon: <Zap className="w-4 h-4" />, title: "Preparing preview", description: "Setting up development environment" }
-      ]
-    }
-    
-    return [
-      { icon: <Search className="w-4 h-4" />, title: "Processing", description: status }
-    ]
-  }
-
-  const getActiveTools = () => {
-    if (status.includes("Analyzing")) {
-      return [
-        {
-          type: "file_search" as const,
-          state: "input-streaming" as const,
-          input: {
-            pattern: "*.tsx",
-            directory: "/components",
-          }
-        },
-        {
-          type: "api_call" as const,
-          state: "input-available" as const,
-          input: {
-            endpoint: "/api/project/templates",
-            method: "GET",
-          }
-        }
-      ]
-    }
-    
-    if (status.includes("Generating")) {
-      return [
-        {
-          type: "code_generation" as const,
-          state: "processing" as const,
-          input: {
-            framework: "React/Next.js",
-            language: "TypeScript",
-            styling: "Tailwind CSS"
-          }
-        },
-        {
-          type: "file_search" as const,
-          state: "output-available" as const,
-          input: {
-            pattern: currentFile || "*.tsx",
-            directory: "/src"
-          },
-          output: {
-            count: 1,
-            data: [
-              { path: currentFile || "src/components/App.tsx", status: "created" }
-            ]
-          }
-        }
-      ]
-    }
-    
-    if (status.includes("Finalizing")) {
-      return [
-        {
-          type: "deployment" as const,
-          state: "input-available" as const,
-          input: {
-            environment: "development",
-            port: 3000
-          }
-        }
-      ]
-    }
-    
-    return []
-  }
-
-  const steps = getStatusSteps()
-  const tools = getActiveTools()
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="flex gap-3"
-    >
-      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-600 to-purple-600 flex items-center justify-center shrink-0 ring-2 ring-blue-500/20">
-        <Sparkles className="w-4 h-4 text-white animate-pulse" />
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="bg-zinc-800/30 rounded-2xl rounded-tl-sm p-4 border border-zinc-700/30">
-          <div className="flex items-center gap-2 mb-3">
-            <span className="text-xs font-medium text-zinc-400">AI Assistant Working</span>
-            <span className="flex gap-0.5">
-              {[0, 1, 2].map(i => (
-                <motion.span
-                  key={i}
-                  className="w-1 h-1 rounded-full bg-blue-400"
-                  animate={{ opacity: [0.3, 1, 0.3] }}
-                  transition={{ duration: 1, repeat: Infinity, delay: i * 0.2 }}
-                />
-              ))}
-            </span>
-          </div>
-          
-          {/* Status Steps */}
-          <div className="space-y-3 mb-4">
-            {steps.map((step, index) => (
-              <motion.div
-                key={index}
-                initial={{ opacity: 0, x: -10 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: index * 0.1 }}
-                className="flex items-start gap-3 p-3 rounded-lg bg-zinc-900/50 border border-zinc-700/30"
-              >
-                <div className="w-8 h-8 rounded-lg bg-zinc-800 flex items-center justify-center text-zinc-300 shrink-0">
-                  {step.icon}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium text-zinc-100 mb-1">{step.title}</div>
-                  <div className="text-xs text-zinc-400">
-                    {step.description.includes(currentFile || '') ? (
-                      <TextShimmer className="text-xs">{step.description}</TextShimmer>
-                    ) : (
-                      step.description
-                    )}
-                  </div>
-                </div>
-              </motion.div>
-            ))}
-          </div>
-
-          {/* Active Tools */}
-          {tools.length > 0 && (
-            <div className="space-y-3">
-              <div className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Active Tools</div>
-              {tools.map((tool, index) => (
-                <motion.div
-                  key={index}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: index * 0.2 }}
-                >
-                  <Tool
-                    className="w-full"
-                    toolPart={tool}
-                  />
-                </motion.div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    </motion.div>
-  )
-}
-
 function ProjectContent() {
   const params = useParams()
   const projectId = params?.id as string
 
-  const { user, userData, hasTokens, remainingTokens, updateTokensUsed } = useAuth()
+  const { user, userData, hasTokens, remainingTokens, updateTokensUsed, loading: authLoading } = useAuth()
   
   const [project, setProject] = useState<Project | null>(null)
   const [loading, setLoading] = useState(true)
@@ -771,6 +641,8 @@ function ProjectContent() {
   const [currentGeneratingFile, setCurrentGeneratingFile] = useState<string | null>(null)
   const [isSandboxLoading, setIsSandboxLoading] = useState(false)
   const [agentStatus, setAgentStatus] = useState("")
+  const [reasoningSteps, setReasoningSteps] = useState<string[]>([])
+  const abortControllerRef = useRef<AbortController | null>(null)
   const [buildSteps, setBuildSteps] = useState<TimelineStep[]>([
     { key: "write", label: "Writing files", status: "idle" },
     { key: "install", label: "Installing dependencies", status: "idle" },
@@ -787,6 +659,15 @@ function ProjectContent() {
   const [editingTarget, setEditingTarget] = useState<{ kind: "prompt" } | { kind: "message"; index: number } | null>(null)
   const [mobileTab, setMobileTab] = useState<"chat" | "preview">("chat")
   const [deployOpen, setDeployOpen] = useState(false)
+  const [integrationsOpen, setIntegrationsOpen] = useState(false)
+  const [selectedIntegration, setSelectedIntegration] = useState<"all" | "github" | "netlify" | "supabase" | "vars">("all")
+  const [requiredEnvVars, setRequiredEnvVars] = useState<string[]>([])
+  const [envVarNames, setEnvVarNames] = useState<string[]>([])
+  const [envFormVars, setEnvFormVars] = useState<Record<string, string>>({})
+  const [envFormEntries, setEnvFormEntries] = useState<{ name: string; value: string }[]>([])
+  const [envVarsLoading, setEnvVarsLoading] = useState(false)
+  const [envVarsSaving, setEnvVarsSaving] = useState(false)
+  const [envVarsBannerDismissed, setEnvVarsBannerDismissed] = useState(false)
   const [netlifyConnected, setNetlifyConnected] = useState<boolean | null>(null)
   const [deployStep, setDeployStep] = useState<string>("")
   const [deployLogs, setDeployLogs] = useState<string[]>([])
@@ -795,8 +676,19 @@ function ProjectContent() {
   const [netlifyDeployState, setNetlifyDeployState] = useState<string | null>(null)
   const [netlifyLogUrl, setNetlifyLogUrl] = useState<string | null>(null)
   const [isDeploying, setIsDeploying] = useState(false)
+  const [githubConnected, setGithubConnected] = useState<boolean | null>(null)
+  const [isSyncing, setIsSyncing] = useState(false)
+  const [supabaseConnectOpen, setSupabaseConnectOpen] = useState(false)
+  const [supabaseFormUrl, setSupabaseFormUrl] = useState("")
+  const [supabaseFormAnonKey, setSupabaseFormAnonKey] = useState("")
+  const [supabaseInjecting, setSupabaseInjecting] = useState(false)
+  const [suggestBackendDismissed, setSuggestBackendDismissed] = useState(false)
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameValue, setRenameValue] = useState("")
+  const [shareOpen, setShareOpen] = useState(false)
+  const [shareVisibility, setShareVisibility] = useState<ProjectVisibility>("private")
+  const [shareSaving, setShareSaving] = useState(false)
+  const [accessError, setAccessError] = useState<"private" | "forbidden" | null>(null)
   const lastAutoPreviewSignatureRef = useRef<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -810,55 +702,180 @@ function ProjectContent() {
   const router = useRouter()
 
   const duplicateProject = async () => {
-    if (!project) return
+    if (!project || !user) return
     try {
       const projectData = { ...project }
-      // remove id and timestamps to let Firestore create new
       delete (projectData as any).id
       projectData.createdAt = serverTimestamp()
-      const col = collection(db, 'projects')
+      ;(projectData as any).ownerId = user.uid
+      ;(projectData as any).visibility = "private"
+      const col = collection(db, "projects")
       const ref = await addDoc(col, projectData as any)
-      // navigate to new project
       router.push(`/project/${ref.id}`)
     } catch (e) {
-      console.error('Duplicate failed', e)
-      alert('Failed to duplicate project')
+      console.error("Duplicate failed", e)
+      alert("Failed to duplicate project")
     }
   }
 
   const remixProject = async () => {
-    if (!project) return
+    if (!project || !user) return
     try {
       const projectData = { ...project }
       delete (projectData as any).id
-      projectData.name = (projectData.name || 'Untitled Project') + ' (remix)'
+      projectData.name = (projectData.name || "Untitled Project") + " (remix)"
       projectData.createdAt = serverTimestamp()
-      const col = collection(db, 'projects')
+      ;(projectData as any).ownerId = user.uid
+      ;(projectData as any).visibility = "private"
+      const col = collection(db, "projects")
       const ref = await addDoc(col, projectData as any)
       router.push(`/project/${ref.id}`)
     } catch (e) {
-      console.error('Remix failed', e)
-      alert('Failed to remix project')
+      console.error("Remix failed", e)
+      alert("Failed to remix project")
     }
   }
 
   const handleOpenIntegrations = () => {
-    router.push('/settings#integrations')
+    setIntegrationsOpen(true)
+    refreshGitHubStatus()
+    refreshNetlifyStatus()
   }
 
-  const handleOpenGitHub = () => {
-    router.push('/settings#github')
-  }
-
-  const handleShare = async () => {
+  const refreshGitHubStatus = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(window.location.href)
+      const authHeader = await getAuthHeader()
+      const res = await fetch("/api/github/status", { headers: authHeader })
+      const json = await res.json().catch(() => null)
+      setGithubConnected(!!json?.connected)
+    } catch {
+      setGithubConnected(false)
+    }
+  }, [getAuthHeader])
+
+  const handleConnectGitHub = useCallback(async () => {
+    const authHeader = await getAuthHeader()
+    const res = await fetch(`/api/github/oauth/start?projectId=${encodeURIComponent(projectId)}`, {
+      headers: authHeader,
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json?.error || "Failed to start GitHub OAuth")
+    if (!json?.url) throw new Error("Missing OAuth URL")
+    window.location.href = json.url
+  }, [getAuthHeader, projectId])
+
+  const handleSyncToGitHub = useCallback(async () => {
+    if (!projectId || !project?.files?.length) return
+    setIsSyncing(true)
+    try {
+      const authHeader = await getAuthHeader()
+      const res = await fetch("/api/github/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeader },
+        body: JSON.stringify({ projectId }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json?.error || "Sync failed")
+      // Project doc will update via Firestore listener with githubRepoUrl, etc.
+    } catch (e) {
+      console.error("GitHub sync failed", e)
+      alert(e instanceof Error ? e.message : "GitHub sync failed")
+    } finally {
+      setIsSyncing(false)
+    }
+  }, [getAuthHeader, projectId, project?.files?.length])
+
+  const handleDisconnectGitHub = useCallback(async () => {
+    try {
+      const authHeader = await getAuthHeader()
+      const res = await fetch("/api/github/disconnect", { method: "POST", headers: authHeader })
+      if (!res.ok) throw new Error("Failed to disconnect")
+      setGithubConnected(false)
+    } catch (e) {
+      console.error("Disconnect GitHub failed", e)
+      alert("Failed to disconnect GitHub")
+    }
+  }, [getAuthHeader])
+
+  const supabaseConnected = !!project?.supabaseUrl
+
+  const handleConnectSupabase = useCallback(
+    async (url: string, anonKey: string, serviceRoleKey?: string) => {
+      if (!projectId) return
+      try {
+        const authHeader = await getAuthHeader()
+        const res = await fetch("/api/supabase/connect", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeader },
+          body: JSON.stringify({ projectId, url, anonKey, serviceRoleKey: serviceRoleKey || undefined }),
+        })
+        const json = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(json?.error || "Connect failed")
+        setSupabaseConnectOpen(false)
+        // Project will update via Firestore listener
+      } catch (e) {
+        console.error("Supabase connect failed", e)
+        throw e
+      }
+    },
+    [getAuthHeader, projectId]
+  )
+
+  const handleInjectSupabase = useCallback(async () => {
+    if (!projectId) return
+    setSupabaseInjecting(true)
+    try {
+      const authHeader = await getAuthHeader()
+      const res = await fetch("/api/supabase/inject", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeader },
+        body: JSON.stringify({ projectId }),
+      })
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}))
+        throw new Error(json?.error || "Inject failed")
+      }
+      // Project files updated in Firestore; listener will refresh
+    } catch (e) {
+      console.error("Supabase inject failed", e)
+      alert(e instanceof Error ? e.message : "Failed to add Supabase client")
+    } finally {
+      setSupabaseInjecting(false)
+    }
+  }, [getAuthHeader, projectId])
+
+  const projectUrl = typeof window !== "undefined" ? `${window.location.origin}/project/${projectId}` : ""
+  const canEdit = !!user && !!project && (!project.ownerId || project.ownerId === user.uid || (Array.isArray(project.editorIds) && project.editorIds.includes(user.uid)))
+
+  const handleShare = () => {
+    setShareVisibility(project?.visibility ?? "private")
+    setShareOpen(true)
+  }
+
+  const handleCopyShareLink = async () => {
+    try {
+      await navigator.clipboard.writeText(projectUrl)
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
-      alert('Project URL copied to clipboard')
     } catch (e) {
-      console.error('Share failed', e)
-      alert('Failed to copy link')
+      console.error("Copy failed", e)
+      alert("Failed to copy link")
+    }
+  }
+
+  const handleSaveShare = async () => {
+    if (!projectId || !project) return
+    setShareSaving(true)
+    try {
+      const projectRef = doc(db, "projects", projectId)
+      await updateDoc(projectRef, { visibility: shareVisibility })
+      setProject((p) => (p ? { ...p, visibility: shareVisibility } : p))
+      setShareOpen(false)
+    } catch (e) {
+      console.error("Save share failed", e)
+      alert("Failed to update share settings")
+    } finally {
+      setShareSaving(false)
     }
   }
 
@@ -980,6 +997,79 @@ function ProjectContent() {
     if (!deployOpen) return
     refreshNetlifyStatus()
   }, [deployOpen, refreshNetlifyStatus])
+
+  useEffect(() => {
+    refreshGitHubStatus()
+  }, [refreshGitHubStatus])
+
+  // Fetch required env vars when project has files (for banner and vars panel)
+  useEffect(() => {
+    if (!projectId || !project?.files?.length) return
+    let cancelled = false
+    getAuthHeader()
+      .then((authHeader) =>
+        fetch(`/api/env-vars/required?projectId=${encodeURIComponent(projectId)}`, { headers: authHeader })
+      )
+      .then((res) => (cancelled ? null : res.json()))
+      .then((json) => {
+        if (!cancelled && Array.isArray(json?.requiredEnvVars)) setRequiredEnvVars(json.requiredEnvVars)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [projectId, project?.files?.length, getAuthHeader])
+
+  // When opening Vars panel, fetch required + stored names and init form entries
+  useEffect(() => {
+    if (!integrationsOpen || selectedIntegration !== "vars" || !projectId) return
+    setEnvVarsLoading(true)
+    let cancelled = false
+    Promise.all([
+      getAuthHeader().then((h) => fetch(`/api/env-vars/required?projectId=${encodeURIComponent(projectId)}`, { headers: h }).then((r) => r.json())),
+      getAuthHeader().then((h) => fetch(`/api/env-vars/names?projectId=${encodeURIComponent(projectId)}`, { headers: h }).then((r) => r.json())),
+    ])
+      .then(([reqRes, namesRes]) => {
+        if (cancelled) return
+        const required = Array.isArray(reqRes?.requiredEnvVars) ? reqRes.requiredEnvVars : []
+        const names = Array.isArray(namesRes?.envVarNames) ? namesRes.envVarNames : []
+        setRequiredEnvVars(required)
+        setEnvVarNames(names)
+        const allNames = [...new Set([...required, ...names])]
+        setEnvFormEntries(
+          allNames.map((name) => ({ name, value: "" })).concat([{ name: "", value: "" }])
+        )
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setEnvVarsLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [integrationsOpen, selectedIntegration, projectId, getAuthHeader])
+
+  const handleSaveEnvVars = useCallback(async () => {
+    if (!projectId) return
+    const record: Record<string, string> = {}
+    for (const { name, value } of envFormEntries) {
+      const k = name.trim()
+      if (k) record[k] = value
+    }
+    setEnvVarsSaving(true)
+    try {
+      const authHeader = await getAuthHeader()
+      const res = await fetch("/api/env-vars/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeader },
+        body: JSON.stringify({ projectId, envVars: record }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json?.error || "Save failed")
+      setEnvVarNames(Object.keys(record))
+    } catch (e) {
+      console.error("Save env vars failed", e)
+      alert(e instanceof Error ? e.message : "Failed to save env vars")
+    } finally {
+      setEnvVarsSaving(false)
+    }
+  }, [projectId, envFormEntries, getAuthHeader])
 
   const handleSaveRename = async () => {
     if (!projectId) return
@@ -1114,35 +1204,96 @@ function ProjectContent() {
     textarea.style.height = `${newHeight}px`
   }, [])
 
-  // Fetch project data
+  // Fetch project data: real-time when user, one-time API when no user (public/link-only)
   useEffect(() => {
     if (!projectId) return
+    setAccessError(null)
 
-    const projectRef = doc(db, "projects", projectId)
-    
-    const unsubscribe = onSnapshot(projectRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data()
-        const projectData = { id: docSnap.id, ...data } as Project
+    if (user) {
+      const projectRef = doc(db, "projects", projectId)
+      const unsubscribe = onSnapshot(projectRef, (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data()
+          const visibility = data.visibility ?? "private"
+          const ownerId = data.ownerId
+          const editorIds = Array.isArray(data.editorIds) ? data.editorIds : []
+          const isOwner = user.uid === ownerId
+          const isEditor = editorIds.includes(user.uid)
+          if (visibility === "private" && !isOwner && !isEditor) {
+            setAccessError("forbidden")
+            setProject(null)
+            setLoading(false)
+            return
+          }
+          setAccessError(null)
+          const projectData = { id: docSnap.id, ...data } as Project
+          setProject(projectData)
+          if (data.files && data.files.length > 0 && !selectedFile) {
+            setSelectedFile(data.files[0])
+          }
+          if (projectData.sandboxUrl && projectData.status === "complete") {
+            setActiveTab("preview")
+          }
+        } else {
+          setProject(null)
+        }
+        setLoading(false)
+      }, (error) => {
+        console.error("Error fetching project:", error)
+        setLoading(false)
+      })
+      return () => unsubscribe()
+    }
+
+    // No user: fetch via API (allows public/link-only view)
+    setLoading(true)
+    fetch(`/api/projects/${projectId}`)
+      .then((res) => {
+        if (res.status === 403) {
+          setAccessError("private")
+          setProject(null)
+          return
+        }
+        if (res.status === 404) {
+          setProject(null)
+          return
+        }
+        if (!res.ok) {
+          setLoading(false)
+          return
+        }
+        return res.json()
+      })
+      .then((data) => {
+        if (!data) {
+          setLoading(false)
+          return
+        }
+        const projectData: Project = {
+          ...data,
+          id: data.id || projectId,
+          createdAt: typeof data.createdAt === "string" ? new Date(data.createdAt) : (data.createdAt || new Date()),
+        }
         setProject(projectData)
-        
-        // Auto-switch to preview if project has sandbox URL and is complete
+        if (data.files?.length > 0 && !selectedFile) {
+          setSelectedFile(data.files[0])
+        }
         if (projectData.sandboxUrl && projectData.status === "complete") {
           setActiveTab("preview")
         }
-        
-        if (data.files && data.files.length > 0 && !selectedFile) {
-          setSelectedFile(data.files[0])
-        }
-      }
-      setLoading(false)
-    }, (error) => {
-      console.error("Error fetching project:", error)
-      setLoading(false)
-    })
+        setLoading(false)
+      })
+      .catch(() => setLoading(false))
+  }, [projectId, user, authLoading, selectedFile])
 
-    return () => unsubscribe()
-  }, [projectId, selectedFile])
+  // Claim legacy projects: set ownerId when current user opens a project with no owner
+  useEffect(() => {
+    if (!projectId || !user || !project || project.ownerId) return
+    const projectRef = doc(db, "projects", projectId)
+    updateDoc(projectRef, { ownerId: user.uid, visibility: "private" }).then(() => {
+      setProject((p) => (p ? { ...p, ownerId: user.uid, visibility: "private" } : p))
+    }).catch(() => {})
+  }, [projectId, user?.uid, project?.id, project?.ownerId])
 
   // Start generation on mount if pending
   useEffect(() => {
@@ -1151,33 +1302,40 @@ function ProjectContent() {
     }
   }, [project?.status])
 
-  const mergeDiffsWithExistingFiles = (
+  /** Merge model output (diffs or full files) into existing project; applies patches when content is unified diff. */
+  const mergeWithExistingFiles = (
     existingFiles: GeneratedFile[],
-    diffFiles: GeneratedFile[],
-    newFiles: GeneratedFile[]
+    blocks: GeneratedFile[]
   ): GeneratedFile[] => {
-    const result = [...existingFiles]
-    
-    // Apply diffs to existing files
-    for (const diff of diffFiles) {
-      const existingIndex = result.findIndex(f => f.path === diff.path)
-      if (existingIndex !== -1) {
-        // Apply diff to existing file (simplified - just replace content for now)
-        result[existingIndex] = {
-          ...result[existingIndex],
-          content: diff.content
+    const result = existingFiles.map(f => ({ ...f }))
+
+    for (const block of blocks) {
+      const path = block.path
+      const content = block.content.trim()
+      const isUnifiedDiff = content.startsWith("--- a/")
+
+      if (isUnifiedDiff) {
+        const existingIndex = result.findIndex(f => f.path === path)
+        const oldContent = existingIndex !== -1 ? result[existingIndex].content : ""
+        const patched = applyPatch(oldContent, content)
+        if (typeof patched === "string") {
+          if (existingIndex !== -1) {
+            result[existingIndex] = { ...result[existingIndex], content: patched }
+          } else {
+            result.push({ path, content: patched })
+          }
+        }
+        // If applyPatch returns false, patch failed; leave existing file unchanged or skip new
+      } else {
+        const existingIndex = result.findIndex(f => f.path === path)
+        if (existingIndex !== -1) {
+          result[existingIndex] = { ...result[existingIndex], content }
+        } else {
+          result.push({ path, content })
         }
       }
     }
-    
-    // Add completely new files
-    for (const newFile of newFiles) {
-      const exists = result.findIndex(f => f.path === newFile.path)
-      if (exists === -1) {
-        result.push(newFile)
-      }
-    }
-    
+
     return result
   }
 
@@ -1195,43 +1353,43 @@ function ProjectContent() {
     return files
   }
 
-  const parseDiffs = (content: string): GeneratedFile[] => {
-    const files: GeneratedFile[] = []
-    const diffRegex = /===FILE: (.+?)===\n--- a\/(.+?)\n\+\+\+ b\/(.+?)\n@@ -(\d+),(\d+) \+(\d+),(\d+) @@\n([\s\S]*?)(?====END_FILE===|===FILE:|$)/g
-    let match
-
-    while ((match = diffRegex.exec(content)) !== null) {
-      const path = match[1].trim()
-      const diffContent = match[7].trim()
-      files.push({ path, content: diffContent })
-    }
-
-    return files
-  }
-
   const generateCode = async (prompt: string, model?: string) => {
     if (!project) return
-    
+
+    const controller = new AbortController()
+    abortControllerRef.current = controller
+
     setIsGenerating(true)
     setGeneratingFiles([])
     setAgentStatus("Analyzing your request...")
+    setReasoningSteps(["Analyzing your request and understanding scope."])
 
     const projectRef = doc(db, "projects", projectId)
     await updateDoc(projectRef, { status: "generating" })
 
     try {
       setAgentStatus("Generating application structure...")
-      
+      setReasoningSteps(prev => [...prev, "Planning application structure and components."])
+
       // include Firebase ID token so server can authenticate and charge tokens
       const idToken = await user?.getIdToken()
       if (!idToken) {
         throw new Error("Not authenticated - please sign in")
       }
-      
+
+      const body: { prompt: string; model: string; idToken: string; existingFiles?: { path: string; content: string }[] } = {
+        prompt,
+        model: model || "GPT-4-1 Mini",
+        idToken,
+      }
+      if (project.files && project.files.length > 0) {
+        body.existingFiles = project.files
+      }
       const response = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt, model: model || "GPT-4-1 Mini", idToken }),
+        body: JSON.stringify(body),
+        signal: controller.signal,
       })
 
       if (!response.ok) {
@@ -1243,6 +1401,8 @@ function ProjectContent() {
       const decoder = new TextDecoder()
       let fullContent = ""
       let lastFileCount = 0
+      let agentMessage: string | null = null
+      let agentMessageTimestamp: string | null = null
 
       while (reader) {
         const { done, value } = await reader.read()
@@ -1251,26 +1411,36 @@ function ProjectContent() {
         const chunk = decoder.decode(value)
         fullContent += chunk
 
-        // Parse files from streaming content (handle both full files and diffs)
-        const parsedFiles = parseStreamingFiles(fullContent)
-        const diffFiles = parseDiffs(fullContent)
-        
-        // For follow-up prompts, we need to be smarter about file handling
+        // Extract agent conversational message (so file parsing ignores it)
+        const { agentMessage: parsedAgent, contentWithoutAgent } = extractAgentMessage(fullContent)
+        if (parsedAgent && !agentMessage) {
+          agentMessage = parsedAgent
+          agentMessageTimestamp = new Date().toISOString()
+          await updateDoc(projectRef, {
+            messages: [
+              ...(project.messages || []),
+              { role: "assistant", content: parsedAgent, timestamp: agentMessageTimestamp }
+            ]
+          })
+        }
+
+        // Parse file blocks from stream (each block is full content or unified diff)
+        const parsedBlocks = parseStreamingFiles(contentWithoutAgent)
+
         let allFiles: GeneratedFile[]
         if (project.files && project.files.length > 0) {
-          // This is a follow-up - merge diffs with existing files
-          allFiles = mergeDiffsWithExistingFiles(project.files, diffFiles, parsedFiles)
+          allFiles = mergeWithExistingFiles(project.files, parsedBlocks)
         } else {
-          // This is initial generation
-          allFiles = [...parsedFiles, ...diffFiles]
+          allFiles = [...parsedBlocks]
         }
-        
+
         // Detect new files being generated
-        if (parsedFiles.length > lastFileCount) {
-          const newFile = parsedFiles[parsedFiles.length - 1]
+        if (parsedBlocks.length > lastFileCount) {
+          const newFile = parsedBlocks[parsedBlocks.length - 1]
           setCurrentGeneratingFile(newFile.path)
           setAgentStatus(`Creating ${newFile.path}...`)
-          lastFileCount = parsedFiles.length
+          setReasoningSteps(prev => [...prev, `Creating file: ${newFile.path}`])
+          lastFileCount = parsedBlocks.length
         }
 
         // Update generating files with current state
@@ -1285,36 +1455,40 @@ function ProjectContent() {
         }
       }
 
-      // Final parse
-      const parsedFiles = parseStreamingFiles(fullContent)
-      const diffFiles = parseDiffs(fullContent)
-      
-      // For follow-up prompts, merge diffs with existing files, otherwise use new files
+      // Final parse (use content without agent block)
+      const { contentWithoutAgent: finalContent } = extractAgentMessage(fullContent)
+      const finalBlocks = parseStreamingFiles(finalContent)
+
       let finalFiles: GeneratedFile[]
       if (project.files && project.files.length > 0) {
-        // This is a follow-up prompt - merge diffs with existing files
-        finalFiles = mergeDiffsWithExistingFiles(project.files, diffFiles, parsedFiles)
+        finalFiles = mergeWithExistingFiles(project.files, finalBlocks)
       } else {
-        // This is initial generation - use all files
-        finalFiles = [...parsedFiles, ...diffFiles]
+        finalFiles = [...finalBlocks]
       }
       
       const tokensUsed = Math.floor(fullContent.length / 4)
+      const suggestsBackend = /===META:\s*suggestsBackend\s*=\s*true\s*===/i.test(fullContent)
 
       setAgentStatus("Finalizing...")
+      setReasoningSteps(prev => [...prev, "Finalizing and preparing preview."])
 
       // Update tokens used
       await updateTokensUsed(tokensUsed)
 
-      // Update project with files
+      // Build messages: existing + optional agent message (if we added it) + completion message
+      const baseMessages = project.messages || []
+      const withAgent = agentMessage && agentMessageTimestamp
+        ? [...baseMessages, { role: "assistant" as const, content: agentMessage, timestamp: agentMessageTimestamp }]
+        : baseMessages
+      const completionMessage = { role: "assistant" as const, content: `Generated ${finalFiles.length} files successfully. You can view them in the code panel.`, files: finalFiles.map(f => f.path) }
+
+      // Update project with files and messages
       await updateDoc(projectRef, {
         status: "complete",
         files: finalFiles,
         tokensUsed: (project.tokensUsed || 0) + tokensUsed,
-        messages: [
-          ...(project.messages || []),
-          { role: "assistant", content: `Generated ${finalFiles.length} files successfully. You can view them in the code panel.`, files: finalFiles.map(f => f.path) }
-        ]
+        ...(suggestsBackend ? { suggestsBackend: true } : {}),
+        messages: [...withAgent, completionMessage]
       })
 
       if (finalFiles.length > 0) {
@@ -1325,16 +1499,22 @@ function ProjectContent() {
       await createSandbox(finalFiles)
 
     } catch (error) {
-      console.error("Generation error:", error)
-      await updateDoc(projectRef, {
-        status: "error",
-        error: error instanceof Error ? error.message : "Generation failed"
-      })
+      if (error instanceof Error && error.name === "AbortError") {
+        await updateDoc(projectRef, { status: "pending" })
+      } else {
+        console.error("Generation error:", error)
+        await updateDoc(projectRef, {
+          status: "error",
+          error: error instanceof Error ? error.message : "Generation failed"
+        })
+      }
     } finally {
+      abortControllerRef.current = null
       setIsGenerating(false)
       setGeneratingFiles([])
       setCurrentGeneratingFile("")
       setAgentStatus("")
+      setReasoningSteps([])
     }
   }
 
@@ -1378,10 +1558,11 @@ function ProjectContent() {
     }
 
     try {
+      const authHeader = await getAuthHeader()
       const response = await fetch("/api/sandbox", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ files }),
+        headers: { "Content-Type": "application/json", ...authHeader },
+        body: JSON.stringify({ files, projectId }),
       })
 
       if (!response.ok) {
@@ -1574,14 +1755,45 @@ function ProjectContent() {
   // Calculate tokens limit based on remaining tokens
   const tokensLimit = userData ? userData.tokenUsage.used + userData.tokenUsage.remaining : 0
 
-  if (loading) {
+  if (authLoading || loading) {
     return (
       <div className="min-h-screen bg-zinc-950 flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
           <div className="w-10 h-10 rounded-full bg-gradient-to-br from-zinc-700 to-zinc-800 flex items-center justify-center">
             <Loader2 className="w-5 h-5 text-zinc-400 animate-spin" />
           </div>
-          <TextShimmer className="text-sm">Loading project...</TextShimmer>
+          <TextShimmer className="text-sm">{authLoading ? "Loading…" : "Loading project..."}</TextShimmer>
+        </div>
+      </div>
+    )
+  }
+
+  if (accessError === "private") {
+    return (
+      <div className="min-h-screen bg-zinc-950 flex items-center justify-center p-4">
+        <div className="text-center max-w-md rounded-2xl border border-zinc-800/80 bg-zinc-900/50 p-8">
+          <div className="w-12 h-12 rounded-full bg-zinc-800 flex items-center justify-center mx-auto mb-4">
+            <Share className="w-6 h-6 text-zinc-400" />
+          </div>
+          <h1 className="text-xl font-semibold text-zinc-100 mb-2">This project is private</h1>
+          <p className="text-zinc-500 text-sm mb-6">Sign in to request access or open your own project.</p>
+          <Link href={`/login?redirect=${encodeURIComponent(`/project/${projectId}`)}`}>
+            <Button className="bg-zinc-100 text-zinc-900 hover:bg-white border-0">Sign in</Button>
+          </Link>
+        </div>
+      </div>
+    )
+  }
+
+  if (accessError === "forbidden") {
+    return (
+      <div className="min-h-screen bg-zinc-950 flex items-center justify-center p-4">
+        <div className="text-center max-w-md rounded-2xl border border-zinc-800/80 bg-zinc-900/50 p-8">
+          <h1 className="text-xl font-semibold text-zinc-100 mb-2">You don&apos;t have access</h1>
+          <p className="text-zinc-500 text-sm mb-6">This project is private and you aren&apos;t an owner or editor.</p>
+          <Link href="/">
+            <Button variant="outline" className="border-zinc-700 text-zinc-300">Back home</Button>
+          </Link>
         </div>
       </div>
     )
@@ -1604,21 +1816,21 @@ function ProjectContent() {
   }
 
   return (
-    <div className="h-screen w-screen overflow-hidden bg-zinc-950 flex flex-col">
-      {/* Top Header Bar */}
-      <div className="h-auto lg:h-14 flex items-center justify-between px-3 sm:px-4 lg:px-6 py-2 lg:py-0 border-b border-zinc-800 bg-zinc-900 flex-shrink-0 gap-3">
-        {/* Mobile: Burger menu */}
-        <div className="lg:hidden flex items-center">
+    <div className="h-screen w-screen overflow-hidden bg-zinc-950 flex flex-col min-h-0 touch-pan-y overscroll-none">
+      {/* Top Header Bar - modern glass bar */}
+      <div className="h-auto lg:h-14 flex items-center justify-between px-3 sm:px-4 lg:px-6 py-2.5 lg:py-0 border-b border-zinc-800/80 bg-zinc-900/95 backdrop-blur-xl flex-shrink-0 gap-3 shadow-[0_1px_0_0_rgba(255,255,255,0.03)] safe-area-inset-top">
+        {/* Mobile: Burger menu - touch-friendly */}
+        <div className="lg:hidden flex items-center min-w-[44px] min-h-[44px] -ml-2 items-center justify-center">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
-                className="h-9 w-9 inline-flex items-center justify-center rounded-xl border border-zinc-800/70 bg-zinc-950/40 text-zinc-200 shadow-sm shadow-black/30 ring-1 ring-white/5 hover:text-zinc-50 hover:bg-zinc-900/70 hover:border-zinc-700/80 transition-colors active:scale-[0.98]"
+                className="h-11 w-11 inline-flex items-center justify-center rounded-xl border border-zinc-800/70 bg-zinc-950/40 text-zinc-200 shadow-sm shadow-black/20 ring-1 ring-white/5 hover:text-zinc-50 hover:bg-zinc-900/70 hover:border-zinc-700/80 transition-all duration-200 active:scale-[0.97]"
                 aria-label="Open menu"
               >
-                <Menu className="h-4.5 w-4.5" />
+                <Menu className="h-5 w-5" />
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-[calc(100vw-1.5rem)] max-w-80 bg-zinc-950/95 border-zinc-800/80 shadow-2xl rounded-2xl p-1 ring-1 ring-white/10 backdrop-blur-xl">
+            <DropdownMenuContent align="start" className="w-[min(calc(100vw-1.5rem),20rem)] max-w-80 bg-zinc-950/98 border border-zinc-800/80 shadow-2xl rounded-2xl p-1.5 ring-1 ring-white/10 backdrop-blur-xl">
               <DropdownMenuItem asChild className="px-3 py-2.5">
                 <Link href="/projects" className="flex items-center gap-2.5 cursor-pointer w-full">
                   <div className="p-1.5 rounded-md bg-zinc-800">
@@ -1633,21 +1845,48 @@ function ProjectContent() {
               <div className="px-3 py-2">
                 <div className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider mb-2">Actions</div>
 
-                <button onClick={handleOpenIntegrations} className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-zinc-800/70 transition-colors text-left">
-                  <Plug className="w-4 h-4 text-zinc-300" />
+                <DropdownMenuItem
+                  onSelect={(e) => { e.preventDefault(); handleOpenIntegrations(); }}
+                  className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-zinc-800/70 cursor-pointer focus:bg-zinc-800/70 outline-none"
+                >
+                  <Plug className="w-4 h-4 text-zinc-300 shrink-0" />
                   <span className="text-sm text-zinc-100">Integrations</span>
-                </button>
-
-                <button onClick={handleOpenGitHub} className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-zinc-800/70 transition-colors text-left">
-                  <Github className="w-4 h-4 text-zinc-300" />
-                  <span className="text-sm text-zinc-100">GitHub</span>
-                </button>
+                </DropdownMenuItem>
 
                 <div className="pt-2">
                   <button onClick={() => setDeployOpen(true)} className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-zinc-800/70 transition-colors text-left">
                     <Rocket className="w-4 h-4 text-zinc-400" />
                     <span className="text-sm font-semibold text-zinc-100">Deploy</span>
                   </button>
+                </div>
+                <div className="pt-2">
+                  {githubConnected === false ? (
+                    <button onClick={handleConnectGitHub} className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-zinc-800/70 transition-colors text-left">
+                      <Github className="w-4 h-4 text-zinc-400" />
+                      <span className="text-sm font-semibold text-zinc-100">Connect GitHub</span>
+                    </button>
+                  ) : githubConnected === true && project?.files?.length ? (
+                    <>
+                      {project.githubRepoUrl ? (
+                        <>
+                          <a href={project.githubRepoUrl} target="_blank" rel="noreferrer" className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-zinc-800/70 transition-colors text-left">
+                            <Github className="w-4 h-4 text-zinc-400" />
+                            <span className="text-sm text-zinc-100 truncate flex-1">View repo</span>
+                            <ExternalLink className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
+                          </a>
+                          <button onClick={handleSyncToGitHub} disabled={isSyncing} className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-zinc-800/70 transition-colors text-left disabled:opacity-50">
+                            {isSyncing ? <Loader2 className="w-4 h-4 animate-spin text-zinc-400" /> : <RefreshCw className="w-4 h-4 text-zinc-400" />}
+                            <span className="text-sm text-zinc-100">Re-sync to GitHub</span>
+                          </button>
+                        </>
+                      ) : (
+                        <button onClick={handleSyncToGitHub} disabled={isSyncing} className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-zinc-800/70 transition-colors text-left disabled:opacity-50">
+                          {isSyncing ? <Loader2 className="w-4 h-4 animate-spin text-zinc-400" /> : <Github className="w-4 h-4 text-zinc-400" />}
+                          <span className="text-sm text-zinc-100">{isSyncing ? "Syncing…" : "Sync to GitHub"}</span>
+                        </button>
+                      )}
+                    </>
+                  ) : null}
                 </div>
               </div>
 
@@ -1718,7 +1957,7 @@ function ProjectContent() {
 
         {/* Rename Project Modal */}
         <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
-          <DialogContent>
+          <DialogContent className="bg-zinc-950/98 border border-zinc-800/80 rounded-2xl shadow-2xl backdrop-blur-xl max-w-[min(calc(100vw-1.5rem),24rem)]">
             <DialogHeader>
               <DialogTitle>Rename Project</DialogTitle>
               <DialogDescription>Set a new name for this project.</DialogDescription>
@@ -1739,8 +1978,8 @@ function ProjectContent() {
         </Dialog>
 
         {/* Title (center on mobile, dropdown on desktop) */}
-        <div className="flex-1 flex justify-center lg:justify-start min-w-0">
-          <div className="lg:hidden text-sm font-semibold text-zinc-100 truncate text-center max-w-[60vw]">
+        <div className="flex-1 flex justify-center lg:justify-start min-w-0 px-1">
+          <div className="lg:hidden text-sm font-semibold text-zinc-100 truncate text-center max-w-[55vw] sm:max-w-[60vw]">
             {displayProjectName}
           </div>
 
@@ -1836,6 +2075,8 @@ function ProjectContent() {
                 Project
               </DropdownMenuLabel>
 
+              {canEdit && (
+                <>
               {/* Rename */}
               <DropdownMenuItem className="px-3 py-2.5 cursor-pointer" onSelect={() => { setRenameValue(project?.name || ''); setRenameOpen(true); }}>
                 <div className="flex items-center gap-2.5 w-full">
@@ -1857,7 +2098,7 @@ function ProjectContent() {
               </DropdownMenuItem>
 
               {/* Remix */}
-              <DropdownMenuItem className="px-3 py-2.5 cursor-pointer">
+              <DropdownMenuItem className="px-3 py-2.5 cursor-pointer" onSelect={remixProject}>
                 <div className="flex items-center gap-2.5 w-full">
                   <div className="p-1.5 rounded-md bg-zinc-800">
                     <FileText className="w-3.5 h-3.5 text-zinc-300" />
@@ -1865,6 +2106,8 @@ function ProjectContent() {
                   <span className="text-sm text-zinc-100">Remix Project</span>
                 </div>
               </DropdownMenuItem>
+                </>
+              )}
 
               {/* Export */}
               <DropdownMenuItem className="px-3 py-2.5 cursor-pointer" onSelect={downloadProject}>
@@ -1903,15 +2146,12 @@ function ProjectContent() {
           </div>
         </div>
 
-        {/* Right: Action Buttons (desktop only) */}
+        {/* Right: Action Buttons (desktop only) - only when user can edit */}
+        {canEdit && (
         <div className="hidden lg:flex items-center gap-2 overflow-x-auto lg:overflow-visible max-w-[46vw] sm:max-w-[52vw] lg:max-w-none custom-scrollbar">
           <button onClick={handleOpenIntegrations} className="h-9 px-4 text-xs font-semibold text-zinc-300 hover:text-zinc-50 hover:bg-zinc-800/90 border border-zinc-800/50 hover:border-zinc-700/70 rounded-lg transition-all duration-200 group shadow-sm hover:shadow-md flex items-center">
             <Plug className="w-4 h-4 mr-2 text-zinc-400 group-hover:text-blue-400 transition-colors" />
             Integrations
-          </button>
-          <button onClick={handleOpenGitHub} className="h-9 px-4 text-xs font-semibold text-zinc-300 hover:text-zinc-50 hover:bg-zinc-800/90 border border-zinc-800/50 hover:border-zinc-700/70 rounded-lg transition-all duration-200 group shadow-sm hover:shadow-md flex items-center">
-            <Github className="w-4 h-4 mr-2 text-zinc-400 group-hover:text-zinc-200 transition-colors" />
-            GitHub
           </button>
           <button
             type="button"
@@ -1921,28 +2161,109 @@ function ProjectContent() {
             <Rocket className="w-4 h-4 mr-2 text-zinc-400 group-hover:text-zinc-200 transition-colors" />
             Deploy
           </button>
+          {githubConnected === false ? (
+            <button
+              type="button"
+              onClick={handleConnectGitHub}
+              className="h-9 px-4 text-xs font-semibold text-zinc-300 hover:text-zinc-50 hover:bg-zinc-800/90 border border-zinc-800/50 hover:border-zinc-700/70 rounded-lg transition-all duration-200 group shadow-sm hover:shadow-md flex items-center"
+            >
+              <Github className="w-4 h-4 mr-2 text-zinc-400 group-hover:text-zinc-200 transition-colors" />
+              Connect GitHub
+            </button>
+          ) : githubConnected === true && project?.files?.length ? (
+            <div className="flex items-center gap-1.5">
+              {project.githubRepoUrl ? (
+                <>
+                  <a
+                    href={project.githubRepoUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="h-9 px-3 text-xs font-semibold text-zinc-300 hover:text-zinc-50 hover:bg-zinc-800/90 border border-zinc-800/50 hover:border-zinc-700/70 rounded-lg transition-all duration-200 flex items-center gap-1.5 truncate max-w-[180px]"
+                    title={project.githubRepoUrl}
+                  >
+                    <Github className="w-4 h-4 shrink-0 text-zinc-400" />
+                    <span className="truncate">{project.githubRepoFullName || "View repo"}</span>
+                    <ExternalLink className="w-3 h-3 shrink-0 opacity-70" />
+                  </a>
+                  <button
+                    type="button"
+                    onClick={handleSyncToGitHub}
+                    disabled={isSyncing}
+                    className="h-9 px-3 text-xs font-semibold text-zinc-300 hover:text-zinc-50 hover:bg-zinc-800/90 border border-zinc-800/50 hover:border-zinc-700/70 rounded-lg transition-all duration-200 flex items-center disabled:opacity-50"
+                    title="Re-sync to GitHub"
+                  >
+                    {isSyncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleSyncToGitHub}
+                  disabled={isSyncing}
+                  className="h-9 px-4 text-xs font-semibold text-zinc-300 hover:text-zinc-50 hover:bg-zinc-800/90 border border-zinc-800/50 hover:border-zinc-700/70 rounded-lg transition-all duration-200 group shadow-sm hover:shadow-md flex items-center"
+                >
+                  {isSyncing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Github className="w-4 h-4 mr-2 text-zinc-400 group-hover:text-zinc-200 transition-colors" />}
+                  {isSyncing ? "Syncing…" : "Sync to GitHub"}
+                </button>
+              )}
+            </div>
+          ) : null}
           <button onClick={handleShare} className="h-9 px-4 text-xs font-semibold text-zinc-300 hover:text-zinc-50 hover:bg-zinc-800/90 border border-zinc-800/50 hover:border-zinc-700/70 rounded-lg transition-all duration-200 bg-transparent min-w-fit flex items-center">
             <Share className="w-4 h-4 mr-2 text-zinc-400 group-hover:text-zinc-200 transition-colors" />
             Share
           </button>
         </div>
+        )}
 
-        {/* Mobile Share Button */}
-        <div className="lg:hidden flex items-center">
+        {/* Mobile Share Button - touch-friendly (only when can edit) */}
+        {canEdit && (
+        <div className="lg:hidden flex items-center min-h-[44px]">
           <button 
             onClick={handleShare} 
-            className="h-9 px-4 text-xs font-semibold text-zinc-300 hover:text-zinc-50 hover:bg-zinc-800/90 border border-zinc-800/50 hover:border-zinc-700/70 rounded-lg transition-all duration-200 bg-transparent min-w-fit flex items-center"
+            className="h-11 min-w-[44px] px-4 text-xs font-semibold text-zinc-300 hover:text-zinc-50 hover:bg-zinc-800/90 border border-zinc-800/50 hover:border-zinc-700/70 rounded-xl transition-all duration-200 bg-transparent flex items-center justify-center touch-manipulation"
           >
             <Share className="w-4 h-4 mr-2 text-zinc-400 group-hover:text-zinc-200 transition-colors" />
             Share
           </button>
         </div>
+        )}
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 min-h-0">
+      <div className="flex-1 min-h-0 flex flex-col">
+        {/* AI-suggested backend: Connect Supabase? banner */}
+        {project?.suggestsBackend && !project?.supabaseUrl && !suggestBackendDismissed && (
+          <div className="flex-shrink-0 px-3 sm:px-4 py-2.5 border-b border-emerald-500/20 bg-emerald-950/30 flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center shrink-0">
+                <Database className="w-4 h-4 text-emerald-400" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-zinc-100">This project could use a database</p>
+                <p className="text-xs text-zinc-500">Connect Supabase to add auth and persistent data—like Rocket.new.</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => setSuggestBackendDismissed(true)}
+                className="px-3 py-1.5 text-xs font-medium text-zinc-500 hover:text-zinc-300 transition-colors"
+              >
+                Maybe later
+              </button>
+              <button
+                type="button"
+                onClick={() => { setIntegrationsOpen(true); setSupabaseConnectOpen(true) }}
+                className="inline-flex items-center justify-center rounded-lg bg-white hover:bg-zinc-100 border border-zinc-200/80 px-3 py-1.5 transition-colors"
+              >
+                <img src="/Images/connect-supabase-light.svg" alt="Connect with Supabase" className="h-8 w-auto" />
+              </button>
+            </div>
+          </div>
+        )}
+
         <Dialog open={deployOpen} onOpenChange={setDeployOpen}>
-          <DialogContent className="bg-zinc-950 border border-zinc-800 max-w-[calc(100%-2rem)] sm:max-w-2xl">
+          <DialogContent className="bg-zinc-950/98 border border-zinc-800/80 rounded-2xl shadow-2xl backdrop-blur-xl max-w-[min(calc(100vw-1.5rem),28rem)] sm:max-w-2xl">
             <DialogHeader>
               <DialogTitle className="text-zinc-100">Deploy to Netlify</DialogTitle>
               <DialogDescription className="text-zinc-400">
@@ -2047,22 +2368,503 @@ function ProjectContent() {
           </DialogContent>
         </Dialog>
 
+        {/* Integrations modal - wider, left nav + right content */}
+        <Dialog open={integrationsOpen} onOpenChange={(open) => { setIntegrationsOpen(open); if (!open) setSupabaseConnectOpen(false) }}>
+          <DialogContent className="bg-zinc-950/98 border border-zinc-800/80 rounded-2xl shadow-2xl backdrop-blur-xl max-w-[min(calc(100vw-1.5rem),48rem)] sm:max-w-3xl md:max-w-4xl w-[95vw] p-0 overflow-hidden flex flex-col max-h-[85vh]">
+            <DialogHeader className="flex-shrink-0 px-5 sm:px-6 pt-5 sm:pt-6 pb-3 border-b border-zinc-800/60">
+              <DialogTitle className="text-zinc-100 text-lg font-semibold">Integrations</DialogTitle>
+              <DialogDescription className="text-zinc-400 text-sm mt-0.5">
+                Connect services to sync, deploy, and add a backend to this project.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex flex-1 min-h-0 overflow-hidden">
+              {/* Left sidebar - integration options */}
+              <nav className="flex-shrink-0 w-44 sm:w-52 border-r border-zinc-800/60 bg-zinc-900/30 py-3 flex flex-col">
+                <div className="px-2 sm:px-3 space-y-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedIntegration("all")}
+                    className={cn(
+                      "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all duration-200",
+                      selectedIntegration === "all"
+                        ? "bg-zinc-800 text-zinc-100 border border-zinc-700/60"
+                        : "text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200 border border-transparent"
+                    )}
+                  >
+                    <div className="w-9 h-9 rounded-lg bg-zinc-800/80 border border-zinc-700/50 flex items-center justify-center shrink-0">
+                      <LayoutGrid className="w-4 h-4 text-zinc-300" />
+                    </div>
+                    <span className="text-sm font-medium block">All</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedIntegration("github")}
+                    className={cn(
+                      "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all duration-200",
+                      selectedIntegration === "github"
+                        ? "bg-zinc-800 text-zinc-100 border border-zinc-700/60"
+                        : "text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200 border border-transparent"
+                    )}
+                  >
+                    <div className="w-9 h-9 rounded-lg bg-zinc-800/80 border border-zinc-700/50 flex items-center justify-center shrink-0">
+                      <Github className="w-4 h-4 text-zinc-300" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <span className="text-sm font-medium block">GitHub</span>
+                      {githubConnected === true && (
+                        <span className="text-[10px] text-emerald-400 font-medium">Connected</span>
+                      )}
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedIntegration("netlify")}
+                    className={cn(
+                      "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all duration-200",
+                      selectedIntegration === "netlify"
+                        ? "bg-zinc-800 text-zinc-100 border border-zinc-700/60"
+                        : "text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200 border border-transparent"
+                    )}
+                  >
+                    <div className="w-9 h-9 rounded-lg bg-zinc-800/80 border border-zinc-700/50 flex items-center justify-center shrink-0">
+                      <Rocket className="w-4 h-4 text-zinc-300" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <span className="text-sm font-medium block">Netlify</span>
+                      {netlifyConnected === true && (
+                        <span className="text-[10px] text-emerald-400 font-medium">Connected</span>
+                      )}
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedIntegration("supabase")}
+                    className={cn(
+                      "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all duration-200",
+                      selectedIntegration === "supabase"
+                        ? "bg-zinc-800 text-zinc-100 border border-zinc-700/60"
+                        : "text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200 border border-transparent"
+                    )}
+                  >
+                    <div className="w-9 h-9 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0">
+                      <Database className="w-4 h-4 text-emerald-400" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <span className="text-sm font-medium block">Supabase</span>
+                      {supabaseConnected && (
+                        <span className="text-[10px] text-emerald-400 font-medium">Connected</span>
+                      )}
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedIntegration("vars")}
+                    className={cn(
+                      "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all duration-200",
+                      selectedIntegration === "vars"
+                        ? "bg-zinc-800 text-zinc-100 border border-zinc-700/60"
+                        : "text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200 border border-transparent"
+                    )}
+                  >
+                    <div className="w-9 h-9 rounded-lg bg-zinc-800/80 border border-zinc-700/50 flex items-center justify-center shrink-0">
+                      <Key className="w-4 h-4 text-zinc-300" />
+                    </div>
+                    <span className="text-sm font-medium block">Vars</span>
+                  </button>
+                </div>
+                <div className="mt-auto px-2 sm:px-3 pt-3 border-t border-zinc-800/60">
+                  <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium">More coming</p>
+                  <p className="text-xs text-zinc-600 mt-0.5">Vercel, Stripe, and others soon.</p>
+                </div>
+              </nav>
+              {/* Right content - selected integration */}
+              <div className="flex-1 min-w-0 overflow-y-auto custom-scrollbar p-5 sm:p-6">
+                {selectedIntegration === "all" && (
+                  <div className="space-y-4">
+                    <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-5 sm:p-6 transition-all">
+                      <div className="flex items-start gap-4">
+                        <div className="w-12 h-12 rounded-xl bg-zinc-800/80 border border-zinc-700/50 flex items-center justify-center shrink-0">
+                          <Github className="w-6 h-6 text-zinc-300" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <h3 className="text-base font-semibold text-zinc-100">GitHub</h3>
+                          <p className="text-sm text-zinc-500 mt-1">Create a repo and sync your project code. Re-sync whenever you make changes.</p>
+                          <div className="mt-4 flex flex-wrap gap-2">
+                            {githubConnected === false ? (
+                              <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={handleConnectGitHub}>
+                                <Github className="w-3.5 h-3.5 mr-2" /> Connect GitHub
+                              </Button>
+                            ) : (
+                              <>
+                                {project?.githubRepoUrl ? (
+                                  <>
+                                    <a href={project.githubRepoUrl} target="_blank" rel="noreferrer" className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-700/60 bg-zinc-800/50 px-3 text-xs font-medium text-zinc-200 hover:bg-zinc-800 hover:text-zinc-100 transition-colors">
+                                      <ExternalLink className="w-3.5 h-3.5" /> View repo
+                                    </a>
+                                    <Button type="button" size="sm" variant="outline" className="h-9 px-3 text-xs font-semibold border-zinc-700 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100" onClick={handleSyncToGitHub} disabled={isSyncing || !project?.files?.length}>
+                                      {isSyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : <RefreshCw className="w-3.5 h-3.5 mr-1.5" />} {isSyncing ? "Syncing…" : "Re-sync"}
+                                    </Button>
+                                  </>
+                                ) : project?.files?.length ? (
+                                  <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={handleSyncToGitHub} disabled={isSyncing}>
+                                    {isSyncing ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Github className="w-3.5 h-3.5 mr-2" />} {isSyncing ? "Syncing…" : "Sync to GitHub"}
+                                  </Button>
+                                ) : null}
+                                <Button type="button" size="sm" variant="ghost" className="h-9 px-3 text-xs text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50" onClick={() => { handleDisconnectGitHub(); setIntegrationsOpen(false) }}>Disconnect</Button>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-5 sm:p-6 transition-all">
+                      <div className="flex items-start gap-4">
+                        <div className="w-12 h-12 rounded-xl bg-zinc-800/80 border border-zinc-700/50 flex items-center justify-center shrink-0">
+                          <Rocket className="w-6 h-6 text-zinc-300" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <h3 className="text-base font-semibold text-zinc-100">Netlify</h3>
+                          <p className="text-sm text-zinc-500 mt-1">Deploy this project to Netlify for a live URL. One-click deploy after connecting your account.</p>
+                          <div className="mt-4 flex flex-wrap gap-2">
+                            {!netlifyConnected ? (
+                              <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={handleConnectNetlify}>Connect Netlify</Button>
+                            ) : (
+                              <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={() => { setIntegrationsOpen(false); setDeployOpen(true) }}>Deploy to Netlify</Button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-5 sm:p-6 transition-all">
+                      <div className="flex items-start gap-4">
+                        <div className="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0">
+                          <Database className="w-6 h-6 text-emerald-400" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <h3 className="text-base font-semibold text-zinc-100">Supabase</h3>
+                          <p className="text-sm text-zinc-500 mt-1">Add a backend: auth, database, and real-time. We’ll inject the Supabase client and a starter SQL migration.</p>
+                          <div className="mt-4 flex flex-wrap gap-2">
+                            {!supabaseConnected ? (
+                              <Button type="button" size="sm" className="h-9 px-3 py-1.5 rounded-lg bg-white hover:bg-zinc-100 border border-zinc-200/80" onClick={() => setSupabaseConnectOpen(true)}>
+                                <img src="/Images/connect-supabase-light.svg" alt="Connect with Supabase" className="h-7 w-auto" />
+                              </Button>
+                            ) : (
+                              <>
+                                <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={handleInjectSupabase} disabled={supabaseInjecting}>
+                                  {supabaseInjecting ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Plus className="w-3.5 h-3.5 mr-2" />}
+                                  {supabaseInjecting ? "Adding…" : "Add client & migration"}
+                                </Button>
+                                <Button type="button" size="sm" variant="ghost" className="h-9 px-3 text-xs text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50" onClick={() => updateDoc(doc(db, "projects", projectId), { supabaseUrl: deleteField(), supabaseAnonKey: deleteField(), supabaseServiceRoleKey: deleteField(), supabaseConnectedAt: deleteField() })}>Disconnect</Button>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {selectedIntegration === "github" && (
+                  <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-5 sm:p-6 transition-all">
+                    <div className="flex items-start gap-4">
+                      <div className="w-12 h-12 rounded-xl bg-zinc-800/80 border border-zinc-700/50 flex items-center justify-center shrink-0">
+                        <Github className="w-6 h-6 text-zinc-300" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <h3 className="text-base font-semibold text-zinc-100">GitHub</h3>
+                        <p className="text-sm text-zinc-500 mt-1">Create a repo and sync your project code. Re-sync whenever you make changes so your repository stays up to date.</p>
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          {githubConnected === false ? (
+                            <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={handleConnectGitHub}>
+                              <Github className="w-3.5 h-3.5 mr-2" /> Connect GitHub
+                            </Button>
+                          ) : (
+                            <>
+                              {project?.githubRepoUrl ? (
+                                <>
+                                  <a href={project.githubRepoUrl} target="_blank" rel="noreferrer" className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-700/60 bg-zinc-800/50 px-3 text-xs font-medium text-zinc-200 hover:bg-zinc-800 hover:text-zinc-100 transition-colors">
+                                    <ExternalLink className="w-3.5 h-3.5" /> View repo
+                                  </a>
+                                  <Button type="button" size="sm" variant="outline" className="h-9 px-3 text-xs font-semibold border-zinc-700 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100" onClick={handleSyncToGitHub} disabled={isSyncing || !project?.files?.length}>
+                                    {isSyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : <RefreshCw className="w-3.5 h-3.5 mr-1.5" />} {isSyncing ? "Syncing…" : "Re-sync"}
+                                  </Button>
+                                </>
+                              ) : project?.files?.length ? (
+                                <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={handleSyncToGitHub} disabled={isSyncing}>
+                                  {isSyncing ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Github className="w-3.5 h-3.5 mr-2" />} {isSyncing ? "Syncing…" : "Sync to GitHub"}
+                                </Button>
+                              ) : null}
+                              <Button type="button" size="sm" variant="ghost" className="h-9 px-3 text-xs text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50" onClick={() => { handleDisconnectGitHub(); setIntegrationsOpen(false) }}>Disconnect</Button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {selectedIntegration === "netlify" && (
+                  <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-5 sm:p-6 transition-all">
+                    <div className="flex items-start gap-4">
+                      <div className="w-12 h-12 rounded-xl bg-zinc-800/80 border border-zinc-700/50 flex items-center justify-center shrink-0">
+                        <Rocket className="w-6 h-6 text-zinc-300" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <h3 className="text-base font-semibold text-zinc-100">Netlify</h3>
+                        <p className="text-sm text-zinc-500 mt-1">Deploy this project to Netlify for a live URL. One-click deploy after connecting your account.</p>
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          {!netlifyConnected ? (
+                            <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={handleConnectNetlify}>Connect Netlify</Button>
+                          ) : (
+                            <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={() => { setIntegrationsOpen(false); setDeployOpen(true) }}>Deploy to Netlify</Button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {selectedIntegration === "supabase" && (
+                  <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-5 sm:p-6 transition-all">
+                    <div className="flex items-start gap-4">
+                      <div className="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0">
+                        <Database className="w-6 h-6 text-emerald-400" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <h3 className="text-base font-semibold text-zinc-100">Supabase</h3>
+                        <p className="text-sm text-zinc-500 mt-1">Add a backend: auth, database, and real-time. We’ll inject the Supabase client and a starter SQL migration into your project.</p>
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          {!supabaseConnected ? (
+                            <Button type="button" size="sm" className="h-9 px-3 py-1.5 rounded-lg bg-white hover:bg-zinc-100 border border-zinc-200/80" onClick={() => setSupabaseConnectOpen(true)}>
+                              <img src="/Images/connect-supabase-light.svg" alt="Connect with Supabase" className="h-7 w-auto" />
+                            </Button>
+                          ) : (
+                            <>
+                              <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={handleInjectSupabase} disabled={supabaseInjecting}>
+                                {supabaseInjecting ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Plus className="w-3.5 h-3.5 mr-2" />}
+                                {supabaseInjecting ? "Adding…" : "Add client & migration"}
+                              </Button>
+                                <Button type="button" size="sm" variant="ghost" className="h-9 px-3 text-xs text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50" onClick={() => updateDoc(doc(db, "projects", projectId), { supabaseUrl: deleteField(), supabaseAnonKey: deleteField(), supabaseServiceRoleKey: deleteField(), supabaseConnectedAt: deleteField() })}>Disconnect</Button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {selectedIntegration === "vars" && (
+                  <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-5 sm:p-6 transition-all">
+                    <div className="flex items-start gap-4">
+                      <div className="w-12 h-12 rounded-xl bg-zinc-800/80 border border-zinc-700/50 flex items-center justify-center shrink-0">
+                        <Key className="w-6 h-6 text-zinc-300" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <h3 className="text-base font-semibold text-zinc-100">Environment variables</h3>
+                        <p className="text-sm text-zinc-500 mt-1">Add API keys and env vars for preview. Values are encrypted and only injected into the sandbox; they are never shown after save.</p>
+                        {envVarsLoading ? (
+                          <div className="mt-4 flex items-center gap-2 text-zinc-400 text-sm">
+                            <Loader2 className="w-4 h-4 animate-spin" /> Loading…
+                          </div>
+                        ) : (
+                          <>
+                            <div className="mt-4 space-y-3">
+                              {envFormEntries.map((entry, idx) => (
+                                <div key={idx} className="flex flex-wrap gap-2 items-center">
+                                  <input
+                                    type="text"
+                                    placeholder="Variable name"
+                                    value={entry.name}
+                                    onChange={(e) =>
+                                      setEnvFormEntries((prev) =>
+                                        prev.map((p, i) => (i === idx ? { ...p, name: e.target.value } : p))
+                                      )
+                                    }
+                                    className="flex-1 min-w-[120px] rounded-lg border border-zinc-700/60 bg-zinc-900/80 px-3 py-2 text-xs text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500"
+                                  />
+                                  <input
+                                    type="password"
+                                    placeholder="Value"
+                                    value={entry.value}
+                                    onChange={(e) =>
+                                      setEnvFormEntries((prev) =>
+                                        prev.map((p, i) => (i === idx ? { ...p, value: e.target.value } : p))
+                                      )
+                                    }
+                                    className="flex-1 min-w-[140px] rounded-lg border border-zinc-700/60 bg-zinc-900/80 px-3 py-2 text-xs text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500"
+                                  />
+                                </div>
+                              ))}
+                            </div>
+                            <div className="mt-4 flex flex-wrap gap-2">
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="h-9 px-3 text-xs border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+                                onClick={() => setEnvFormEntries((prev) => [...prev, { name: "", value: "" }])}
+                              >
+                                <Plus className="w-3.5 h-3.5 mr-1.5" /> Add variable
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0"
+                                onClick={handleSaveEnvVars}
+                                disabled={envVarsSaving}
+                              >
+                                {envVarsSaving ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : null}
+                                {envVarsSaving ? "Saving…" : "Save"}
+                              </Button>
+                            </div>
+                            {envVarNames.length > 0 && (
+                              <p className="mt-3 text-[11px] text-zinc-500">You have {envVarNames.length} variable{envVarNames.length !== 1 ? "s" : ""} set. Re-run preview to use them.</p>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Share dialog - visibility (public / private / link-only) + copy link */}
+        <Dialog open={shareOpen} onOpenChange={(open) => { setShareOpen(open) }}>
+          <DialogContent className="bg-zinc-950/98 border border-zinc-800/80 rounded-2xl shadow-2xl backdrop-blur-xl max-w-[min(calc(100vw-1.5rem),24rem)] sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle className="text-zinc-100">Share project</DialogTitle>
+              <DialogDescription className="text-zinc-400 text-sm">
+                Control who can view and edit. Changes sync in real time for people with access.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="mt-4 space-y-4">
+              <div>
+                <p className="text-xs font-medium text-zinc-400 mb-2">Visibility</p>
+                <div className="space-y-2">
+                  {(
+                    [
+                      { value: "private" as const, label: "Private", desc: "Only you (and people you add as editors)" },
+                      { value: "link-only" as const, label: "Link only", desc: "Anyone with the link can view" },
+                      { value: "public" as const, label: "Public", desc: "Anyone can view with the link" },
+                    ] as const
+                  ).map((opt) => (
+                    <label
+                      key={opt.value}
+                      className={cn(
+                        "flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-colors",
+                        shareVisibility === opt.value
+                          ? "border-zinc-600 bg-zinc-800/50"
+                          : "border-zinc-800/60 bg-zinc-900/30 hover:bg-zinc-800/30"
+                      )}
+                    >
+                      <input
+                        type="radio"
+                        name="visibility"
+                        checked={shareVisibility === opt.value}
+                        onChange={() => setShareVisibility(opt.value)}
+                        className="mt-1 rounded-full border-zinc-600 text-zinc-100 focus:ring-zinc-500"
+                      />
+                      <div>
+                        <span className="text-sm font-medium text-zinc-100">{opt.label}</span>
+                        <p className="text-xs text-zinc-500 mt-0.5">{opt.desc}</p>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <p className="text-xs font-medium text-zinc-400 mb-1.5">Project link</p>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    readOnly
+                    value={projectUrl}
+                    className="flex-1 rounded-lg border border-zinc-700/60 bg-zinc-900/80 px-3 py-2 text-xs text-zinc-300"
+                  />
+                  <Button type="button" size="sm" variant="outline" className="shrink-0 border-zinc-700 text-zinc-300" onClick={handleCopyShareLink}>
+                    {copied ? "Copied" : "Copy"}
+                  </Button>
+                </div>
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <Button type="button" variant="ghost" className="text-zinc-400" onClick={() => setShareOpen(false)}>Cancel</Button>
+                <Button type="button" className="bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={handleSaveShare} disabled={shareSaving}>
+                  {shareSaving ? <Loader2 className="w-4 h-4 animate-spin mr-1.5" /> : null}
+                  Save
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Supabase connect form dialog */}
+        <Dialog open={supabaseConnectOpen} onOpenChange={(open) => { setSupabaseConnectOpen(open); if (!open) { setSupabaseFormUrl(""); setSupabaseFormAnonKey("") } }}>
+          <DialogContent className="bg-zinc-950/98 border border-zinc-800/80 rounded-2xl shadow-2xl backdrop-blur-xl max-w-[min(calc(100vw-1.5rem),24rem)] sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle className="text-zinc-100">Connect Supabase</DialogTitle>
+              <DialogDescription className="text-zinc-400 text-sm">
+                Get your project URL and anon key from Supabase Dashboard → Project Settings → API.
+              </DialogDescription>
+            </DialogHeader>
+            <form
+              className="mt-4 space-y-4"
+              onSubmit={async (e) => {
+                e.preventDefault()
+                const url = supabaseFormUrl.trim().replace(/\/$/, "")
+                const anonKey = supabaseFormAnonKey.trim()
+                if (!url || !anonKey) return
+                try {
+                  await handleConnectSupabase(url, anonKey)
+                } catch (err) {
+                  alert(err instanceof Error ? err.message : "Connect failed")
+                }
+              }}
+            >
+              <div>
+                <label className="text-xs font-medium text-zinc-400 block mb-1.5">Project URL</label>
+                <input
+                  type="url"
+                  value={supabaseFormUrl}
+                  onChange={(e) => setSupabaseFormUrl(e.target.value)}
+                  placeholder="https://xxxxx.supabase.co"
+                  className="w-full rounded-lg border border-zinc-800 bg-zinc-900/80 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-zinc-600"
+                  required
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-zinc-400 block mb-1.5">Anon (public) key</label>
+                <input
+                  type="password"
+                  value={supabaseFormAnonKey}
+                  onChange={(e) => setSupabaseFormAnonKey(e.target.value)}
+                  placeholder="eyJhbG..."
+                  className="w-full rounded-lg border border-zinc-800 bg-zinc-900/80 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-zinc-600"
+                  required
+                />
+              </div>
+              <div className="flex gap-2 justify-end pt-2">
+                <Button type="button" variant="ghost" className="text-zinc-400" onClick={() => setSupabaseConnectOpen(false)}>Cancel</Button>
+                <Button type="submit" className="bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 hover:bg-emerald-500/30">Connect</Button>
+              </div>
+            </form>
+          </DialogContent>
+        </Dialog>
+
         {/* Mobile layout (stacked). Desktop/Laptop layout below remains unchanged and is lg+ only. */}
-        <div className="lg:hidden h-full flex flex-col">
-          {/* Mobile tabs */}
-          <div className="px-3 py-2 border-b border-zinc-800 bg-zinc-950/40">
-            <div className="flex items-center gap-1 rounded-xl bg-zinc-900/50 border border-zinc-800 p-1">
+        <div className="lg:hidden h-full flex flex-col min-h-0 overflow-hidden">
+          {/* Mobile tabs - touch-friendly, modern pill bar */}
+          <div className="px-3 sm:px-4 py-2.5 border-b border-zinc-800/80 bg-zinc-950/60 backdrop-blur-sm flex-shrink-0">
+            <div className="flex items-center gap-1.5 rounded-2xl bg-zinc-900/70 border border-zinc-800/60 p-1.5 shadow-inner">
               <button
                 type="button"
                 onClick={() => setMobileTab("chat")}
                 className={cn(
-                  "flex-1 flex items-center justify-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors",
+                  "flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 touch-manipulation min-h-[44px]",
                   mobileTab === "chat"
-                    ? "bg-zinc-800 text-zinc-100"
-                    : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50"
+                    ? "bg-zinc-800 text-zinc-100 shadow-sm"
+                    : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50 active:scale-[0.99]"
                 )}
               >
-                <MessageSquare className="w-4 h-4" />
+                <MessageSquare className="w-4 h-4 shrink-0" />
                 Chat
               </button>
               <button
@@ -2072,27 +2874,27 @@ function ProjectContent() {
                   setActiveTab("preview")
                 }}
                 className={cn(
-                  "flex-1 flex items-center justify-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors",
+                  "flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 touch-manipulation min-h-[44px]",
                   mobileTab === "preview"
-                    ? "bg-zinc-800 text-zinc-100"
-                    : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50"
+                    ? "bg-zinc-800 text-zinc-100 shadow-sm"
+                    : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50 active:scale-[0.99]"
                 )}
               >
-                <Eye className="w-4 h-4" />
+                <Eye className="w-4 h-4 shrink-0" />
                 Preview
               </button>
             </div>
           </div>
 
-          {/* Mobile content */}
-          <div className="flex-1 min-h-0 overflow-hidden">
+          {/* Mobile content - prevent overflow */}
+          <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
             {mobileTab === "chat" ? (
-              <div className="h-full flex flex-col bg-zinc-900/30">
-                <div className="flex-1 overflow-y-auto p-4 space-y-4 chat-scrollbar">
+              <div className="h-full flex flex-col bg-zinc-900/30 min-h-0">
+                <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-5 space-y-4 chat-scrollbar overscroll-contain">
                   <ChatMessage
                     message={{ role: "user", content: project.prompt }}
                     isLast={false}
-                    onEdit={() => setEditingTarget({ kind: "prompt" })}
+                    onEdit={canEdit ? () => setEditingTarget({ kind: "prompt" }) : undefined}
                     isEditing={editingTarget?.kind === "prompt"}
                     onEditSubmit={handleEditSubmit}
                     onCancelEdit={handleCancelEdit}
@@ -2106,7 +2908,7 @@ function ProjectContent() {
                       key={i}
                       message={msg}
                       isLast={i === project.messages!.length - 1}
-                      onEdit={msg.role === "user" ? () => setEditingTarget({ kind: "message", index: i }) : undefined}
+                      onEdit={canEdit && msg.role === "user" ? () => setEditingTarget({ kind: "message", index: i }) : undefined}
                       isEditing={editingTarget?.kind === "message" && editingTarget.index === i}
                       onEditSubmit={handleEditSubmit}
                       onCancelEdit={handleCancelEdit}
@@ -2117,7 +2919,28 @@ function ProjectContent() {
                   ))}
 
                   {isGenerating && (
-                    <AgentStatus status={agentStatus} currentFile={currentGeneratingFile || undefined} />
+                    <div className="flex flex-col gap-2">
+                      <ThinkingBar
+                        text={agentStatus || "Thinking..."}
+                        stopLabel="Skip thinking"
+                        onStop={() => abortControllerRef.current?.abort()}
+                        onClick={undefined}
+                      />
+                      <Reasoning isStreaming={true}>
+                        <ReasoningTrigger>Show reasoning</ReasoningTrigger>
+                        <ReasoningContent className="ml-2 border-l-2 border-l-slate-200 px-2 pb-1 dark:border-l-slate-700">
+                          <div className="space-y-1">
+                            {reasoningSteps.length > 0
+                              ? reasoningSteps.map((step, i) => (
+                                  <div key={i} className="text-zinc-400">
+                                    {i + 1}. {step}
+                                  </div>
+                                ))
+                              : "Reasoning in progress..."}
+                          </div>
+                        </ReasoningContent>
+                      </Reasoning>
+                    </div>
                   )}
 
                   {project.status === "error" && (
@@ -2149,7 +2972,8 @@ function ProjectContent() {
                   <div ref={messagesEndRef} />
                 </div>
 
-                <div className="p-3 border-t border-zinc-800/50">
+                {canEdit ? (
+                <div className="p-3 sm:p-4 border-t border-zinc-800/50 bg-zinc-950/40 backdrop-blur-sm flex-shrink-0 safe-area-inset-bottom">
                   <AnimatedAIInput
                     mode="chat"
                     compact
@@ -2158,14 +2982,44 @@ function ProjectContent() {
                     onSubmit={(value, model) => handleSendMessage(value, model)}
                   />
                 </div>
+                ) : (
+                <div className="p-3 sm:p-4 border-t border-zinc-800/50 bg-zinc-950/40 flex-shrink-0">
+                  <p className="text-xs text-zinc-500 text-center">View only — sign in as owner or editor to make changes.</p>
+                </div>
+                )}
               </div>
             ) : (
-              <div className="h-full bg-zinc-900 relative">
+              <div className="h-full min-h-0 bg-zinc-900 relative rounded-b-lg overflow-hidden flex flex-col">
+                {requiredEnvVars.length > 0 && !envVarsBannerDismissed && (
+                  <div className="flex-shrink-0 flex items-center justify-between gap-2 px-3 py-2 bg-amber-500/10 border-b border-amber-500/20 text-amber-200/90 text-xs">
+                    <span>This app may need API keys or env vars. Add them in Integrations → Vars.</span>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-7 px-2.5 text-[11px] border-amber-500/40 text-amber-200 hover:bg-amber-500/20"
+                        onClick={() => { setIntegrationsOpen(true); setSelectedIntegration("vars") }}
+                      >
+                        <Key className="w-3 h-3 mr-1" /> Add vars
+                      </Button>
+                      <button
+                        type="button"
+                        onClick={() => setEnvVarsBannerDismissed(true)}
+                        className="p-1 rounded hover:bg-amber-500/20 text-amber-200/70"
+                        aria-label="Dismiss"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+                <div className="flex-1 min-h-0 overflow-hidden">
                 {project.sandboxUrl ? (
                   <iframe
                     key={previewKey}
                     src={getPreviewUrl() || project.sandboxUrl}
-                    className="w-full h-full border-0"
+                    className="w-full h-full min-h-0 border-0"
                     title="Preview"
                     sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
                   />
@@ -2181,14 +3035,14 @@ function ProjectContent() {
                           timer={buildTimer}
                           failureCategory={buildFailureCategory}
                           failureReason={buildFailureReason}
-                          onRetry={() => project.files && createSandbox(project.files)}
+                          onRetry={canEdit ? () => project.files && createSandbox(project.files) : undefined}
                         />
                       </div>
                     ) : (
-                      <div className="h-full bg-zinc-950 flex items-center justify-center p-6">
-                        <div className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-900/40 p-6">
-                          <div className="flex items-start gap-4">
-                            <div className="w-10 h-10 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center">
+                      <div className="h-full bg-zinc-950 flex items-center justify-center p-4 sm:p-6 overflow-auto">
+                        <div className="w-full max-w-lg rounded-2xl border border-zinc-800/80 bg-zinc-900/50 backdrop-blur-sm p-4 sm:p-6 shadow-xl">
+                          <div className="flex items-start gap-3 sm:gap-4">
+                            <div className="w-10 h-10 shrink-0 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center">
                               <Eye className="w-5 h-5 text-zinc-300" />
                             </div>
                             <div className="min-w-0">
@@ -2200,7 +3054,7 @@ function ProjectContent() {
                           </div>
 
                           <div className="mt-4 flex items-center gap-2">
-                            <div className="flex-1 rounded-lg border border-zinc-800/50 bg-zinc-900/50 backdrop-blur-sm px-3 py-2 text-xs text-zinc-400 font-medium">
+                            <div className="flex-1 min-w-0 rounded-lg border border-zinc-800/50 bg-zinc-900/50 backdrop-blur-sm px-3 py-2 text-xs text-zinc-400 font-medium truncate">
                               {project.files?.length ? `${project.files.length} files ready` : "No files generated yet"}
                             </div>
                           </div>
@@ -2209,22 +3063,23 @@ function ProjectContent() {
                     )}
                   </div>
                 )}
+                </div>
               </div>
             )}
           </div>
         </div>
 
         <ResizablePanelGroup direction="horizontal" className="h-full hidden lg:flex">
-          {/* Chat Panel */}
+          {/* Chat Panel - modern glass */}
           <ResizablePanel defaultSize={30} minSize={20} maxSize={50}>
-            <div className="h-full flex flex-col bg-zinc-900/30">
+            <div className="h-full flex flex-col bg-zinc-900/30 backdrop-blur-sm border-r border-zinc-800/50">
               {/* Messages */}
-              <div className="flex-1 overflow-y-auto p-4 space-y-4 chat-scrollbar">
+              <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-4 chat-scrollbar">
                 {/* Initial prompt */}
                 <ChatMessage
                   message={{ role: "user", content: project.prompt }}
                   isLast={false}
-                  onEdit={() => setEditingTarget({ kind: "prompt" })}
+                  onEdit={canEdit ? () => setEditingTarget({ kind: "prompt" }) : undefined}
                   isEditing={editingTarget?.kind === "prompt"}
                   onEditSubmit={handleEditSubmit}
                   onCancelEdit={handleCancelEdit}
@@ -2239,7 +3094,7 @@ function ProjectContent() {
                     key={i}
                     message={msg}
                     isLast={i === project.messages!.length - 1}
-                    onEdit={msg.role === "user" ? () => setEditingTarget({ kind: "message", index: i }) : undefined}
+                    onEdit={canEdit && msg.role === "user" ? () => setEditingTarget({ kind: "message", index: i }) : undefined}
                     isEditing={editingTarget?.kind === "message" && editingTarget.index === i}
                     onEditSubmit={handleEditSubmit}
                     onCancelEdit={handleCancelEdit}
@@ -2249,12 +3104,30 @@ function ProjectContent() {
                   />
                 ))}
 
-                {/* Agent status */}
+                {/* Thinking bar + reasoning (agent-like) */}
                 {isGenerating && (
-                  <AgentStatus 
-                    status={agentStatus} 
-                    currentFile={currentGeneratingFile || undefined}
-                  />
+                  <div className="flex flex-col gap-2">
+                    <ThinkingBar
+                      text={agentStatus || "Thinking..."}
+                      stopLabel="Skip thinking"
+                      onStop={() => abortControllerRef.current?.abort()}
+                      onClick={undefined}
+                    />
+                    <Reasoning isStreaming={true}>
+                      <ReasoningTrigger>Show reasoning</ReasoningTrigger>
+                      <ReasoningContent className="ml-2 border-l-2 border-l-slate-200 px-2 pb-1 dark:border-l-slate-700">
+                        <div className="space-y-1">
+                          {reasoningSteps.length > 0
+                            ? reasoningSteps.map((step, i) => (
+                                <div key={i} className="text-zinc-400">
+                                  {i + 1}. {step}
+                                </div>
+                              ))
+                            : "Reasoning in progress..."}
+                        </div>
+                      </ReasoningContent>
+                    </Reasoning>
+                  </div>
                 )}
 
                 {project.status === "error" && (
@@ -2286,8 +3159,9 @@ function ProjectContent() {
                 <div ref={messagesEndRef} />
               </div>
 
-              {/* Chat Input - Using Hero Section AnimatedAIInput */}
-              <div className="p-3 border-t border-zinc-800/50">
+              {/* Chat Input - only when user can edit */}
+              {canEdit ? (
+              <div className="p-3 border-t border-zinc-800/50 bg-zinc-950/30 backdrop-blur-sm flex-shrink-0">
                 <AnimatedAIInput
                   mode="chat"
                   compact
@@ -2296,6 +3170,11 @@ function ProjectContent() {
                   onSubmit={(value, model) => handleSendMessage(value, model)}
                 />
               </div>
+              ) : (
+              <div className="p-3 border-t border-zinc-800/50 bg-zinc-950/30 flex-shrink-0">
+                <p className="text-xs text-zinc-500 text-center">View only — sign in as owner or editor to make changes.</p>
+              </div>
+              )}
             </div>
           </ResizablePanel>
 
@@ -2460,7 +3339,32 @@ function ProjectContent() {
               {/* Content */}
               <div className="flex-1 overflow-hidden">
                 {activeTab === "preview" ? (
-                  <div className="h-full bg-gradient-to-b from-zinc-900 to-zinc-950 relative">
+                  <div className="h-full bg-gradient-to-b from-zinc-900 to-zinc-950 relative flex flex-col">
+                    {requiredEnvVars.length > 0 && !envVarsBannerDismissed && (
+                      <div className="flex-shrink-0 flex items-center justify-between gap-2 px-3 py-2 bg-amber-500/10 border-b border-amber-500/20 text-amber-200/90 text-xs">
+                        <span>This app may need API keys or env vars. Add them in Integrations → Vars.</span>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-7 px-2.5 text-[11px] border-amber-500/40 text-amber-200 hover:bg-amber-500/20"
+                            onClick={() => { setIntegrationsOpen(true); setSelectedIntegration("vars") }}
+                          >
+                            <Key className="w-3 h-3 mr-1" /> Add vars
+                          </Button>
+                          <button
+                            type="button"
+                            onClick={() => setEnvVarsBannerDismissed(true)}
+                            className="p-1 rounded hover:bg-amber-500/20 text-amber-200/70"
+                            aria-label="Dismiss"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    <div className="flex-1 min-h-0 overflow-hidden">
                     {project.sandboxUrl ? (
                       <iframe
                         key={previewKey}
@@ -2481,7 +3385,7 @@ function ProjectContent() {
                               timer={buildTimer}
                               failureCategory={buildFailureCategory}
                               failureReason={buildFailureReason}
-                              onRetry={() => project.files && createSandbox(project.files)}
+                              onRetry={canEdit ? () => project.files && createSandbox(project.files) : undefined}
                             />
                           </div>
                         ) : (
@@ -2509,14 +3413,15 @@ function ProjectContent() {
                         )}
                       </div>
                     )}
+                    </div>
                   </div>
                 ) : (
-                  <div className="h-full flex">
-                    {/* File Tree */}
-                    <div className="w-56 border-r border-zinc-800/50 bg-gradient-to-b from-zinc-950/80 to-zinc-900/60 overflow-y-auto custom-scrollbar shadow-inner">
-                      <div className="p-2">
-                        <div className="flex items-center justify-between px-2 py-2">
-                          <span className="text-xs font-medium text-zinc-400 uppercase tracking-wider">
+                  <div className="h-full flex min-w-0">
+                    {/* File Tree - modern sidebar */}
+                    <div className="w-56 flex-shrink-0 border-r border-zinc-800/50 bg-gradient-to-b from-zinc-950/90 to-zinc-900/70 overflow-y-auto custom-scrollbar shadow-inner backdrop-blur-sm">
+                      <div className="p-2.5">
+                        <div className="flex items-center justify-between px-2 py-2.5">
+                          <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
                             Files
                           </span>
                           {isGenerating && (
@@ -2602,9 +3507,5 @@ function ProjectContent() {
 }
 
 export default function ProjectPage() {
-  return (
-    <ProtectedRoute requiredTokens={0}>
-      <ProjectContent />
-    </ProtectedRoute>
-  )
+  return <ProjectContent />
 }

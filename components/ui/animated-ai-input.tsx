@@ -17,6 +17,7 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import { collection, addDoc, serverTimestamp } from "firebase/firestore";
 import { db } from "@/lib/firebase";
+import { useAuth } from "@/contexts/auth-context";
 
 interface UseAutoResizeTextareaProps {
     minHeight: number;
@@ -130,6 +131,8 @@ const OPENAI_ICON = (
                     status: "pending",
                     createdAt: serverTimestamp(),
                     messages: [],
+                    ownerId: user?.uid ?? undefined,
+                    visibility: "private",
                 });
 
                 router.push(`/project/${docRef.id}`);

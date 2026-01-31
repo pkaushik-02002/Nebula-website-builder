@@ -5,7 +5,12 @@ import { DEFAULT_PLANS } from "@/lib/firebase"
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
 export async function POST(req: Request) {
-  const { prompt, model = "gpt-4o", idToken } = await req.json()
+  const { prompt, model = "gpt-4o", idToken, existingFiles } = await req.json() as {
+    prompt: string
+    model?: string
+    idToken: string
+    existingFiles?: { path: string; content: string }[]
+  }
 
   // authenticate user via Firebase ID token
   if (!idToken) {
@@ -61,22 +66,48 @@ export async function POST(req: Request) {
   }
 
   const selectedModel = modelMap[model] || "gpt-4o"
+  const isFollowUp = Array.isArray(existingFiles) && existingFiles.length > 0
 
-  const systemPrompt = `You are an expert React developer. Generate a complete, working Vite + React + TypeScript application based on the user's request.
+  const systemPromptFollowUp = `You are an expert React developer. The user is asking for CHANGES or ADDITIONS to an existing project. You will receive the current project files.
 
-IMPORTANT: When the user asks for modifications to an existing codebase, provide ONLY the specific changes needed in diff format. Use this format for each file:
+UI STANDARD: When adding or changing UI, keep it modern and polished—distinctive typography, intentional colors, generous spacing, subtle motion (Framer Motion). Avoid generic "AI slop" aesthetics. Match or elevate the existing design language.
 
+CRITICAL: Do NOT regenerate the entire project. Output ONLY:
+1. One AGENT_MESSAGE (see below).
+2. For each file that you MODIFY: output that file in ===FILE: path=== ... ===END_FILE===. Inside the block you may use EITHER:
+   - Unified diff format (so only the change is applied):
+     --- a/path/to/file.tsx
+     +++ b/path/to/file.tsx
+     @@ -start,count +start,count @@
+     -old line
+     +new line
+   - OR the COMPLETE new file content (full replacement).
+3. For each NEW file (file that does not exist yet): output ===FILE: path=== complete file content ===END_FILE===.
+Do NOT output any file that is unchanged. Do NOT output the full project; only changed or new files.
+
+Use this exact streaming format for every file you output:
 ===FILE: path/to/file.tsx===
---- a/path/to/file.tsx
-+++ b/path/to/file.tsx
-@@ -lineStart,lineCount +lineCount @@
- context-line-before
--removed-line
-+added-line
- context-line-after
+[unified diff OR full file content]
 ===END_FILE===
 
-For new files, provide the complete file content as before.
+AGENT MESSAGE (required): First, output exactly one conversational reply in this format on a single line (no newlines inside):
+===AGENT_MESSAGE=== Your brief friendly reply, e.g. "I'll add a dark mode toggle to the header." Keep it to 1-3 sentences. ===END_AGENT_MESSAGE===
+Then immediately output the file blocks. No other text between ===END_AGENT_MESSAGE=== and the first ===FILE===.
+
+BACKEND DETECTION: If the user's request clearly implies a need for a backend, database, or persistent data, output at the very end (after all ===END_FILE=== blocks):
+===META: suggestsBackend=true===
+Only when the app would clearly benefit from a database or backend.`
+
+  const systemPromptNew = `You are an expert React developer. Generate a complete, working Vite + React + TypeScript application based on the user's request.
+
+MODERN UI — BEAT THE COMPETITION (MANDATORY):
+- Create UIs that look premium and modern, not generic. Avoid "AI slop": no default purple gradients on white, no Inter-only typography, no cookie-cutter layouts.
+- Typography: Use distinctive, readable fonts. Prefer Google Fonts like DM Sans, Outfit, Plus Jakarta Sans, Syne, or similar for headings; pair with a clean body font. Strong hierarchy: clear heading sizes, line-height, and letter-spacing.
+- Color: Choose an intentional palette (e.g. deep neutrals with one accent, or a bold brand color with contrast). Use semantic contrast (WCAG AA). Prefer custom palettes over default Tailwind grays alone.
+- Layout: Generous whitespace, clear sections, and a clear visual hierarchy. Use grid/flex intentionally; avoid cramped or monotonous layouts. Consider asymmetry or bold hero sections where it fits.
+- Motion: Add subtle, purposeful animations (hover states, scroll-in, staggered reveals) with Framer Motion. Keep animations fast and smooth (200–400ms). No gratuitous motion.
+- Polish: Rounded corners, subtle shadows, borders where they add clarity. Responsive from mobile to desktop. Touch-friendly targets on mobile.
+- Overall: The result should feel like a product from a top design team—memorable, cohesive, and professional.
 
 You must respond with a STREAMING file format. Output each file in this exact format:
 
@@ -114,7 +145,20 @@ Ensure the dev server binds to 0.0.0.0 and uses a known port (prefer port 3000).
 Make the code production-ready with proper error handling, accessibility, and responsive design.
 Create organized folder structures with components in /src/components, utilities in /src/lib, etc.
 
-Start generating files immediately. Do not include any text before or after the file blocks.`
+AGENT MESSAGE (required): First, output exactly one conversational reply in this format on a single line (no newlines inside):
+===AGENT_MESSAGE=== Your brief friendly reply to the user, e.g. "I'll help you build Cookie Clicker - a mobile app where the user can press on a cookie and a score will increment. When incremented, the new score should be displayed for users on any device. I'll add animations when the cookie is pressed." Keep it to 1-3 sentences. ===END_AGENT_MESSAGE===
+Then immediately output the file blocks. Do not include any other text between ===END_AGENT_MESSAGE=== and the first ===FILE===.
+
+BACKEND DETECTION: If the user's request clearly implies a need for a backend, database, or persistent data (e.g. user accounts, login/signup, saving data, todos, forms that persist, dashboards with data, CRUD, API, auth), then at the very end of your response output exactly this line on its own line (after all ===END_FILE=== blocks):
+===META: suggestsBackend=true===
+Do NOT output this for purely static sites, landing pages, or UI-only apps with no data persistence. Only when the app would clearly benefit from a database or backend.`
+
+  const systemPrompt = isFollowUp ? systemPromptFollowUp : systemPromptNew
+
+  // Build user message: for follow-up include current files so the model can edit them
+  const userMessageContent = isFollowUp
+    ? `The user wants these changes or additions to their existing project:\n\n${prompt}\n\nCurrent project files (only modify or add as needed; do not output unchanged files):\n${existingFiles.map((f: { path: string; content: string }) => `\n--- FILE: ${f.path} ---\n${f.content}\n--- END ${f.path} ---`).join("")}`
+    : `Create a Vite + React + TypeScript application: ${prompt}`
 
   const encoder = new TextEncoder()
 
@@ -124,7 +168,7 @@ Start generating files immediately. Do not include any text before or after the 
     stream: true,
     messages: [
       { role: "system", content: systemPrompt },
-      { role: "user", content: `Create a Vite + React + TypeScript application: ${prompt}` },
+      { role: "user", content: userMessageContent },
     ],
     max_tokens: 8000,
     // request provider to include usage in stream when available

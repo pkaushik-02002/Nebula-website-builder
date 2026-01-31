@@ -26,9 +26,9 @@ import {
 } from "lucide-react"
 
 const navLinks = [
-  { href: "#features", label: "Features" },
-  { href: "#testimonials", label: "Testimonials" },
-  { href: "#pricing", label: "Pricing" },
+  { href: "/#features", label: "Features" },
+  { href: "/#testimonials", label: "Testimonials" },
+  { href: "/pricing", label: "Pricing" },
 ]
 
 export function Navbar() {
@@ -136,7 +136,7 @@ export function Navbar() {
                       <span className="text-sm text-zinc-300 capitalize">{userData.planName} Plan</span>
                     </div>
                     <Link 
-                      href="/#pricing" 
+                      href="/pricing" 
                       className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
                       onClick={() => setIsOpen(false)}
                     >

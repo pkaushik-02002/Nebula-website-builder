@@ -49,3 +49,48 @@ export async function getUserNetlifyOauthState(uid: string): Promise<string | nu
   const state = (data as any)?.netlifyOauthState
   return typeof state === "string" && state.length > 0 ? state : null
 }
+
+// GitHub OAuth
+export async function getGitHubToken(uid: string): Promise<string | null> {
+  const snap = await adminDb.collection("users").doc(uid).get()
+  const data = snap.exists ? snap.data() : null
+  const token = (data as any)?.githubAccessToken
+  return typeof token === "string" && token.length > 0 ? token : null
+}
+
+export async function setGitHubToken(uid: string, accessToken: string) {
+  await adminDb.collection("users").doc(uid).set(
+    {
+      githubAccessToken: accessToken,
+      githubConnectedAt: new Date(),
+    },
+    { merge: true }
+  )
+}
+
+export async function setGitHubOauthState(uid: string, state: string) {
+  await adminDb.collection("users").doc(uid).set(
+    {
+      githubOauthState: state,
+      githubOauthStateCreatedAt: new Date(),
+    },
+    { merge: true }
+  )
+}
+
+export async function getGitHubOauthState(uid: string): Promise<string | null> {
+  const snap = await adminDb.collection("users").doc(uid).get()
+  const data = snap.exists ? snap.data() : null
+  const state = (data as any)?.githubOauthState
+  return typeof state === "string" && state.length > 0 ? state : null
+}
+
+export async function clearGitHubToken(uid: string) {
+  await adminDb.collection("users").doc(uid).set(
+    {
+      githubAccessToken: null,
+      githubConnectedAt: null,
+    },
+    { merge: true }
+  )
+}

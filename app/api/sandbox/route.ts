@@ -1,5 +1,8 @@
 // app/api/sandbox/route.ts
 import { Sandbox } from "@e2b/code-interpreter"
+import { adminDb } from "@/lib/firebase-admin"
+import { requireUserUid } from "@/lib/server-auth"
+import { decryptEnvVars } from "@/lib/encrypt-env"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -143,11 +146,13 @@ export async function POST(req: Request) {
 
   let files: InputFile[] = []
   let sandboxId: string | undefined
+  let projectId: string | undefined
 
   try {
     const body = await req.json()
     files = body?.files
     sandboxId = body?.sandboxId
+    projectId = typeof body?.projectId === "string" && body.projectId.trim() ? body.projectId.trim() : undefined
   } catch {
     return Response.json({ error: "Invalid JSON body" }, { status: 400 })
   }
@@ -214,6 +219,26 @@ export async function POST(req: Request) {
           const dir = fullPath.slice(0, fullPath.lastIndexOf("/"))
           if (dir) await safeMakeDir(sandbox, dir)
           await sandbox.files.write(fullPath, file.content)
+        }
+
+        // Inject env vars when projectId is present and user is authorized
+        if (projectId) {
+          try {
+            await requireUserUid(req)
+            const snap = await adminDb.collection("projects").doc(projectId).get()
+            const encrypted = snap.exists ? (snap.data() as { envVarsEncrypted?: string })?.envVarsEncrypted : undefined
+            if (encrypted) {
+              const plain = decryptEnvVars(encrypted)
+              const envVars: Record<string, string> = JSON.parse(plain)
+              const lines = Object.entries(envVars).map(([k, v]) => {
+                const escaped = v.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n")
+                return `${k}="${escaped}"`
+              })
+              await sandbox.files.write(`${PROJECT_DIR}/.env`, lines.join("\n") + "\n")
+            }
+          } catch {
+            // Skip env injection on auth or decrypt error; do not fail the sandbox
+          }
         }
 
         // Detect framework
