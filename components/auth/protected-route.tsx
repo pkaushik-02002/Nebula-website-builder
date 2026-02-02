@@ -67,7 +67,7 @@ export function ProtectedRoute({ children, requiredTokens = 0 }: ProtectedRouteP
             Used: <span className="text-zinc-400">{userData?.tokensUsed.toLocaleString()}</span> / {userData?.tokensLimit.toLocaleString()}
           </p>
           <a
-            href="/#pricing"
+            href="/pricing"
             className="inline-flex items-center justify-center px-6 py-2 bg-zinc-100 text-zinc-900 font-medium rounded-lg hover:bg-zinc-200 transition-colors"
           >
             Upgrade Plan

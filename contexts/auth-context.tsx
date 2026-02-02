@@ -10,7 +10,7 @@ import {
   sendPasswordResetEmail,
   type User,
 } from "firebase/auth"
-import { doc, getDoc, setDoc, updateDoc, serverTimestamp, onSnapshot } from "firebase/firestore"
+import { doc, getDoc, setDoc, updateDoc, serverTimestamp, onSnapshot, Timestamp } from "firebase/firestore"
 import { auth, db, googleProvider, githubProvider, type UserPlan, PLAN_TOKEN_LIMITS, DEFAULT_PLANS } from "@/lib/firebase"
 
 interface TokenUsage {
@@ -90,6 +90,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (firebaseUser) {
         try {
           await ensureUserDoc(firebaseUser)
+          try {
+            const idToken = await firebaseUser.getIdToken()
+            await fetch("/api/user/refresh-token-period", {
+              method: "POST",
+              headers: { Authorization: `Bearer ${idToken}` },
+            })
+          } catch {
+            // non-blocking: snapshot will still get latest data
+          }
 
           const userRef = doc(db, "users", firebaseUser.uid)
           const unsubscribeUser = onSnapshot(userRef, async (snap) => {

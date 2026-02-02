@@ -158,13 +158,7 @@ export function Navbar() {
                     </div>
                     <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
                       <div 
-                        className={`h-full rounded-full transition-all ${
-                          tokenPercentage > 90 
-                            ? "bg-red-500" 
-                            : tokenPercentage > 70 
-                            ? "bg-yellow-500" 
-                            : "bg-zinc-400"
-                        }`}
+                        className="h-full rounded-full transition-all bg-gradient-to-r from-amber-400 to-yellow-500"
                         style={{ width: `${Math.min(tokenPercentage, 100)}%` }}
                       />
                     </div>

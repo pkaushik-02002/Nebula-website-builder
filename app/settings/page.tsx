@@ -123,9 +123,7 @@ function SettingsContent() {
                 </div>
                 <div className="h-2 bg-zinc-800 rounded-full overflow-hidden">
                   <div
-                    className={`h-full rounded-full transition-all ${
-                      tokenPercentage > 90 ? "bg-red-500" : tokenPercentage > 70 ? "bg-amber-500" : "bg-zinc-400"
-                    }`}
+                    className="h-full rounded-full transition-all bg-gradient-to-r from-amber-400 to-yellow-500"
                     style={{ width: `${Math.min(tokenPercentage, 100)}%` }}
                   />
                 </div>

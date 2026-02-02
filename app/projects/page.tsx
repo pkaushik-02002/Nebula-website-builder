@@ -249,10 +249,7 @@ export default function ProjectsPage() {
                   </div>
                   <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
                     <div
-                      className={cn(
-                        "h-full rounded-full transition-all",
-                        tokenPercentage > 90 ? "bg-red-500" : tokenPercentage > 70 ? "bg-amber-500" : "bg-zinc-400"
-                      )}
+                      className="h-full rounded-full transition-all bg-gradient-to-r from-amber-400 to-yellow-500"
                       style={{ width: `${Math.min(tokenPercentage, 100)}%` }}
                     />
                   </div>
@@ -398,7 +395,7 @@ export default function ProjectsPage() {
                   <Sparkles className="w-5 h-5 text-zinc-500 shrink-0" />
                 </div>
                 <Link
-                  href="/#pricing"
+                  href="/pricing"
                   className="mt-4 flex w-full items-center justify-center rounded-xl bg-white text-zinc-900 font-medium py-2.5 text-sm hover:bg-zinc-200 transition-colors"
                 >
                   Upgrade

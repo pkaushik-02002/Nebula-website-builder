@@ -1,8 +1,22 @@
 import OpenAI from "openai"
 import { adminAuth, adminDb } from "@/lib/firebase-admin"
+import { Timestamp } from "firebase-admin/firestore"
 import { DEFAULT_PLANS } from "@/lib/firebase"
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+
+function getFirstDayOfNextMonth(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth() + 1, 1)
+}
+
+function getPeriodEndDate(raw: unknown): Date | null {
+  if (!raw) return null
+  if (typeof raw === "object" && raw !== null && "toDate" in raw && typeof (raw as { toDate: () => Date }).toDate === "function") {
+    return (raw as { toDate: () => Date }).toDate()
+  }
+  const d = new Date(raw as string | number)
+  return isNaN(d.getTime()) ? null : d
+}
 
 export async function POST(req: Request) {
   const { prompt, model = "gpt-4o", idToken, existingFiles } = await req.json() as {
@@ -25,7 +39,7 @@ export async function POST(req: Request) {
     return new Response(JSON.stringify({ error: 'Invalid idToken' }), { status: 401 })
   }
 
-  // check user remaining tokens before starting generation
+  // Check if token period has ended → reset monthly, then check remaining tokens
   try {
     const userRef = adminDb.collection('users').doc(uid)
     const userSnap = await userRef.get()
@@ -33,24 +47,38 @@ export async function POST(req: Request) {
       return new Response(JSON.stringify({ error: 'User not found' }), { status: 404 })
     }
     const userData = userSnap.data() as any
-    
-    // Get user's plan and token limit (from Stripe/Firestore or defaults)
+
     const planId = userData?.planId || 'free'
     const planTokensPerMonth = userData?.tokensLimit != null ? Number(userData.tokensLimit) : (DEFAULT_PLANS[planId as keyof typeof DEFAULT_PLANS]?.tokensPerMonth || DEFAULT_PLANS.free.tokensPerMonth)
-    
-    let remaining = userData?.tokenUsage?.remaining
-    
-    // Migration: if tokenUsage doesn't exist but tokensLimit/tokensUsed does, use those
+
+    const periodEnd = getPeriodEndDate(userData?.tokenUsage?.periodEnd)
+    const now = new Date()
+    const shouldReset = !periodEnd || isNaN(periodEnd.getTime()) || now >= periodEnd
+
+    if (shouldReset) {
+      const nextPeriodEnd = getFirstDayOfNextMonth(now)
+      await userRef.update({
+        tokenUsage: {
+          used: 0,
+          remaining: planTokensPerMonth,
+          periodStart: Timestamp.fromDate(now),
+          periodEnd: Timestamp.fromDate(nextPeriodEnd),
+        },
+      })
+      console.log('Token period reset - User:', uid, 'Next periodEnd:', nextPeriodEnd.toISOString())
+    }
+
+    let remaining = shouldReset ? planTokensPerMonth : userData?.tokenUsage?.remaining
+
     if (remaining === undefined || remaining === null) {
-      if (userData?.tokensLimit && userData?.tokensUsed !== undefined) {
+      if (userData?.tokensLimit != null && userData?.tokensUsed !== undefined) {
         remaining = userData.tokensLimit - userData.tokensUsed
       } else {
-        // Initialize with plan's token limit if nothing exists
         remaining = planTokensPerMonth
       }
     }
     remaining = Math.max(0, Number(remaining))
-    
+
     console.log('Token check - User:', uid, 'Plan:', planId, 'Plan Tokens:', planTokensPerMonth, 'Remaining:', remaining, 'TokenUsage:', userData?.tokenUsage)
     if (remaining <= 0) {
       return new Response(JSON.stringify({ error: 'Insufficient tokens' }), { status: 402 })

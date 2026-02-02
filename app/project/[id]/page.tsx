@@ -73,6 +73,7 @@ import {
 } from "@/components/ui/resizable"
 import { useAuth } from "@/contexts/auth-context"
 import { toast } from "@/hooks/use-toast"
+import { useIsLg } from "@/hooks/use-is-lg"
 import { motion, AnimatePresence } from "framer-motion"
 import { applyPatch } from "diff"
 import type { GeneratedFile, Message, Project, ProjectVisibility } from "./types"
@@ -169,6 +170,8 @@ function ProjectContent() {
   const [shareVisibility, setShareVisibility] = useState<ProjectVisibility>("private")
   const [shareSaving, setShareSaving] = useState(false)
   const [accessError, setAccessError] = useState<"private" | "forbidden" | null>(null)
+  const [tokenLimitModalOpen, setTokenLimitModalOpen] = useState(false)
+  const isLg = useIsLg()
   const lastAutoPreviewSignatureRef = useRef<string | null>(null)
   /** Prevents double generation when status is "pending" (e.g. Strict Mode remount resets isGenerating) */
   const pendingGenerationStartedRef = useRef<string | null>(null)
@@ -1076,6 +1079,10 @@ function ProjectContent() {
 
   const generateCode = async (prompt: string, model?: string) => {
     if (!project) return
+    if (remainingTokens <= 0) {
+      setTokenLimitModalOpen(true)
+      return
+    }
 
     const guardKey = `gen:${projectId}:${(prompt || "").slice(0, 40)}`
     if (generationGuardRef.current === guardKey) {
@@ -1122,6 +1129,9 @@ function ProjectContent() {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
+        if (response.status === 402) {
+          setTokenLimitModalOpen(true)
+        }
         throw new Error(errorData.error || `Generation failed: ${response.status}`)
       }
 
@@ -1570,8 +1580,8 @@ function ProjectContent() {
     const nextMessage = (submittedValue ?? chatInput).trim()
     if (!nextMessage || !project || isGenerating) return
 
-    if (remainingTokens < 1000) {
-      alert("You don't have enough tokens. Please upgrade your plan.")
+    if (remainingTokens <= 0) {
+      setTokenLimitModalOpen(true)
       return
     }
 
@@ -1943,7 +1953,7 @@ function ProjectContent() {
                     </div>
                     <div className="h-2 w-full bg-zinc-800/80 rounded-full overflow-hidden border border-zinc-700/30">
                       <div
-                        className="h-full rounded-full transition-all duration-300 shadow-sm bg-zinc-500"
+                        className="h-full rounded-full transition-all duration-300 shadow-sm bg-gradient-to-r from-amber-400 to-yellow-500"
                         style={{ width: userData && tokensLimit > 0 ? `${Math.min(100, Math.round((userData.tokenUsage.used / tokensLimit) * 100))}%` : '0%' }}
                       />
                     </div>
@@ -1955,7 +1965,7 @@ function ProjectContent() {
 
                   {/* Upgrade Button */}
                   <Link
-                    href="/#pricing"
+                    href="/pricing"
                     className="flex items-center gap-2.5 w-full px-3 py-2.5 rounded-lg bg-gradient-to-r from-zinc-800 to-zinc-800/90 border border-zinc-700/50 hover:from-zinc-700 hover:to-zinc-700/90 hover:border-zinc-600/50 transition-all group shadow-sm"
                   >
                     <div className="p-1 rounded bg-zinc-700/50 group-hover:bg-yellow-500/20 transition-colors">
@@ -2129,7 +2139,7 @@ function ProjectContent() {
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 min-h-0 flex flex-col">
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden min-w-0">
         {/* AI-suggested backend: Connect Supabase? banner */}
         {project?.suggestsBackend && !project?.supabaseUrl && !suggestBackendDismissed && (
           <div className="flex-shrink-0 px-3 sm:px-4 py-2.5 border-b border-zinc-600/50 bg-zinc-900/50 flex items-center justify-between gap-3 flex-wrap">
@@ -2412,137 +2422,145 @@ function ProjectContent() {
           </DialogContent>
         </Dialog>
 
-        {/* Integrations modal - wider, left nav + right content */}
+        {/* Integrations modal - wider on desktop; mobile: full-height, horizontal nav */}
         <Dialog open={integrationsOpen} onOpenChange={(open) => { setIntegrationsOpen(open); if (!open) setSupabaseConnectOpen(false) }}>
-          <DialogContent className="bg-zinc-950/98 border border-zinc-800/80 rounded-2xl shadow-2xl backdrop-blur-xl max-w-[min(calc(100vw-1.5rem),48rem)] sm:max-w-3xl md:max-w-4xl w-[95vw] p-0 overflow-hidden flex flex-col max-h-[85vh]">
-            <DialogHeader className="flex-shrink-0 px-5 sm:px-6 pt-5 sm:pt-6 pb-3 border-b border-zinc-800/60">
-              <DialogTitle className="text-zinc-100 text-lg font-semibold">Integrations</DialogTitle>
-              <DialogDescription className="text-zinc-400 text-sm mt-0.5">
+          <DialogContent className="bg-zinc-950/98 border border-zinc-800/80 rounded-2xl shadow-2xl backdrop-blur-xl w-[calc(100vw-1rem)] max-w-[min(calc(100vw-1rem),48rem)] sm:max-w-3xl md:max-w-4xl sm:w-[95vw] p-0 overflow-hidden flex flex-col max-h-[90dvh] sm:max-h-[85vh]">
+            <DialogHeader className="flex-shrink-0 px-4 sm:px-6 pt-4 sm:pt-6 pb-3 border-b border-zinc-800/60">
+              <DialogTitle className="text-zinc-100 text-base sm:text-lg font-semibold">Integrations</DialogTitle>
+              <p className="text-zinc-400 text-xs sm:text-sm mt-0.5 sm:hidden">
+                Link your accounts and put your app online.
+              </p>
+              <DialogDescription className="text-zinc-400 text-xs sm:text-sm mt-0.5 hidden sm:block">
                 Connect services to sync, deploy, and add a backend to this project.
               </DialogDescription>
             </DialogHeader>
-            <div className="flex flex-1 min-h-0 overflow-hidden">
-              {/* Left sidebar - integration options */}
-              <nav className="flex-shrink-0 w-44 sm:w-52 border-r border-zinc-800/60 bg-zinc-900/30 py-3 flex flex-col">
-                <div className="px-2 sm:px-3 space-y-0.5">
+            <div className="flex flex-col md:flex-row flex-1 min-h-0 overflow-hidden">
+              {/* Nav: horizontal scroll on mobile, vertical sidebar on md+ */}
+              <nav className="flex-shrink-0 flex flex-row md:flex-col overflow-x-auto md:overflow-visible border-b md:border-b-0 md:border-r border-zinc-800/60 bg-zinc-900/30 py-2 md:py-3 md:w-44 lg:w-52 custom-scrollbar">
+                <div className="flex flex-row md:flex-col gap-1.5 md:gap-0 md:space-y-0.5 px-2 md:px-3 md:min-w-0">
                   <button
                     type="button"
                     onClick={() => setSelectedIntegration("all")}
                     className={cn(
-                      "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all duration-200",
+                      "shrink-0 md:w-full flex items-center gap-2 md:gap-3 px-3 py-2.5 rounded-xl text-left transition-all duration-200 min-h-[44px] md:min-h-0",
                       selectedIntegration === "all"
                         ? "bg-zinc-800 text-zinc-100 border border-zinc-700/60"
                         : "text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200 border border-transparent"
                     )}
                   >
-                    <div className="w-9 h-9 rounded-lg bg-zinc-800/80 border border-zinc-700/50 flex items-center justify-center shrink-0">
+                    <div className="w-8 h-8 md:w-9 md:h-9 rounded-lg bg-zinc-800/80 border border-zinc-700/50 flex items-center justify-center shrink-0">
                       <LayoutGrid className="w-4 h-4 text-zinc-300" />
                     </div>
-                    <span className="text-sm font-medium block">All</span>
+                    <span className="text-sm font-medium whitespace-nowrap">All</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setSelectedIntegration("github")}
                     className={cn(
-                      "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all duration-200",
+                      "shrink-0 md:w-full flex items-center gap-2 md:gap-3 px-3 py-2.5 rounded-xl text-left transition-all duration-200 min-h-[44px] md:min-h-0",
                       selectedIntegration === "github"
                         ? "bg-zinc-800 text-zinc-100 border border-zinc-700/60"
                         : "text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200 border border-transparent"
                     )}
                   >
-                    <div className="w-9 h-9 rounded-lg bg-zinc-800/80 border border-zinc-700/50 flex items-center justify-center shrink-0">
+                    <div className="w-8 h-8 md:w-9 md:h-9 rounded-lg bg-zinc-800/80 border border-zinc-700/50 flex items-center justify-center shrink-0">
                       <Github className="w-4 h-4 text-zinc-300" />
                     </div>
-                    <div className="flex-1 min-w-0">
+                    <div className="flex-1 min-w-0 hidden sm:block">
                       <span className="text-sm font-medium block">GitHub</span>
                       {githubConnected === true && (
                         <span className="text-[10px] text-zinc-400 font-medium">Connected</span>
                       )}
                     </div>
+                    <span className="text-sm font-medium sm:hidden whitespace-nowrap">GitHub</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setSelectedIntegration("netlify")}
                     className={cn(
-                      "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all duration-200",
+                      "hidden sm:flex shrink-0 md:w-full items-center gap-2 md:gap-3 px-3 py-2.5 rounded-xl text-left transition-all duration-200 min-h-[44px] md:min-h-0",
                       selectedIntegration === "netlify"
                         ? "bg-zinc-800 text-zinc-100 border border-zinc-700/60"
                         : "text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200 border border-transparent"
                     )}
                   >
-                    <div className="w-9 h-9 rounded-lg bg-zinc-800/80 border border-zinc-700/50 flex items-center justify-center shrink-0">
+                    <div className="w-8 h-8 md:w-9 md:h-9 rounded-lg bg-zinc-800/80 border border-zinc-700/50 flex items-center justify-center shrink-0">
                       <Rocket className="w-4 h-4 text-zinc-300" />
                     </div>
-                    <div className="flex-1 min-w-0">
+                    <div className="flex-1 min-w-0 hidden sm:block">
                       <span className="text-sm font-medium block">Netlify</span>
                       {netlifyConnected === true && (
                         <span className="text-[10px] text-zinc-400 font-medium">Connected</span>
                       )}
                     </div>
+                    <span className="text-sm font-medium sm:hidden whitespace-nowrap">Netlify</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setSelectedIntegration("vercel")}
                     className={cn(
-                      "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all duration-200",
+                      "hidden sm:flex shrink-0 md:w-full items-center gap-2 md:gap-3 px-3 py-2.5 rounded-xl text-left transition-all duration-200 min-h-[44px] md:min-h-0",
                       selectedIntegration === "vercel"
                         ? "bg-zinc-800 text-zinc-100 border border-zinc-700/60"
                         : "text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200 border border-transparent"
                     )}
                   >
-                    <div className="w-9 h-9 rounded-lg bg-zinc-800/80 border border-zinc-700/50 flex items-center justify-center shrink-0">
+                    <div className="w-8 h-8 md:w-9 md:h-9 rounded-lg bg-zinc-800/80 border border-zinc-700/50 flex items-center justify-center shrink-0">
                       <Zap className="w-4 h-4 text-zinc-300" />
                     </div>
-                    <div className="flex-1 min-w-0">
+                    <div className="flex-1 min-w-0 hidden sm:block">
                       <span className="text-sm font-medium block">Vercel</span>
                       {vercelConnected === true && (
                         <span className="text-[10px] text-zinc-400 font-medium">Connected</span>
                       )}
                     </div>
+                    <span className="text-sm font-medium sm:hidden whitespace-nowrap">Vercel</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setSelectedIntegration("supabase")}
                     className={cn(
-                      "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all duration-200",
+                      "hidden sm:flex shrink-0 md:w-full items-center gap-2 md:gap-3 px-3 py-2.5 rounded-xl text-left transition-all duration-200 min-h-[44px] md:min-h-0",
                       selectedIntegration === "supabase"
                         ? "bg-zinc-800 text-zinc-100 border border-zinc-700/60"
                         : "text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200 border border-transparent"
                     )}
                   >
-                    <div className="w-9 h-9 rounded-lg bg-zinc-600/10 border border-zinc-500/20 flex items-center justify-center shrink-0">
+                    <div className="w-8 h-8 md:w-9 md:h-9 rounded-lg bg-zinc-600/10 border border-zinc-500/20 flex items-center justify-center shrink-0">
                       <Database className="w-4 h-4 text-zinc-400" />
                     </div>
-                    <div className="flex-1 min-w-0">
+                    <div className="flex-1 min-w-0 hidden sm:block">
                       <span className="text-sm font-medium block">Supabase</span>
                       {supabaseConnected && (
                         <span className="text-[10px] text-zinc-400 font-medium">Connected</span>
                       )}
                     </div>
+                    <span className="text-sm font-medium sm:hidden whitespace-nowrap">Supabase</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setSelectedIntegration("vars")}
                     className={cn(
-                      "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all duration-200",
+                      "shrink-0 md:w-full flex items-center gap-2 md:gap-3 px-3 py-2.5 rounded-xl text-left transition-all duration-200 min-h-[44px] md:min-h-0",
                       selectedIntegration === "vars"
                         ? "bg-zinc-800 text-zinc-100 border border-zinc-700/60"
                         : "text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200 border border-transparent"
                     )}
                   >
-                    <div className="w-9 h-9 rounded-lg bg-zinc-800/80 border border-zinc-700/50 flex items-center justify-center shrink-0">
+                    <div className="w-8 h-8 md:w-9 md:h-9 rounded-lg bg-zinc-800/80 border border-zinc-700/50 flex items-center justify-center shrink-0">
                       <Key className="w-4 h-4 text-zinc-300" />
                     </div>
-                    <span className="text-sm font-medium block">Vars</span>
+                    <span className="text-sm font-medium whitespace-nowrap sm:hidden">Secrets</span>
+                    <span className="text-sm font-medium whitespace-nowrap hidden sm:inline">Vars</span>
                   </button>
                 </div>
-                <div className="mt-auto px-2 sm:px-3 pt-3 border-t border-zinc-800/60">
+                <div className="hidden md:block mt-auto px-2 sm:px-3 pt-3 border-t border-zinc-800/60">
                   <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium">More coming</p>
                   <p className="text-xs text-zinc-600 mt-0.5">Stripe and others soon.</p>
                 </div>
               </nav>
               {/* Right content - selected integration */}
-              <div className="flex-1 min-w-0 overflow-y-auto custom-scrollbar p-5 sm:p-6">
+              <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden custom-scrollbar p-4 sm:p-6">
                 {selectedIntegration === "all" && (
                   <div className="space-y-4">
                     <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-5 sm:p-6 transition-all">
@@ -2552,11 +2570,14 @@ function ProjectContent() {
                         </div>
                         <div className="flex-1 min-w-0">
                           <h3 className="text-base font-semibold text-zinc-100">GitHub</h3>
-                          <p className="text-sm text-zinc-500 mt-1">Create a repo and sync your project code. Re-sync whenever you make changes.</p>
+                          <p className="text-sm text-zinc-500 mt-1 sm:hidden">Save your code to GitHub so you can share it or open it elsewhere.</p>
+                          <p className="text-sm text-zinc-500 mt-1 hidden sm:block">Create a repo and sync your project code. Re-sync whenever you make changes.</p>
                           <div className="mt-4 flex flex-wrap gap-2">
                             {githubConnected === false ? (
                               <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={handleConnectGitHub}>
-                                <Github className="w-3.5 h-3.5 mr-2" /> Connect GitHub
+                                <Github className="w-3.5 h-3.5 mr-2" />
+                                <span className="sm:hidden">Link my GitHub</span>
+                                <span className="hidden sm:inline">Connect GitHub</span>
                               </Button>
                             ) : (
                               <>
@@ -2566,12 +2587,16 @@ function ProjectContent() {
                                       <ExternalLink className="w-3.5 h-3.5" /> View repo
                                     </a>
                                     <Button type="button" size="sm" variant="outline" className="h-9 px-3 text-xs font-semibold border-zinc-700 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100" onClick={handleSyncToGitHub} disabled={isSyncing || !project?.files?.length}>
-                                      {isSyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : <RefreshCw className="w-3.5 h-3.5 mr-1.5" />} {isSyncing ? "Syncing…" : "Re-sync"}
+                                      {isSyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : <RefreshCw className="w-3.5 h-3.5 mr-1.5" />}
+                                      <span className="sm:hidden">{isSyncing ? "Updating…" : "Update my repo"}</span>
+                                      <span className="hidden sm:inline">{isSyncing ? "Syncing…" : "Re-sync"}</span>
                                     </Button>
                                   </>
                                 ) : project?.files?.length ? (
                                   <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={handleSyncToGitHub} disabled={isSyncing}>
-                                    {isSyncing ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Github className="w-3.5 h-3.5 mr-2" />} {isSyncing ? "Syncing…" : "Sync to GitHub"}
+                                    {isSyncing ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Github className="w-3.5 h-3.5 mr-2" />}
+                                    <span className="sm:hidden">{isSyncing ? "Saving…" : "Save to GitHub"}</span>
+                                    <span className="hidden sm:inline">{isSyncing ? "Syncing…" : "Sync to GitHub"}</span>
                                   </Button>
                                 ) : null}
                               </>
@@ -2587,12 +2612,19 @@ function ProjectContent() {
                         </div>
                         <div className="flex-1 min-w-0">
                           <h3 className="text-base font-semibold text-zinc-100">Netlify</h3>
-                          <p className="text-sm text-zinc-500 mt-1">Deploy this project to Netlify for a live URL. One-click deploy after connecting your account.</p>
+                          <p className="text-sm text-zinc-500 mt-1 sm:hidden">Put your app on the web with a live link. Connect once, then publish with one tap.</p>
+                          <p className="text-sm text-zinc-500 mt-1 hidden sm:block">Deploy this project to Netlify for a live URL. One-click deploy after connecting your account.</p>
                           <div className="mt-4 flex flex-wrap gap-2">
                             {!netlifyConnected ? (
-                              <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={handleConnectNetlify}>Connect Netlify</Button>
+                              <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={handleConnectNetlify}>
+                                <span className="sm:hidden">Link Netlify</span>
+                                <span className="hidden sm:inline">Connect Netlify</span>
+                              </Button>
                             ) : (
-                              <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={() => { setIntegrationsOpen(false); setDeployTab("netlify"); setDeployOpen(true) }}>Deploy to Netlify</Button>
+                              <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={() => { setIntegrationsOpen(false); setDeployTab("netlify"); setDeployOpen(true) }}>
+                                <span className="sm:hidden">Publish online</span>
+                                <span className="hidden sm:inline">Deploy to Netlify</span>
+                              </Button>
                             )}
                           </div>
                         </div>
@@ -2605,8 +2637,14 @@ function ProjectContent() {
                         </div>
                         <div className="flex-1 min-w-0">
                           <h3 className="text-base font-semibold text-zinc-100">Vercel</h3>
-                          <p className="text-sm text-zinc-500 mt-1">Deploy to Vercel&apos;s global edge network. We need a Personal Access Token (stored per project, only used to create deployments).</p>
-                          <div className="mt-3 text-xs">
+                          <p className="text-sm text-zinc-500 mt-1 sm:hidden">Get a live link for your app. Paste a token from Vercel below—we&apos;ll tell you where to get it.</p>
+                          <p className="text-sm text-zinc-500 mt-1 hidden sm:block">Deploy to Vercel&apos;s global edge network. We need a Personal Access Token (stored per project, only used to create deployments).</p>
+                          <div className="mt-3 text-xs sm:hidden">
+                            <a href="https://vercel.com/account/tokens" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-zinc-400 hover:text-zinc-200 underline">
+                              <ExternalLink className="w-3.5 h-3.5" /> Get your token (opens Vercel)
+                            </a>
+                          </div>
+                          <div className="mt-3 text-xs hidden sm:block">
                             <a href="https://vercel.com/account/tokens" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-zinc-400 hover:text-zinc-200 underline">
                               <ExternalLink className="w-3.5 h-3.5" /> Create token at vercel.com/account/tokens
                             </a>
@@ -2617,11 +2655,12 @@ function ProjectContent() {
                                 <Input
                                   value={vercelTokenInput}
                                   onChange={(e) => setVercelTokenInput(e.target.value)}
-                                  placeholder="vercel_pat_..."
-                                  className="h-9 w-64 bg-zinc-900 border-zinc-700 text-zinc-100 placeholder:text-zinc-500 text-xs"
+                                  placeholder="Paste token here"
+                                  className="h-9 w-full min-w-0 sm:w-64 bg-zinc-900 border-zinc-700 text-zinc-100 placeholder:text-zinc-500 text-xs"
                                 />
                                 <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={handleSaveVercelToken} disabled={!vercelTokenInput.trim()}>
-                                  Save Token
+                                  <span className="sm:hidden">Save</span>
+                                  <span className="hidden sm:inline">Save Token</span>
                                 </Button>
                               </>
                             ) : (
@@ -2647,7 +2686,8 @@ function ProjectContent() {
                         </div>
                         <div className="flex-1 min-w-0">
                           <h3 className="text-base font-semibold text-zinc-100">Supabase</h3>
-                          <p className="text-sm text-zinc-500 mt-1">Add a backend: auth, database, and real-time. We'll inject the Supabase client and a starter SQL migration.</p>
+                          <p className="text-sm text-zinc-500 mt-1 sm:hidden">Add sign-in and a database to your app. We&apos;ll set it up for you.</p>
+                          <p className="text-sm text-zinc-500 mt-1 hidden sm:block">Add a backend: auth, database, and real-time. We'll inject the Supabase client and a starter SQL migration.</p>
                           <div className="mt-4 flex flex-wrap gap-2">
                             {!supabaseConnected ? (
                               <Button type="button" size="sm" className="h-9 px-3 py-1.5 rounded-lg bg-white hover:bg-zinc-100 border border-zinc-200/80" onClick={() => setSupabaseConnectOpen(true)}>
@@ -2657,9 +2697,13 @@ function ProjectContent() {
                               <>
                                 <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={handleInjectSupabase} disabled={supabaseInjecting}>
                                   {supabaseInjecting ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Plus className="w-3.5 h-3.5 mr-2" />}
-                                  {supabaseInjecting ? "Adding…" : "Add client & migration"}
+                                  <span className="sm:hidden">{supabaseInjecting ? "Setting up…" : "Set up in my project"}</span>
+                                  <span className="hidden sm:inline">{supabaseInjecting ? "Adding…" : "Add client & migration"}</span>
                                 </Button>
-                                <Button type="button" size="sm" variant="ghost" className="h-9 px-3 text-xs text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50" onClick={() => updateDoc(doc(db, "projects", projectId), { supabaseUrl: deleteField(), supabaseAnonKey: deleteField(), supabaseServiceRoleKey: deleteField(), supabaseConnectedAt: deleteField() })}>Disconnect</Button>
+                                <Button type="button" size="sm" variant="ghost" className="h-9 px-3 text-xs text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50" onClick={() => updateDoc(doc(db, "projects", projectId), { supabaseUrl: deleteField(), supabaseAnonKey: deleteField(), supabaseServiceRoleKey: deleteField(), supabaseConnectedAt: deleteField() })}>
+                                  <span className="sm:hidden">Unlink</span>
+                                  <span className="hidden sm:inline">Disconnect</span>
+                                </Button>
                               </>
                             )}
                           </div>
@@ -2676,11 +2720,14 @@ function ProjectContent() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <h3 className="text-base font-semibold text-zinc-100">GitHub</h3>
-                        <p className="text-sm text-zinc-500 mt-1">Create a repo and sync your project code. Re-sync whenever you make changes so your repository stays up to date.</p>
+                        <p className="text-sm text-zinc-500 mt-1 sm:hidden">Save your code to GitHub so you can share it or open it elsewhere.</p>
+                        <p className="text-sm text-zinc-500 mt-1 hidden sm:block">Create a repo and sync your project code. Re-sync whenever you make changes so your repository stays up to date.</p>
                         <div className="mt-4 flex flex-wrap gap-2">
                           {githubConnected === false ? (
                             <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={handleConnectGitHub}>
-                              <Github className="w-3.5 h-3.5 mr-2" /> Connect GitHub
+                              <Github className="w-3.5 h-3.5 mr-2" />
+                              <span className="sm:hidden">Link my GitHub</span>
+                              <span className="hidden sm:inline">Connect GitHub</span>
                             </Button>
                           ) : (
                             <>
@@ -2714,12 +2761,19 @@ function ProjectContent() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <h3 className="text-base font-semibold text-zinc-100">Netlify</h3>
-                        <p className="text-sm text-zinc-500 mt-1">Deploy this project to Netlify for a live URL. One-click deploy after connecting your account.</p>
+                        <p className="text-sm text-zinc-500 mt-1 sm:hidden">Put your app on the web with a live link. Connect once, then publish with one tap.</p>
+                        <p className="text-sm text-zinc-500 mt-1 hidden sm:block">Deploy this project to Netlify for a live URL. One-click deploy after connecting your account.</p>
                         <div className="mt-4 flex flex-wrap gap-2">
                           {!netlifyConnected ? (
-                            <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={handleConnectNetlify}>Connect Netlify</Button>
+                            <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={handleConnectNetlify}>
+                              <span className="sm:hidden">Link Netlify</span>
+                              <span className="hidden sm:inline">Connect Netlify</span>
+                            </Button>
                           ) : (
-                            <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={() => { setIntegrationsOpen(false); setDeployTab("netlify"); setDeployOpen(true) }}>Deploy to Netlify</Button>
+                            <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={() => { setIntegrationsOpen(false); setDeployTab("netlify"); setDeployOpen(true) }}>
+                              <span className="sm:hidden">Publish online</span>
+                              <span className="hidden sm:inline">Deploy to Netlify</span>
+                            </Button>
                           )}
                         </div>
                       </div>
@@ -2734,8 +2788,16 @@ function ProjectContent() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <h3 className="text-base font-semibold text-zinc-100">Vercel</h3>
-                        <p className="text-sm text-zinc-500 mt-1">Deploy to Vercel&apos;s global edge network. We need a Personal Access Token so we can create deployments on your behalf. Your token is stored per project and only used to deploy.</p>
-                        <div className="mt-3 p-3 rounded-lg bg-zinc-900/60 border border-zinc-800 text-xs text-zinc-400">
+                        <p className="text-sm text-zinc-500 mt-1 sm:hidden">Get a live link for your app. Paste a token from Vercel below—get it at vercel.com/account/tokens.</p>
+                        <p className="text-sm text-zinc-500 mt-1 hidden sm:block">Deploy to Vercel&apos;s global edge network. We need a Personal Access Token so we can create deployments on your behalf. Your token is stored per project and only used to deploy.</p>
+                        <div className="mt-3 p-3 rounded-lg bg-zinc-900/60 border border-zinc-800 text-xs text-zinc-400 sm:hidden">
+                          <span className="font-medium text-zinc-300">Where to get it:</span> Open{" "}
+                          <a href="https://vercel.com/account/tokens" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-zinc-200 hover:text-zinc-100 underline">
+                            vercel.com/account/tokens <ExternalLink className="w-3 h-3" />
+                          </a>
+                          , create a token, then paste it below.
+                        </div>
+                        <div className="mt-3 p-3 rounded-lg bg-zinc-900/60 border border-zinc-800 text-xs text-zinc-400 hidden sm:block">
                           <span className="font-medium text-zinc-300">How to get your token:</span> Go to{" "}
                           <a href="https://vercel.com/account/tokens" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-zinc-200 hover:text-zinc-100 underline">
                             vercel.com/account/tokens <ExternalLink className="w-3 h-3" />
@@ -2748,18 +2810,20 @@ function ProjectContent() {
                               <Input
                                 value={vercelTokenInput}
                                 onChange={(e) => setVercelTokenInput(e.target.value)}
-                                placeholder="vercel_pat_..."
-                                className="h-9 w-64 bg-zinc-900 border-zinc-700 text-zinc-100 placeholder:text-zinc-500 text-xs"
+                                placeholder="Paste token here"
+                                className="h-9 w-full min-w-0 sm:w-64 bg-zinc-900 border-zinc-700 text-zinc-100 placeholder:text-zinc-500 text-xs"
                               />
                               <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={handleSaveVercelToken} disabled={!vercelTokenInput.trim()}>
-                                Save Token
+                                <span className="sm:hidden">Save</span>
+                                <span className="hidden sm:inline">Save Token</span>
                               </Button>
                             </>
                           ) : (
                             <>
                               <p className="text-xs text-green-500 font-medium">Connected ✓</p>
                               <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={() => { setIntegrationsOpen(false); setDeployTab("vercel"); setDeployOpen(true) }} disabled={isVercelDeploying}>
-                                {isVercelDeploying ? "Deploying..." : "Deploy to Vercel"}
+                                <span className="sm:hidden">{isVercelDeploying ? "Publishing…" : "Publish online"}</span>
+                                <span className="hidden sm:inline">{isVercelDeploying ? "Deploying..." : "Deploy to Vercel"}</span>
                               </Button>
                               {vercelDeployLinks?.siteUrl && (
                                 <a href={vercelDeployLinks.siteUrl} target="_blank" rel="noreferrer" className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-700/60 bg-zinc-800/50 px-3 text-xs font-medium text-zinc-200 hover:bg-zinc-800 hover:text-zinc-100 transition-colors break-all">
@@ -2781,7 +2845,8 @@ function ProjectContent() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <h3 className="text-base font-semibold text-zinc-100">Supabase</h3>
-                        <p className="text-sm text-zinc-500 mt-1">Add a backend: auth, database, and real-time. We'll inject the Supabase client and a starter SQL migration into your project.</p>
+                        <p className="text-sm text-zinc-500 mt-1 sm:hidden">Add sign-in and a database to your app. We&apos;ll set it up for you.</p>
+                        <p className="text-sm text-zinc-500 mt-1 hidden sm:block">Add a backend: auth, database, and real-time. We'll inject the Supabase client and a starter SQL migration into your project.</p>
                         <div className="mt-4 flex flex-wrap gap-2">
                           {!supabaseConnected ? (
                             <Button type="button" size="sm" className="h-9 px-3 py-1.5 rounded-lg bg-white hover:bg-zinc-100 border border-zinc-200/80" onClick={() => setSupabaseConnectOpen(true)}>
@@ -2791,9 +2856,13 @@ function ProjectContent() {
                             <>
                               <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={handleInjectSupabase} disabled={supabaseInjecting}>
                                 {supabaseInjecting ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Plus className="w-3.5 h-3.5 mr-2" />}
-                                {supabaseInjecting ? "Adding…" : "Add client & migration"}
+                                <span className="sm:hidden">{supabaseInjecting ? "Setting up…" : "Set up in my project"}</span>
+                                <span className="hidden sm:inline">{supabaseInjecting ? "Adding…" : "Add client & migration"}</span>
                               </Button>
-                                <Button type="button" size="sm" variant="ghost" className="h-9 px-3 text-xs text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50" onClick={() => updateDoc(doc(db, "projects", projectId), { supabaseUrl: deleteField(), supabaseAnonKey: deleteField(), supabaseServiceRoleKey: deleteField(), supabaseConnectedAt: deleteField() })}>Disconnect</Button>
+                                <Button type="button" size="sm" variant="ghost" className="h-9 px-3 text-xs text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50" onClick={() => updateDoc(doc(db, "projects", projectId), { supabaseUrl: deleteField(), supabaseAnonKey: deleteField(), supabaseServiceRoleKey: deleteField(), supabaseConnectedAt: deleteField() })}>
+                                  <span className="sm:hidden">Unlink</span>
+                                  <span className="hidden sm:inline">Disconnect</span>
+                                </Button>
                             </>
                           )}
                         </div>
@@ -2808,8 +2877,10 @@ function ProjectContent() {
                         <Key className="w-6 h-6 text-zinc-300" />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <h3 className="text-base font-semibold text-zinc-100">Environment variables</h3>
-                        <p className="text-sm text-zinc-500 mt-1">Add API keys and env vars for preview. Values are encrypted and only injected into the sandbox; they are never shown after save.</p>
+                        <h3 className="text-base font-semibold text-zinc-100 sm:hidden">Secrets & API keys</h3>
+                        <h3 className="text-base font-semibold text-zinc-100 hidden sm:block">Environment variables</h3>
+                        <p className="text-sm text-zinc-500 mt-1 sm:hidden">Add keys your app needs (e.g. from an API). We keep them private and only use them in preview.</p>
+                        <p className="text-sm text-zinc-500 mt-1 hidden sm:block">Add API keys and env vars for preview. Values are encrypted and only injected into the sandbox; they are never shown after save.</p>
                         {envVarsLoading ? (
                           <div className="mt-4 flex items-center gap-2 text-zinc-400 text-sm">
                             <Loader2 className="w-4 h-4 animate-spin" /> Loading…
@@ -2821,7 +2892,7 @@ function ProjectContent() {
                                 <div key={idx} className="flex flex-wrap gap-2 items-center">
                                   <input
                                     type="text"
-                                    placeholder="Variable name"
+                                    placeholder="Name"
                                     value={entry.name}
                                     onChange={(e) =>
                                       setEnvFormEntries((prev) =>
@@ -2829,11 +2900,13 @@ function ProjectContent() {
                                       )
                                     }
                                     className="flex-1 min-w-[120px] rounded-lg border border-zinc-700/60 bg-zinc-900/80 px-3 py-2 text-xs text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500"
+                                    title="Variable name"
                                   />
                                   <input
                                     type="password"
-                                    placeholder="Value"
+                                    placeholder="Secret / key"
                                     value={entry.value}
+                                    title="Value"
                                     onChange={(e) =>
                                       setEnvFormEntries((prev) =>
                                         prev.map((p, i) => (i === idx ? { ...p, value: e.target.value } : p))
@@ -2852,7 +2925,9 @@ function ProjectContent() {
                                 className="h-9 px-3 text-xs border-zinc-700 text-zinc-300 hover:bg-zinc-800"
                                 onClick={() => setEnvFormEntries((prev) => [...prev, { name: "", value: "" }])}
                               >
-                                <Plus className="w-3.5 h-3.5 mr-1.5" /> Add variable
+                                <Plus className="w-3.5 h-3.5 mr-1.5" />
+                                <span className="sm:hidden">Add a secret</span>
+                                <span className="hidden sm:inline">Add variable</span>
                               </Button>
                               <Button
                                 type="button"
@@ -2866,7 +2941,10 @@ function ProjectContent() {
                               </Button>
                             </div>
                             {envVarNames.length > 0 && (
-                              <p className="mt-3 text-[11px] text-zinc-500">You have {envVarNames.length} variable{envVarNames.length !== 1 ? "s" : ""} set. Re-run preview to use them.</p>
+                              <p className="mt-3 text-[11px] text-zinc-500">
+                                <span className="sm:hidden">You have {envVarNames.length} secret{envVarNames.length !== 1 ? "s" : ""} saved. Restart preview to use them.</span>
+                                <span className="hidden sm:inline">You have {envVarNames.length} variable{envVarNames.length !== 1 ? "s" : ""} set. Re-run preview to use them.</span>
+                              </p>
                             )}
                           </>
                         )}
@@ -2874,6 +2952,42 @@ function ProjectContent() {
                     </div>
                   </div>
                 )}
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Token limit reached — v0-style modal: no generation until reset or upgrade */}
+        <Dialog open={tokenLimitModalOpen} onOpenChange={setTokenLimitModalOpen}>
+          <DialogContent className="bg-zinc-950/98 border border-zinc-800/80 rounded-2xl shadow-2xl backdrop-blur-xl max-w-[min(calc(100vw-1.5rem),28rem)] p-0 overflow-hidden">
+            <div className="p-6 sm:p-8 text-center">
+              <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mx-auto mb-4">
+                <Coins className="w-7 h-7 text-amber-400" />
+              </div>
+              <DialogTitle className="text-xl font-semibold text-zinc-100">You&apos;ve used all your tokens</DialogTitle>
+              <DialogDescription className="text-zinc-400 text-sm mt-2">
+                Generation is paused until your tokens reset. Your plan refreshes monthly.
+                {(() => {
+                  const raw = userData?.tokenUsage?.periodEnd
+                  let date: Date | null = raw instanceof Date ? raw : raw != null ? new Date(raw as string | number) : null
+                  if (!date || isNaN(date.getTime())) {
+                    const now = new Date()
+                    date = new Date(now.getFullYear(), now.getMonth() + 1, 1)
+                  }
+                  return (
+                    <span className="block mt-2 text-zinc-300">
+                      Next reset: {date.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })}
+                    </span>
+                  )
+                })()}
+              </DialogDescription>
+              <div className="mt-6 flex flex-col sm:flex-row gap-3 justify-center">
+                <Button asChild className="bg-amber-500 hover:bg-amber-600 text-zinc-900 font-semibold">
+                  <Link href="/pricing">Upgrade for more tokens</Link>
+                </Button>
+                <Button variant="outline" className="border-zinc-700 text-zinc-300 hover:bg-zinc-800" onClick={() => setTokenLimitModalOpen(false)}>
+                  Close
+                </Button>
               </div>
             </div>
           </DialogContent>
@@ -3001,8 +3115,9 @@ function ProjectContent() {
           </DialogContent>
         </Dialog>
 
-        {/* Mobile layout (stacked). Desktop/Laptop layout below remains unchanged and is lg+ only. */}
-        <div className="lg:hidden h-full flex flex-col min-h-0 overflow-hidden">
+        {/* Mobile layout: only in DOM on small screens so desktop layout never shows below. */}
+        {!isLg && (
+        <div className="h-full flex-1 min-h-0 flex flex-col overflow-hidden w-full">
           {/* Mobile tabs - touch-friendly, modern pill bar */}
           <div className="px-3 sm:px-4 py-2.5 border-b border-zinc-800/80 bg-zinc-950/60 backdrop-blur-sm flex-shrink-0">
             <div className="flex items-center gap-1.5 rounded-2xl bg-zinc-900/70 border border-zinc-800/60 p-1.5 shadow-inner">
@@ -3311,8 +3426,11 @@ function ProjectContent() {
             )}
           </div>
         </div>
+        )}
 
-        <ResizablePanelGroup direction="horizontal" className="h-full hidden lg:flex">
+        {/* Desktop layout: only in DOM on lg+ so mobile never sees duplicate content. */}
+        {isLg && (
+        <ResizablePanelGroup direction="horizontal" className="h-full flex-1 min-h-0 w-full min-w-0">
           {/* Chat Panel - modern glass */}
           <ResizablePanel defaultSize={30} minSize={20} maxSize={50}>
             <div className="h-full flex flex-col bg-zinc-900/30 backdrop-blur-sm border-r border-zinc-800/50">
@@ -3759,6 +3877,7 @@ function ProjectContent() {
             </div>
           </ResizablePanel>
         </ResizablePanelGroup>
+        )}
       </div>
     </div>
   )
