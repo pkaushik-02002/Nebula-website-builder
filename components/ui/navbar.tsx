@@ -55,9 +55,10 @@ export function Navbar() {
     return "U"
   }
 
-  const tokensLimit = userData?.remainingTokens ? userData.tokenUsage.used + userData.remainingTokens : 0
-  const tokenPercentage = tokensLimit > 0
-    ? Math.round((userData.tokenUsage.used / tokensLimit) * 100) 
+  const remainingClamped = userData ? Math.max(0, userData.tokenUsage?.remaining ?? 0) : 0
+  const tokensLimit = userData ? userData.tokenUsage.used + remainingClamped : 0
+  const tokenPercentage = userData && tokensLimit > 0
+    ? Math.min(100, Math.round((userData.tokenUsage.used / tokensLimit) * 100))
     : 0
 
   return (
@@ -177,11 +178,11 @@ export function Navbar() {
                   className="text-zinc-300 focus:bg-zinc-800 focus:text-zinc-100 cursor-pointer"
                   onClick={() => {
                     setIsOpen(false)
-                    router.push("/dashboard")
+                    router.push("/projects")
                   }}
                 >
                   <LayoutDashboard className="w-4 h-4 mr-2" />
-                  Dashboard
+                  Your Projects
                 </DropdownMenuItem>
                 
                 <DropdownMenuItem 

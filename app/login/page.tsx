@@ -9,18 +9,30 @@ import { useAuth } from "@/contexts/auth-context"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Loader2 } from "lucide-react"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Loader2, Mail } from "lucide-react"
 
 export default function LoginPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const redirect = searchParams.get("redirect") || "/"
-  const { signInWithGoogle, signInWithGithub, signInWithEmail, user, loading } = useAuth()
+  const { signInWithGoogle, signInWithGithub, signInWithEmail, sendPasswordResetEmail, user, loading } = useAuth()
   
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState("")
+  const [forgotOpen, setForgotOpen] = useState(false)
+  const [resetEmail, setResetEmail] = useState("")
+  const [resetLoading, setResetLoading] = useState(false)
+  const [resetError, setResetError] = useState("")
+  const [resetSent, setResetSent] = useState(false)
 
   // Redirect if already logged in
   useEffect(() => {
@@ -69,6 +81,33 @@ export default function LoginPage() {
       setError("Failed to sign in with GitHub")
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  const handleForgotOpen = () => {
+    setForgotOpen(true)
+    setResetEmail("")
+    setResetError("")
+    setResetSent(false)
+  }
+
+  const handleSendResetLink = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!resetEmail.trim()) return
+    setResetLoading(true)
+    setResetError("")
+    try {
+      await sendPasswordResetEmail(resetEmail.trim())
+      setResetSent(true)
+    } catch (err: unknown) {
+      const message = err && typeof err === "object" && "code" in err
+        ? (err as { code?: string }).code === "auth/user-not-found"
+          ? "No account found with this email."
+          : (err as { message?: string }).message ?? "Failed to send reset link."
+        : "Failed to send reset link."
+      setResetError(message)
+    } finally {
+      setResetLoading(false)
     }
   }
 
@@ -165,9 +204,18 @@ export default function LoginPage() {
               />
             </div>
             <div>
-              <Label htmlFor="password" className="text-zinc-300">
-                Password
-              </Label>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="password" className="text-zinc-300">
+                  Password
+                </Label>
+                <button
+                  type="button"
+                  onClick={handleForgotOpen}
+                  className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+                >
+                  Forgot password?
+                </button>
+              </div>
               <Input
                 id="password"
                 type="password"
@@ -202,6 +250,63 @@ export default function LoginPage() {
           </p>
         </div>
       </div>
+
+      {/* Forgot password dialog */}
+      <Dialog open={forgotOpen} onOpenChange={setForgotOpen}>
+        <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-100 sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Mail className="w-5 h-5 text-zinc-400" />
+              Reset password
+            </DialogTitle>
+            <DialogDescription className="text-zinc-400">
+              Enter your email and we&apos;ll send you a link to reset your password.
+            </DialogDescription>
+          </DialogHeader>
+          {resetSent ? (
+            <div className="py-4 px-3 rounded-lg bg-emerald-900/20 border border-emerald-800/30 text-emerald-200 text-sm">
+              Check your email for the reset link. If you don&apos;t see it, check your spam folder.
+            </div>
+          ) : (
+            <form onSubmit={handleSendResetLink} className="space-y-4 mt-2">
+              {resetError && (
+                <div className="p-3 rounded-lg bg-red-900/20 border border-red-800/30 text-red-400 text-sm">
+                  {resetError}
+                </div>
+              )}
+              <div>
+                <Label htmlFor="reset-email" className="text-zinc-300">
+                  Email
+                </Label>
+                <Input
+                  id="reset-email"
+                  type="email"
+                  value={resetEmail}
+                  onChange={(e) => setResetEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  className="mt-1 bg-zinc-800/50 border-zinc-700 text-zinc-100 placeholder:text-zinc-500"
+                  required
+                  autoFocus
+                />
+              </div>
+              <Button
+                type="submit"
+                disabled={resetLoading}
+                className="w-full bg-zinc-100 text-zinc-900 hover:bg-zinc-200"
+              >
+                {resetLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Sending...
+                  </>
+                ) : (
+                  "Send reset link"
+                )}
+              </Button>
+            </form>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

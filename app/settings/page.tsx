@@ -32,8 +32,9 @@ function SettingsContent() {
     )
   }
 
-  const tokensLimit = userData.tokenUsage.used + (userData.remainingTokens ?? 0)
-  const tokenPercentage = tokensLimit > 0 ? Math.round((userData.tokenUsage.used / tokensLimit) * 100) : 0
+  const remainingClamped = Math.max(0, userData.tokenUsage?.remaining ?? 0)
+  const tokensLimit = userData.tokenUsage.used + remainingClamped
+  const tokenPercentage = tokensLimit > 0 ? Math.min(100, Math.round((userData.tokenUsage.used / tokensLimit) * 100)) : 0
 
   const getInitials = (name: string | null, email: string | null) => {
     if (name) return name.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2)

@@ -104,6 +104,7 @@ const OPENAI_ICON = (
         compact = false,
     }: AnimatedAIInputProps) {
         const router = useRouter();
+        const { user } = useAuth();
         const [value, setValue] = useState("");
         const [isCreating, setIsCreating] = useState(false);
         const { textareaRef, adjustHeight } = useAutoResizeTextarea({
@@ -200,7 +201,8 @@ const OPENAI_ICON = (
         };
 
         const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-            if (e.key === "Enter" && !e.shiftKey && value.trim() && !isCreating) {
+            const isSubmit = (e.key === "Enter" && !e.shiftKey) || ((e.ctrlKey || e.metaKey) && e.key === "Enter");
+            if (isSubmit && value.trim() && !isCreating && !isLoading) {
                 e.preventDefault();
                 handleCreateProject();
             }

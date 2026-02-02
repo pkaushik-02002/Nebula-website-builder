@@ -34,9 +34,9 @@ export async function POST(req: Request) {
     }
     const userData = userSnap.data() as any
     
-    // Get user's plan and token limit
+    // Get user's plan and token limit (from Stripe/Firestore or defaults)
     const planId = userData?.planId || 'free'
-    const planTokensPerMonth = DEFAULT_PLANS[planId as keyof typeof DEFAULT_PLANS]?.tokensPerMonth || DEFAULT_PLANS.free.tokensPerMonth
+    const planTokensPerMonth = userData?.tokensLimit != null ? Number(userData.tokensLimit) : (DEFAULT_PLANS[planId as keyof typeof DEFAULT_PLANS]?.tokensPerMonth || DEFAULT_PLANS.free.tokensPerMonth)
     
     let remaining = userData?.tokenUsage?.remaining
     
@@ -49,9 +49,10 @@ export async function POST(req: Request) {
         remaining = planTokensPerMonth
       }
     }
+    remaining = Math.max(0, Number(remaining))
     
     console.log('Token check - User:', uid, 'Plan:', planId, 'Plan Tokens:', planTokensPerMonth, 'Remaining:', remaining, 'TokenUsage:', userData?.tokenUsage)
-    if (!remaining || remaining <= 0) {
+    if (remaining <= 0) {
       return new Response(JSON.stringify({ error: 'Insufficient tokens' }), { status: 402 })
     }
   } catch (e) {
@@ -75,7 +76,7 @@ UI STANDARD: When adding or changing UI, keep it modern and polished—distincti
 CRITICAL: Do NOT regenerate the entire project. Output ONLY:
 1. One AGENT_MESSAGE (see below).
 2. For each file that you MODIFY: output that file in ===FILE: path=== ... ===END_FILE===. Inside the block you may use EITHER:
-   - Unified diff format (so only the change is applied):
+   - Unified diff format (so only the change is applied). You MUST include the --- and +++ file header lines first; never output only @@ hunk lines:
      --- a/path/to/file.tsx
      +++ b/path/to/file.tsx
      @@ -start,count +start,count @@
@@ -176,6 +177,7 @@ Do NOT output this for purely static sites, landing pages, or UI-only apps with 
   })
 
   let usageInfo: any = null
+  let streamedLength = 0
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -185,22 +187,28 @@ Do NOT output this for purely static sites, landing pages, or UI-only apps with 
           if ((chunk as any).usage) {
             usageInfo = (chunk as any).usage
           }
-          // some providers may include usage inside choices
           if ((chunk as any).choices && (chunk as any).choices[0]?.usage) {
             usageInfo = (chunk as any).choices[0].usage
           }
 
           const content = chunk.choices[0]?.delta?.content
           if (content) {
+            streamedLength += content.length
             controller.enqueue(encoder.encode(content))
           }
         }
 
+        // Realistic token count: API usage when present, else ~4 chars per token (OpenAI-style)
+        const promptLength = userMessageContent.length
+        const completionLength = streamedLength
+        const fallbackTokens = Math.ceil((promptLength + completionLength) / 4)
+        const tokensToCharge = usageInfo
+          ? (usageInfo.total_tokens ?? (usageInfo.prompt_tokens || 0) + (usageInfo.completion_tokens || 0))
+          : (fallbackTokens > 0 ? fallbackTokens : 0)
+
         // when stream finishes, attempt to deduct tokens in a transaction
         try {
-          if (usageInfo) {
-            const tokensToCharge = usageInfo.total_tokens ?? (usageInfo.prompt_tokens || 0) + (usageInfo.completion_tokens || 0)
-            if (tokensToCharge > 0) {
+          if (tokensToCharge > 0) {
               const userRef = adminDb.collection('users').doc(uid)
               await adminDb.runTransaction(async (tx) => {
                 const snap = await tx.get(userRef)
@@ -209,7 +217,7 @@ Do NOT output this for purely static sites, landing pages, or UI-only apps with 
                 
                 // Get user's plan token limit
                 const planId = data?.planId || 'free'
-                const planTokensPerMonth = DEFAULT_PLANS[planId as keyof typeof DEFAULT_PLANS]?.tokensPerMonth || DEFAULT_PLANS.free.tokensPerMonth
+                const planTokensPerMonth = data?.tokensLimit != null ? Number(data.tokensLimit) : (DEFAULT_PLANS[planId as keyof typeof DEFAULT_PLANS]?.tokensPerMonth || DEFAULT_PLANS.free.tokensPerMonth)
                 
                 let remaining = data?.tokenUsage?.remaining
                 
@@ -221,33 +229,35 @@ Do NOT output this for purely static sites, landing pages, or UI-only apps with 
                     remaining = planTokensPerMonth
                   }
                 }
+                // Never use negative remaining (robust against bad data)
+                remaining = Math.max(0, Number(remaining))
                 
                 console.log('Transaction - User Plan:', planId, 'Plan Tokens:', planTokensPerMonth, 'Charging tokens:', tokensToCharge, 'Remaining before:', remaining)
                 
-                // If generation exceeds plan limit, add warning to stream
+                // If generation exceeds plan limit, warn and do not charge (stream already delivered)
                 if (tokensToCharge > planTokensPerMonth) {
                   console.warn(`Generation used ${tokensToCharge} tokens but ${planId} plan only allows ${planTokensPerMonth}. Recommend upgrade.`)
                   controller.enqueue(encoder.encode('\n\n{"type":"warning","message":"This generation exceeded your plan\'s monthly token limit. Please upgrade your plan to continue generating."}'))
-                  throw new Error('plan_limit_exceeded')
+                  return
                 }
                 
                 if (remaining < tokensToCharge) {
                   console.warn(`User ${uid} on ${planId} plan has ${remaining} tokens but needs ${tokensToCharge}`)
                   controller.enqueue(encoder.encode('\n\n{"type":"warning","message":"Insufficient tokens for this generation. Please upgrade your plan."}'))
-                  throw new Error('insufficient_tokens')
+                  return
                 }
                 
-                // Always use new structure for update
+                // Cap charge so remaining never goes negative (robust)
+                const actualCharge = Math.min(tokensToCharge, remaining)
                 const currentUsed = data?.tokenUsage?.used || data?.tokensUsed || 0
-                const newUsed = currentUsed + tokensToCharge
-                const newRemaining = remaining - tokensToCharge
+                const newUsed = currentUsed + actualCharge
+                const newRemaining = Math.max(0, remaining - actualCharge)
                 console.log('Transaction - New tokens - Used:', newUsed, 'Remaining:', newRemaining)
                 tx.update(userRef, {
                   'tokenUsage.used': newUsed,
                   'tokenUsage.remaining': newRemaining,
                 })
               })
-            }
           }
         } catch (e) {
           console.error('Failed to charge tokens after generation:', e)

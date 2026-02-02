@@ -15,7 +15,6 @@ import { useParams, useRouter } from "next/navigation"
 import { doc, getDoc, updateDoc, onSnapshot, collection, addDoc, serverTimestamp, deleteField } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import JSZip from "jszip"
-import Spline from '@splinetool/react-spline'
 import { 
   Code2, 
   Eye, 
@@ -61,6 +60,7 @@ import { TextShimmer } from "@/components/prompt-kit/text-shimmer"
 import { ThinkingBar } from "@/components/prompt-kit/thinking-bar"
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/prompt-kit/reasoning"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { AnimatedAIInput } from "@/components/ui/animated-ai-input"
 import { BuildTimeline, type TimelineStep } from "@/components/preview/build-timeline"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -72,559 +72,24 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/resizable"
 import { useAuth } from "@/contexts/auth-context"
+import { toast } from "@/hooks/use-toast"
 import { motion, AnimatePresence } from "framer-motion"
 import { applyPatch } from "diff"
-import Editor from "@monaco-editor/react"
+import type { GeneratedFile, Message, Project, ProjectVisibility } from "./types"
+import { extractAgentMessage } from "./utils"
+import { ProjectErrorBoundary, ChatMessage, CodePanel } from "@/components/project"
 
-interface GeneratedFile {
-  path: string
-  content: string
-  isGenerating?: boolean
-}
-
-interface Message {
-  role: "user" | "assistant"
-  content: string
-  files?: string[]
-  isStreaming?: boolean
-  timestamp?: string
-}
-
-type ProjectVisibility = "public" | "private" | "link-only"
-
-interface Project {
-  id: string
-  name?: string
-  prompt: string
-  model?: string
-  status: "pending" | "generating" | "complete" | "error"
-  files?: GeneratedFile[]
-  sandboxUrl?: string
-  sandboxId?: string
-  createdAt: Date
-  messages?: Message[]
-  error?: string
-  tokensUsed?: number
-  githubRepoUrl?: string
-  githubRepoFullName?: string
-  githubSyncedAt?: Date | { toDate: () => Date }
-  suggestsBackend?: boolean
-  supabaseUrl?: string
-  visibility?: ProjectVisibility
-  ownerId?: string
-  editorIds?: string[]
-}
-
-// File tree structure
-interface FileNode {
-  name: string
-  path: string
-  type: "file" | "folder"
-  children?: FileNode[]
-  content?: string
-  isGenerating?: boolean
-}
-
-function formatMessageTime(iso: string): string {
-  try {
-    const d = new Date(iso)
-    const h = d.getHours()
-    const m = d.getMinutes()
-    const day = d.getDate()
-    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-    const month = months[d.getMonth()]
-    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")} • ${day} ${month}`
-  } catch {
-    return ""
-  }
-}
-
-function extractAgentMessage(content: string): { agentMessage: string | null; contentWithoutAgent: string } {
-  const start = "===AGENT_MESSAGE==="
-  const end = "===END_AGENT_MESSAGE==="
-  const i = content.indexOf(start)
-  const j = content.indexOf(end, i)
-  if (i === -1 || j === -1) return { agentMessage: null, contentWithoutAgent: content }
-  const agentMessage = content.slice(i + start.length, j).trim()
-  const contentWithoutAgent = content.slice(0, i).trim() + "\n" + content.slice(j + end.length).trim()
-  return { agentMessage: agentMessage || null, contentWithoutAgent }
-}
-
-function buildFileTree(files: GeneratedFile[]): FileNode[] {
-  const root: { [key: string]: FileNode | { [key: string]: FileNode } } = {}
-
-  files.forEach(file => {
-    const parts = file.path.split("/")
-    let current: any = root
-
-    parts.forEach((part, index) => {
-      const isFile = index === parts.length - 1
-      const currentPath = parts.slice(0, index + 1).join("/")
-
-      if (!current[part]) {
-        current[part] = {
-          name: part,
-          path: currentPath,
-          type: isFile ? "file" : "folder",
-          children: isFile ? undefined : {},
-          content: isFile ? file.content : undefined,
-          isGenerating: isFile ? file.isGenerating : undefined,
-        }
-      }
-
-      if (!isFile && current[part].children) {
-        current = current[part].children
-      }
-    })
-  })
-
-  const convertToArray = (obj: { [key: string]: FileNode }): FileNode[] => {
-    return Object.values(obj).map(node => ({
-      ...node,
-      children: node.children ? convertToArray(node.children as unknown as { [key: string]: FileNode }) : undefined,
-    })).sort((a, b) => {
-      if (a.type !== b.type) return a.type === "folder" ? -1 : 1
-      return a.name.localeCompare(b.name)
-    })
-  }
-
-  return convertToArray(root as { [key: string]: FileNode })
-}
-
-function FileTreeItem({ 
-  node, 
-  selectedFile, 
-  onSelect,
-  depth = 0 
-}: { 
-  node: FileNode
-  selectedFile: GeneratedFile | null
-  onSelect: (file: GeneratedFile) => void
-  depth?: number
-}) {
-  const [isOpen, setIsOpen] = useState(depth < 2)
-  const isSelected = selectedFile?.path === node.path
-
-  if (node.type === "folder") {
-    return (
-      <div>
-        <button
-          type="button"
-          onClick={() => setIsOpen(!isOpen)}
-          className="flex items-center gap-1.5 w-full px-2 py-1 text-sm rounded hover:bg-zinc-800/50 transition-colors group"
-          style={{ paddingLeft: `${depth * 12 + 8}px` }}
-        >
-          {isOpen ? (
-            <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
-          ) : (
-            <ChevronRight className="w-3.5 h-3.5 text-slate-500" />
-          )}
-          {isOpen ? (
-            <FolderOpen className="w-4 h-4 text-slate-400" />
-          ) : (
-            <FolderIcon className="w-4 h-4 text-slate-400" />
-          )}
-          <span className="text-slate-300 truncate">{node.name}</span>
-        </button>
-        <AnimatePresence>
-          {isOpen && node.children && (
-            <motion.div
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: "auto", opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              transition={{ duration: 0.15 }}
-            >
-              {node.children.map(child => (
-                <FileTreeItem
-                  key={child.path}
-                  node={child}
-                  selectedFile={selectedFile}
-                  onSelect={onSelect}
-                  depth={depth + 1}
-                />
-              ))}
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
-    )
-  }
-
-  const getFileIcon = (name: string) => {
-    const ext = name.split(".").pop()?.toLowerCase()
-    const colors: Record<string, string> = {
-      tsx: "text-slate-400",
-      ts: "text-slate-400",
-      jsx: "text-slate-400",
-      js: "text-slate-400",
-      css: "text-slate-400",
-      scss: "text-slate-400",
-      json: "text-slate-400",
-      md: "text-slate-400",
-      yml: "text-slate-400",
-      yaml: "text-slate-400",
-      env: "text-slate-400",
-      txt: "text-slate-400",
-      html: "text-slate-400",
-      svg: "text-slate-400",
-      png: "text-slate-400",
-      jpg: "text-slate-400",
-      jpeg: "text-slate-400",
-      gif: "text-slate-400",
-    }
-    return colors[ext || ""] || "text-slate-400"
-  }
-
-  return (
-    <motion.button
-      type="button"
-      initial={node.isGenerating ? { opacity: 0, x: -10 } : false}
-      animate={{ opacity: 1, x: 0 }}
-      onClick={() => onSelect({ path: node.path, content: node.content || "" })}
-      className={cn(
-        "flex items-center gap-1.5 w-full px-2 py-1 text-sm rounded transition-colors",
-        isSelected 
-          ? "bg-zinc-800 text-slate-100" 
-          : "text-slate-400 hover:bg-zinc-800/50 hover:text-slate-300"
-      )}
-      style={{ paddingLeft: `${depth * 12 + 8}px` }}
-    >
-      <div className="w-3.5 h-3.5" />
-      {node.isGenerating ? (
-        <div className="w-4 h-4 relative">
-          <div className="absolute inset-0 rounded-full bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 animate-spin" />
-          <div className="absolute inset-0.5 rounded-full bg-zinc-900" />
-        </div>
-      ) : (
-        <FileCode className={cn("w-4 h-4", getFileIcon(node.name))} />
-      )}
-      <span className="truncate">{node.name}</span>
-      {node.isGenerating && (
-        <motion.span 
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          className="ml-auto text-[10px] text-slate-500 flex items-center gap-1"
-        >
-          <span className="w-1 h-1 rounded-full bg-slate-400 animate-pulse" />
-          writing...
-        </motion.span>
-      )}
-    </motion.button>
-  )
-}
-
-function getLanguageFromPath(path: string): string {
-  const ext = path.split(".").pop()?.toLowerCase()
-  const langMap: { [key: string]: string } = {
-    ts: "typescript",
-    tsx: "typescript",
-    js: "javascript",
-    jsx: "javascript",
-    json: "json",
-    css: "css",
-    scss: "scss",
-    sass: "scss",
-    html: "html",
-    md: "markdown",
-    yaml: "yaml",
-    yml: "yaml",
-    env: "plaintext",
-    txt: "plaintext",
-    svg: "xml",
-    png: "plaintext",
-    jpg: "plaintext",
-    jpeg: "plaintext",
-    gif: "plaintext",
-  }
-  return langMap[ext || ""] || "plaintext"
-}
-
-// Agentic Chat Message Component with Modern UI
-function ChatMessage({
-  message,
-  isLast,
-  onEdit,
-  isEditing,
-  onEditSubmit,
-  onCancelEdit,
-  projectFiles,
-  setSelectedFile,
-  setActiveTab,
-}: {
-  message: Message
-  isLast: boolean
-  onEdit?: () => void
-  isEditing?: boolean
-  onEditSubmit?: (newContent: string) => void
-  onCancelEdit?: () => void
-  projectFiles?: GeneratedFile[]
-  setSelectedFile?: (file: GeneratedFile) => void
-  setActiveTab?: (tab: "preview" | "code") => void
-}) {
-  const isUser = message.role === "user"
-  const [editContent, setEditContent] = useState(message.content)
-  const [isCopied, setIsCopied] = useState(false)
-  
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(message.content)
-      setIsCopied(true)
-      setTimeout(() => setIsCopied(false), 2000)
-    } catch {
-      // noop
-    }
-  }
-
-  const handleEditSubmit = () => {
-    if (editContent.trim() && onEditSubmit) {
-      onEditSubmit(editContent.trim())
-    }
-  }
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleEditSubmit()
-    }
-    if (e.key === 'Escape' && onCancelEdit) {
-      onCancelEdit()
-    }
-  }
-  
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      className={cn(
-        "flex gap-3 group",
-        isUser ? "flex-row-reverse" : ""
-      )}
-    >
-      <div className={cn(
-        "w-10 h-10 rounded-full flex items-center justify-center shrink-0",
-        isUser 
-          ? "bg-zinc-700" 
-          : ""
-      )}>
-        {isUser ? (
-          <User className="w-5 h-5 text-zinc-300" />
-        ) : (
-          <div className="w-10 h-10 flex items-center justify-center">
-            <Spline scene="https://prod.spline.design/Tv8aivWh19CpJJNm/scene.splinecode" />
-          </div>
-        )}
-      </div>
-      <div className={cn(
-        "flex-1 min-w-0",
-        isUser ? "text-right" : ""
-      )}>
-        {isUser && (
-          <div className="inline-block max-w-[85%] sm:max-w-[75%] ml-auto group">
-            {/* Edit Mode */}
-            {isEditing ? (
-              <div className="bg-zinc-700 rounded-2xl rounded-tr-sm p-2.5 sm:p-3">
-                <textarea
-                  value={editContent}
-                  onChange={(e) => setEditContent(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  className="w-full bg-transparent text-zinc-100 text-xs sm:text-sm resize-none outline-none placeholder:text-zinc-400"
-                  rows={3}
-                  placeholder="Edit your message..."
-                  autoFocus
-                />
-                <div className="flex items-center justify-end gap-1.5 sm:gap-2 mt-2">
-                  <button
-                    onClick={onCancelEdit}
-                    className="px-2.5 py-1 text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={handleEditSubmit}
-                    disabled={!editContent.trim()}
-                    className="px-2.5 py-1 text-xs bg-zinc-600 text-zinc-100 rounded hover:bg-zinc-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Send
-                  </button>
-                </div>
-              </div>
-            ) : (
-              /* Normal Display Mode */
-              <div>
-                <div className="rounded-2xl px-3 sm:px-4 py-2 sm:py-2.5 bg-zinc-700 text-zinc-100 rounded-tr-sm">
-                  <p className="text-xs sm:text-sm whitespace-pre-wrap">{message.content}</p>
-                </div>
-
-                {/* Action Buttons BELOW the bubble (ChatGPT-style) */}
-                {(onEdit || message.content) && (
-                  <div className="mt-1 flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                    {onEdit && (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.preventDefault()
-                          e.stopPropagation()
-                          onEdit()
-                        }}
-                        className="h-6 sm:h-7 px-1.5 sm:px-2 rounded-lg bg-zinc-800/70 border border-zinc-700/60 hover:bg-zinc-800 text-zinc-300 hover:text-zinc-100 transition-colors inline-flex items-center gap-1.5"
-                        title="Edit"
-                      >
-                        <Edit2 className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
-                        <span className="text-xs"></span>
-                      </button>
-                    )}
-
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.preventDefault()
-                        e.stopPropagation()
-                        handleCopy()
-                      }}
-                      className="h-6 sm:h-7 px-1.5 sm:px-2 rounded-lg bg-zinc-800/70 border border-zinc-700/60 hover:bg-zinc-800 text-zinc-300 hover:text-zinc-100 transition-colors inline-flex items-center gap-1.5"
-                      title="Copy"
-                    >
-                      {isCopied ? <Check className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-emerald-400" /> : <Copy className="w-3 h-3 sm:w-3.5 sm:h-3.5" />}
-                      <span className="text-xs"></span>
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-        
-        {!isUser && message.content && (
-          <div className="bg-zinc-800/50 rounded-2xl rounded-tl-sm border border-zinc-700/50 p-3 sm:p-4 mb-3">
-            {(message as Message & { timestamp?: string }).timestamp && (
-              <p className="text-[11px] sm:text-xs text-zinc-500 mb-2">
-                {formatMessageTime((message as Message & { timestamp?: string }).timestamp!)}
-              </p>
-            )}
-            <div className="flex items-center gap-2 mb-2 sm:mb-3">
-              <div className="w-5 h-5 sm:w-6 sm:h-6 rounded-lg bg-zinc-700 flex items-center justify-center">
-                <Lightbulb className="w-2.5 h-2.5 sm:w-3 sm:h-3 text-zinc-300" />
-              </div>
-              <span className="text-xs font-medium text-zinc-400">AI Response</span>
-            </div>
-            <div className="space-y-2">
-              {message.isStreaming ? (
-                <TextShimmer className="text-xs sm:text-sm text-zinc-300">{message.content}</TextShimmer>
-              ) : (
-                <p className="text-xs sm:text-sm whitespace-pre-wrap text-zinc-300">{message.content}</p>
-              )}
-              {message.files && message.files.length > 0 && (
-                <div className="mt-3 p-2 sm:p-3 rounded-lg bg-zinc-900/50 border border-zinc-700/30">
-                  <div className="flex items-center gap-2 mb-2 sm:mb-3">
-                    <FileCode className="w-3 h-3 sm:w-4 sm:h-4 text-zinc-400" />
-                    <span className="text-xs font-medium text-zinc-400">Generated Files</span>
-                    <span className="ml-auto text-xs text-zinc-500">{message.files.length} files</span>
-                  </div>
-                  <div className="space-y-1">
-                    {message.files.map((file, index) => {
-                      const isDirectory = file.includes('/')
-                      const fileName = file.split('/').pop() || file
-                      const directory = file.includes('/') ? file.split('/').slice(0, -1).join('/') : null
-                      
-                      const handleFileClick = () => {
-                        // Find the file in the project files
-                        const projectFile = projectFiles?.find((f: GeneratedFile) => f.path === file)
-                        if (projectFile && setSelectedFile) {
-                          setSelectedFile(projectFile)
-                          // Only switch to code tab if on desktop (check if lg breakpoint is active)
-                          if (setActiveTab && typeof window !== 'undefined') {
-                            const isDesktop = window.matchMedia('(min-width: 1024px)').matches
-                            if (isDesktop) {
-                              setActiveTab("code")
-                            }
-                          }
-                        }
-                      }
-                      
-                      return (
-                        <motion.div
-                          key={index}
-                          initial={{ opacity: 0, x: -10 }}
-                          animate={{ opacity: 1, x: 0 }}
-                          transition={{ delay: index * 0.05 }}
-                          className="group"
-                        >
-                          <div 
-                            className="flex items-center gap-1.5 sm:gap-2 p-1.5 sm:p-2 rounded-lg bg-zinc-800/50 border border-zinc-700/30 hover:border-zinc-600/50 hover:bg-zinc-800/70 transition-all duration-200 cursor-pointer hover:shadow-sm"
-                            onClick={handleFileClick}
-                          >
-                            {isDirectory && directory && (
-                              <div className="flex items-center gap-1 text-zinc-500">
-                                <FolderOpen className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
-                                <span className="text-xs">{directory}</span>
-                                <div className="w-px h-2.5 sm:h-3 bg-zinc-600" />
-                              </div>
-                            )}
-                            <div className="flex items-center gap-1.5 sm:gap-2 flex-1 min-w-0">
-                              <div className="w-5 h-5 sm:w-6 sm:h-6 rounded bg-zinc-700 flex items-center justify-center">
-                                <FileCode className="w-2.5 h-2.5 sm:w-3 sm:h-3 text-zinc-300" />
-                              </div>
-                              <span className="text-xs sm:text-sm text-zinc-300 font-mono truncate">{fileName}</span>
-                            </div>
-                          </div>
-                        </motion.div>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-        
-        {isUser && message.files && message.files.length > 0 && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="mt-2"
-          >
-            <div className="flex items-center gap-2 mb-2 justify-end">
-              <span className="text-xs font-medium text-zinc-500">Attached Files</span>
-              <span className="text-xs text-zinc-600">{message.files.length}</span>
-            </div>
-            <div className="space-y-1">
-              {message.files.map((file, index) => (
-                <motion.div
-                  key={index}
-                  initial={{ opacity: 0, x: 10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: index * 0.05 }}
-                  className="group flex justify-end"
-                >
-                  <div className="flex items-center gap-2 p-2 rounded-lg bg-zinc-800/50 border border-zinc-700/30 hover:border-zinc-600/50 hover:bg-zinc-800/70 transition-all duration-200 max-w-[85%]">
-                    <div className="flex items-center gap-2 flex-1 min-w-0">
-                      <div className="w-6 h-6 rounded bg-zinc-700 flex items-center justify-center">
-                        <FileCode className="w-3 h-3 text-zinc-300" />
-                      </div>
-                      <span className="text-sm text-zinc-300 font-mono truncate">{file}</span>
-                    </div>
-                    <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                      <button className="p-1 rounded hover:bg-zinc-700 transition-colors duration-150">
-                        <Copy className="w-3 h-3 text-zinc-400 hover:text-zinc-300" />
-                      </button>
-                    </div>
-                  </div>
-                </motion.div>
-              ))}
-            </div>
-          </motion.div>
-        )}
-      </div>
-    </motion.div>
-  )
-}
+// Persists across Strict Mode remounts so only one sandbox run can update logs
+let sandboxRunIdCounter = 0
+// Prevents auto-preview from running twice when effect runs twice (e.g. Strict Mode remount)
+let lastAutoPreviewKey: string | null = null
 
 function ProjectContent() {
   const params = useParams()
   const projectId = params?.id as string
 
-  const { user, userData, hasTokens, remainingTokens, updateTokensUsed, loading: authLoading } = useAuth()
-  
+  const { user, userData, hasTokens, remainingTokens, updateTokensUsed, getOptionalAuthHeader, loading: authLoading } = useAuth()
+
   const [project, setProject] = useState<Project | null>(null)
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<"preview" | "code">("code")
@@ -643,6 +108,8 @@ function ProjectContent() {
   const [agentStatus, setAgentStatus] = useState("")
   const [reasoningSteps, setReasoningSteps] = useState<string[]>([])
   const abortControllerRef = useRef<AbortController | null>(null)
+  const sandboxAbortRef = useRef<AbortController | null>(null)
+  const sandboxRunIdRef = useRef(0)
   const [buildSteps, setBuildSteps] = useState<TimelineStep[]>([
     { key: "write", label: "Writing files", status: "idle" },
     { key: "install", label: "Installing dependencies", status: "idle" },
@@ -656,11 +123,14 @@ function ProjectContent() {
   const [buildFailureReason, setBuildFailureReason] = useState<string | null>(null)
   const [buildTimer, setBuildTimer] = useState(0)
   const [logsTail, setLogsTail] = useState("")
+  const [isFixing, setIsFixing] = useState(false)
+  const [isTimelineCollapsed, setIsTimelineCollapsed] = useState(false)
+  const [previewRefreshHint, setPreviewRefreshHint] = useState<string | null>(null)
   const [editingTarget, setEditingTarget] = useState<{ kind: "prompt" } | { kind: "message"; index: number } | null>(null)
   const [mobileTab, setMobileTab] = useState<"chat" | "preview">("chat")
   const [deployOpen, setDeployOpen] = useState(false)
   const [integrationsOpen, setIntegrationsOpen] = useState(false)
-  const [selectedIntegration, setSelectedIntegration] = useState<"all" | "github" | "netlify" | "supabase" | "vars">("all")
+  const [selectedIntegration, setSelectedIntegration] = useState<"all" | "github" | "netlify" | "vercel" | "supabase" | "vars">("all")
   const [requiredEnvVars, setRequiredEnvVars] = useState<string[]>([])
   const [envVarNames, setEnvVarNames] = useState<string[]>([])
   const [envFormVars, setEnvFormVars] = useState<Record<string, string>>({})
@@ -676,6 +146,16 @@ function ProjectContent() {
   const [netlifyDeployState, setNetlifyDeployState] = useState<string | null>(null)
   const [netlifyLogUrl, setNetlifyLogUrl] = useState<string | null>(null)
   const [isDeploying, setIsDeploying] = useState(false)
+  const [deployTab, setDeployTab] = useState<"netlify" | "vercel">("netlify")
+  const [vercelConnected, setVercelConnected] = useState<boolean | null>(null)
+  const [vercelTokenInput, setVercelTokenInput] = useState("")
+  const [vercelDeployStep, setVercelDeployStep] = useState<string>("")
+  const [vercelDeployLogs, setVercelDeployLogs] = useState<string[]>([])
+  const [vercelDeployError, setVercelDeployError] = useState<string | null>(null)
+  const [vercelDeployLinks, setVercelDeployLinks] = useState<{ siteUrl?: string | null; deployUrl?: string | null; adminUrl?: string | null; deploymentId?: string | null } | null>(null)
+  const [vercelDeployState, setVercelDeployState] = useState<string | null>(null)
+  const [vercelLogUrl, setVercelLogUrl] = useState<string | null>(null)
+  const [isVercelDeploying, setIsVercelDeploying] = useState(false)
   const [githubConnected, setGithubConnected] = useState<boolean | null>(null)
   const [isSyncing, setIsSyncing] = useState(false)
   const [supabaseConnectOpen, setSupabaseConnectOpen] = useState(false)
@@ -690,14 +170,47 @@ function ProjectContent() {
   const [shareSaving, setShareSaving] = useState(false)
   const [accessError, setAccessError] = useState<"private" | "forbidden" | null>(null)
   const lastAutoPreviewSignatureRef = useRef<string | null>(null)
+  /** Prevents double generation when status is "pending" (e.g. Strict Mode remount resets isGenerating) */
+  const pendingGenerationStartedRef = useRef<string | null>(null)
+  /** Prevents duplicate generateCode/createSandbox in Strict Mode; cleared when projectId changes or operation finishes */
+  const generationGuardRef = useRef<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // Expand build timeline whenever a new sandbox run starts so users always see live progress
+  useEffect(() => {
+    if (isSandboxLoading) {
+      setIsTimelineCollapsed(false)
+    }
+  }, [isSandboxLoading])
+
+  const hasSuccessfulPreview =
+    project?.status === "complete" && !!project?.sandboxUrl && !buildError
+
+  // When preview is ready (all build steps success), hide the overlay so users see the preview
+  const allBuildSuccess =
+    buildSteps.length > 0 && buildSteps.every((s) => s.status === "success")
+
+  // When preview becomes ready (all steps success), collapse timeline so the overlay doesn't block the preview
+  useEffect(() => {
+    if (project?.sandboxUrl && allBuildSuccess) {
+      setIsTimelineCollapsed(true)
+    }
+  }, [project?.sandboxUrl, allBuildSuccess])
 
   const getAuthHeader = useCallback(async () => {
     if (!user) throw new Error("Not authenticated")
     const token = await user.getIdToken()
     return { Authorization: `Bearer ${token}` }
   }, [user])
+
+  // Cleanup on unmount: abort any in-flight generation or sandbox streams to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort()
+      sandboxAbortRef.current?.abort()
+    }
+  }, [])
 
   const router = useRouter()
 
@@ -706,7 +219,7 @@ function ProjectContent() {
     try {
       const projectData = { ...project }
       delete (projectData as any).id
-      projectData.createdAt = serverTimestamp()
+      ;(projectData as any).createdAt = serverTimestamp()
       ;(projectData as any).ownerId = user.uid
       ;(projectData as any).visibility = "private"
       const col = collection(db, "projects")
@@ -724,7 +237,7 @@ function ProjectContent() {
       const projectData = { ...project }
       delete (projectData as any).id
       projectData.name = (projectData.name || "Untitled Project") + " (remix)"
-      projectData.createdAt = serverTimestamp()
+      ;(projectData as any).createdAt = serverTimestamp()
       ;(projectData as any).ownerId = user.uid
       ;(projectData as any).visibility = "private"
       const col = collection(db, "projects")
@@ -890,6 +403,18 @@ function ProjectContent() {
     }
   }, [getAuthHeader])
 
+  const refreshVercelStatus = useCallback(async () => {
+    if (!projectId) return
+    try {
+      const authHeader = await getAuthHeader()
+      const res = await fetch(`/api/vercel/status?projectId=${encodeURIComponent(projectId)}`, { headers: authHeader })
+      const json = await res.json().catch(() => null)
+      setVercelConnected(!!json?.connected)
+    } catch {
+      setVercelConnected(false)
+    }
+  }, [getAuthHeader, projectId])
+
   const handleConnectNetlify = useCallback(async () => {
     const authHeader = await getAuthHeader()
     const res = await fetch(`/api/netlify/oauth/start?projectId=${encodeURIComponent(projectId)}`, {
@@ -985,6 +510,108 @@ function ProjectContent() {
     }
   }, [getAuthHeader, projectId, refreshNetlifyStatus])
 
+  const handleSaveVercelToken = useCallback(async () => {
+    if (!projectId || !vercelTokenInput.trim()) return
+    try {
+      const authHeader = await getAuthHeader()
+      const res = await fetch("/api/vercel/save-token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeader },
+        body: JSON.stringify({ projectId, token: vercelTokenInput.trim() }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json?.error || "Failed to save token")
+      setVercelConnected(true)
+      setVercelTokenInput("")
+    } catch (e) {
+      console.error("Save Vercel token failed", e)
+      alert(e instanceof Error ? e.message : "Failed to save token")
+    }
+  }, [getAuthHeader, projectId, vercelTokenInput])
+
+  const handleDeployToVercel = useCallback(async () => {
+    if (!projectId) return
+    setIsVercelDeploying(true)
+    setVercelDeployError(null)
+    setVercelDeployLinks(null)
+    setVercelDeployLogs([])
+    setVercelDeployStep("Starting")
+
+    try {
+      const authHeader = await getAuthHeader()
+      const res = await fetch("/api/vercel/deploy", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeader,
+        },
+        body: JSON.stringify({ projectId }),
+      })
+
+      if (!res.ok || !res.body) {
+        const t = await res.text().catch(() => "")
+        throw new Error(t || "Deploy request failed")
+      }
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ""
+
+      while (true) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+
+        while (true) {
+          const idx = buffer.indexOf("\n")
+          if (idx === -1) break
+          const line = buffer.slice(0, idx).trim()
+          buffer = buffer.slice(idx + 1)
+          if (!line) continue
+
+          let payload: any
+          try {
+            payload = JSON.parse(line)
+          } catch {
+            continue
+          }
+
+          if (payload.type === "step") {
+            setVercelDeployStep(payload.step)
+          }
+
+          if (payload.type === "log") {
+            setVercelDeployLogs((prev) => {
+              const next = [...prev, String(payload.message || "")]
+              return next.length > 500 ? next.slice(next.length - 500) : next
+            })
+          }
+
+          if (payload.type === "error") {
+            setVercelDeployError(String(payload.error || "Deploy failed"))
+          }
+
+          if (payload.type === "success") {
+            setVercelDeployLinks({
+              siteUrl: payload.siteUrl || null,
+              deployUrl: payload.deployUrl || null,
+              adminUrl: payload.adminUrl || null,
+              deploymentId: payload.deploymentId || null,
+            })
+            setVercelDeployState(null)
+            setVercelLogUrl(null)
+            setVercelDeployStep("ready")
+          }
+        }
+      }
+    } catch (err: any) {
+      setVercelDeployError(err?.message || "Deploy failed")
+    } finally {
+      setIsVercelDeploying(false)
+      refreshVercelStatus()
+    }
+  }, [getAuthHeader, projectId, refreshVercelStatus])
+
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [])
@@ -996,7 +623,8 @@ function ProjectContent() {
   useEffect(() => {
     if (!deployOpen) return
     refreshNetlifyStatus()
-  }, [deployOpen, refreshNetlifyStatus])
+    refreshVercelStatus()
+  }, [deployOpen, refreshNetlifyStatus, refreshVercelStatus])
 
   useEffect(() => {
     refreshGitHubStatus()
@@ -1016,7 +644,8 @@ function ProjectContent() {
       })
       .catch(() => {})
     return () => { cancelled = true }
-  }, [projectId, project?.files?.length, getAuthHeader])
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- getAuthHeader stable
+  }, [projectId, project?.files?.length])
 
   // When opening Vars panel, fetch required + stored names and init form entries
   useEffect(() => {
@@ -1043,7 +672,8 @@ function ProjectContent() {
         if (!cancelled) setEnvVarsLoading(false)
       })
     return () => { cancelled = true }
-  }, [integrationsOpen, selectedIntegration, projectId, getAuthHeader])
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- getAuthHeader stable
+  }, [integrationsOpen, selectedIntegration, projectId])
 
   const handleSaveEnvVars = useCallback(async () => {
     if (!projectId) return
@@ -1069,7 +699,8 @@ function ProjectContent() {
     } finally {
       setEnvVarsSaving(false)
     }
-  }, [projectId, envFormEntries, getAuthHeader])
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- getAuthHeader stable
+  }, [projectId, envFormEntries])
 
   const handleSaveRename = async () => {
     if (!projectId) return
@@ -1113,7 +744,43 @@ function ProjectContent() {
       cancelled = true
       if (t) clearTimeout(t)
     }
-  }, [deployOpen, deployLinks?.deployId, getAuthHeader])
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- getAuthHeader stable
+  }, [deployOpen, deployLinks?.deployId])
+
+  // Poll Vercel deployment status when deploy modal open and we have a deployment id
+  useEffect(() => {
+    if (!deployOpen) return
+    const deploymentId = vercelDeployLinks?.deploymentId
+    if (!deploymentId) return
+
+    let cancelled = false
+    let t: ReturnType<typeof setTimeout>
+
+    const poll = async () => {
+      try {
+        const authHeader = await getAuthHeader()
+        const res = await fetch(
+          `/api/vercel/deploy/${encodeURIComponent(deploymentId)}?projectId=${encodeURIComponent(projectId)}`,
+          { headers: authHeader }
+        )
+        const json = await res.json().catch(() => null)
+        if (cancelled) return
+        if (json?.state) setVercelDeployState(String(json.state))
+        if (json?.siteUrl) setVercelDeployLinks((prev) => (prev ? { ...prev, siteUrl: json.siteUrl } : { siteUrl: json.siteUrl, deployUrl: null, adminUrl: null, deploymentId }))
+      } catch {
+        // ignore
+      } finally {
+        if (!cancelled) t = setTimeout(poll, 3000)
+      }
+    }
+
+    poll()
+
+    return () => {
+      cancelled = true
+      if (t) clearTimeout(t)
+    }
+  }, [deployOpen, vercelDeployLinks?.deploymentId, projectId, getAuthHeader])
 
   // Edit message handlers
   const handleEditSubmit = async (newContent: string) => {
@@ -1150,8 +817,11 @@ function ProjectContent() {
   const getPreviewUrl = useCallback(() => {
     if (!project?.sandboxUrl) return null
     const base = project.sandboxUrl.replace(/\/$/, "")
-    const path = previewPath.startsWith("/") ? previewPath : `/${previewPath}`
-    const url = `${base}${path}`
+    // Validate previewPath to prevent XSS (only allow safe URL path characters)
+    const safePath = /^[a-zA-Z0-9\-._~:/?#[\]@!$&'()*+,;=%]*$/.test(previewPath) && previewPath.startsWith("/")
+      ? previewPath
+      : "/"
+    const url = `${base}${safePath}`
     const sep = url.includes("?") ? "&" : "?"
     return `${url}${sep}__reload=${previewReloadNonce}`
   }, [project?.sandboxUrl, previewPath, previewReloadNonce])
@@ -1167,12 +837,6 @@ function ProjectContent() {
     setPreviewKey((k) => k + 1)
   }, [])
 
-  // Helper function to get message ID for comparison
-  const getMessageId = (message: Message, index?: number) => {
-    if (index === 0) return 'initial'
-    return `${message.role}-${message.content.substring(0, 20)}`
-  }
-
   // Update build steps when project sandbox URL changes
   useEffect(() => {
     if (project?.sandboxUrl && project.status === "complete") {
@@ -1185,6 +849,29 @@ function ProjectContent() {
       setBuildError(null)
     }
   }, [project?.sandboxUrl, project?.status])
+
+  // Auto-retry iframe load at 5s and 15s when preview URL is set (tunnel/server may not be ready on first load)
+  const previewRetryCountRef = useRef<number>(0)
+  useEffect(() => {
+    if (!project?.sandboxUrl) {
+      previewRetryCountRef.current = 0
+      return
+    }
+    const url = project.sandboxUrl
+    const t1 = setTimeout(() => {
+      if (previewRetryCountRef.current < 1) {
+        previewRetryCountRef.current = 1
+        setPreviewKey((k) => k + 1)
+      }
+    }, 5000)
+    const t2 = setTimeout(() => {
+      if (previewRetryCountRef.current < 2) {
+        previewRetryCountRef.current = 2
+        setPreviewKey((k) => k + 1)
+      }
+    }, 15000)
+    return () => { clearTimeout(t1); clearTimeout(t2) }
+  }, [project?.sandboxUrl])
 
   useEffect(() => {
     if (!isSandboxLoading) return
@@ -1205,8 +892,10 @@ function ProjectContent() {
   }, [])
 
   // Fetch project data: real-time when user, one-time API when no user (public/link-only)
+  // Intentionally omit selectedFile from deps to avoid loop: snapshot sets selectedFile, which would re-run this effect
   useEffect(() => {
     if (!projectId) return
+    if (authLoading) return
     setAccessError(null)
 
     if (user) {
@@ -1228,9 +917,10 @@ function ProjectContent() {
           setAccessError(null)
           const projectData = { id: docSnap.id, ...data } as Project
           setProject(projectData)
-          if (data.files && data.files.length > 0 && !selectedFile) {
-            setSelectedFile(data.files[0])
-          }
+          setSelectedFile((prev) => {
+            if (data.files && data.files.length > 0 && !prev) return data.files[0]
+            return prev
+          })
           if (projectData.sandboxUrl && projectData.status === "complete") {
             setActiveTab("preview")
           }
@@ -1245,10 +935,13 @@ function ProjectContent() {
       return () => unsubscribe()
     }
 
-    // No user: fetch via API (allows public/link-only view)
+    // No user (or auth state not yet in React): fetch via API with optional token so private projects work after OAuth redirect
+    let cancelled = false
     setLoading(true)
-    fetch(`/api/projects/${projectId}`)
+    getOptionalAuthHeader()
+      .then((headers) => (cancelled ? null : fetch(`/api/projects/${projectId}`, { headers })))
       .then((res) => {
+        if (cancelled || !res) return res
         if (res.status === 403) {
           setAccessError("private")
           setProject(null)
@@ -1265,6 +958,7 @@ function ProjectContent() {
         return res.json()
       })
       .then((data) => {
+        if (cancelled) return
         if (!data) {
           setLoading(false)
           return
@@ -1275,16 +969,22 @@ function ProjectContent() {
           createdAt: typeof data.createdAt === "string" ? new Date(data.createdAt) : (data.createdAt || new Date()),
         }
         setProject(projectData)
-        if (data.files?.length > 0 && !selectedFile) {
-          setSelectedFile(data.files[0])
-        }
+        setSelectedFile((prev) => {
+          if (data.files?.length > 0 && !prev) return data.files[0]
+          return prev
+        })
         if (projectData.sandboxUrl && projectData.status === "complete") {
           setActiveTab("preview")
         }
         setLoading(false)
       })
-      .catch(() => setLoading(false))
-  }, [projectId, user, authLoading, selectedFile])
+      .catch(() => { if (!cancelled) setLoading(false) })
+
+    return () => {
+      cancelled = true
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- getOptionalAuthHeader stable
+  }, [projectId, user, authLoading])
 
   // Claim legacy projects: set ownerId when current user opens a project with no owner
   useEffect(() => {
@@ -1295,12 +995,19 @@ function ProjectContent() {
     }).catch(() => {})
   }, [projectId, user?.uid, project?.id, project?.ownerId])
 
-  // Start generation on mount if pending
+  // Clear pending-generation guard when switching projects so new project can auto-start
   useEffect(() => {
-    if (project?.status === "pending" && !isGenerating) {
-      generateCode(project.prompt, project.model)
-    }
-  }, [project?.status])
+    pendingGenerationStartedRef.current = null
+    generationGuardRef.current = null
+  }, [projectId])
+
+  // Start generation on mount if pending (once per project; ref guards against Strict Mode double-run)
+  useEffect(() => {
+    if (!project || project.status !== "pending" || isGenerating) return
+    if (pendingGenerationStartedRef.current === projectId) return
+    pendingGenerationStartedRef.current = projectId
+    generateCode(project.prompt, project.model)
+  }, [project?.status, projectId, isGenerating, project?.prompt, project?.model])
 
   /** Merge model output (diffs or full files) into existing project; applies patches when content is unified diff. */
   const mergeWithExistingFiles = (
@@ -1311,10 +1018,18 @@ function ProjectContent() {
 
     for (const block of blocks) {
       const path = block.path
-      const content = block.content.trim()
-      const isUnifiedDiff = content.startsWith("--- a/")
+      let content = block.content.trim()
+      // Detect unified diff: full format (--- a/...) or hunk-only (contains @@ and -/+ lines) that got pasted by mistake
+      const hasDiffHeader = content.startsWith("--- a/") || content.startsWith("--- a\\")
+      const hasDiffSyntax = content.includes("@@") && /^\s*[-+]/m.test(content)
+      const isHunkOnly = hasDiffSyntax && !hasDiffHeader
+      const isUnifiedDiff = hasDiffHeader || isHunkOnly
 
       if (isUnifiedDiff) {
+        // If model output only the hunk (e.g. @@ -1,5 +1,5 @@) without ---/+++ file header, add it so applyPatch works
+        if (!hasDiffHeader && isHunkOnly) {
+          content = `--- a/${path}\n+++ b/${path}\n` + content
+        }
         const existingIndex = result.findIndex(f => f.path === path)
         const oldContent = existingIndex !== -1 ? result[existingIndex].content : ""
         const patched = applyPatch(oldContent, content)
@@ -1327,6 +1042,12 @@ function ProjectContent() {
         }
         // If applyPatch returns false, patch failed; leave existing file unchanged or skip new
       } else {
+        // Reject content that looks like raw diff cruft (e.g. @@ or -line at start) so we never write it as source
+        const looksLikeRawDiff = /^\s*@@/m.test(content) || (/^\s*-\s*[^\s]/.test(content) && content.includes("@@"))
+        if (looksLikeRawDiff) {
+          // Don't overwrite with diff text; keep existing file
+          continue
+        }
         const existingIndex = result.findIndex(f => f.path === path)
         if (existingIndex !== -1) {
           result[existingIndex] = { ...result[existingIndex], content }
@@ -1355,6 +1076,13 @@ function ProjectContent() {
 
   const generateCode = async (prompt: string, model?: string) => {
     if (!project) return
+
+    const guardKey = `gen:${projectId}:${(prompt || "").slice(0, 40)}`
+    if (generationGuardRef.current === guardKey) {
+      console.warn("Prevented duplicate generation")
+      return
+    }
+    generationGuardRef.current = guardKey
 
     const controller = new AbortController()
     abortControllerRef.current = controller
@@ -1401,6 +1129,8 @@ function ProjectContent() {
       const decoder = new TextDecoder()
       let fullContent = ""
       let lastFileCount = 0
+      let lastAllFilesLength = 0
+      let lastAllFilesLastPath: string | null = null
       let agentMessage: string | null = null
       let agentMessageTimestamp: string | null = null
 
@@ -1443,11 +1173,16 @@ function ProjectContent() {
           lastFileCount = parsedBlocks.length
         }
 
-        // Update generating files with current state
-        setGeneratingFiles(allFiles.map((f, i) => ({
-          ...f,
-          isGenerating: i === allFiles.length - 1
-        })))
+        // Only update generating files when the list actually changed (avoids update storm)
+        const currentLastPath = allFiles.length > 0 ? allFiles[allFiles.length - 1].path : null
+        if (allFiles.length !== lastAllFilesLength || currentLastPath !== lastAllFilesLastPath) {
+          lastAllFilesLength = allFiles.length
+          lastAllFilesLastPath = currentLastPath
+          setGeneratingFiles(allFiles.map((f, i) => ({
+            ...f,
+            isGenerating: i === allFiles.length - 1
+          })))
+        }
 
         // Auto-select first file
         if (allFiles.length > 0 && !selectedFile) {
@@ -1466,14 +1201,12 @@ function ProjectContent() {
         finalFiles = [...finalBlocks]
       }
       
-      const tokensUsed = Math.floor(fullContent.length / 4)
       const suggestsBackend = /===META:\s*suggestsBackend\s*=\s*true\s*===/i.test(fullContent)
 
       setAgentStatus("Finalizing...")
       setReasoningSteps(prev => [...prev, "Finalizing and preparing preview."])
 
-      // Update tokens used
-      await updateTokensUsed(tokensUsed)
+      // Token usage is deducted server-side by the generate API (real usage or fallback); no client update
 
       // Build messages: existing + optional agent message (if we added it) + completion message
       const baseMessages = project.messages || []
@@ -1482,31 +1215,44 @@ function ProjectContent() {
         : baseMessages
       const completionMessage = { role: "assistant" as const, content: `Generated ${finalFiles.length} files successfully. You can view them in the code panel.`, files: finalFiles.map(f => f.path) }
 
-      // Update project with files and messages
+      const nextMessages = [...withAgent, completionMessage]
       await updateDoc(projectRef, {
         status: "complete",
         files: finalFiles,
-        tokensUsed: (project.tokensUsed || 0) + tokensUsed,
         ...(suggestsBackend ? { suggestsBackend: true } : {}),
-        messages: [...withAgent, completionMessage]
+        messages: nextMessages,
       })
+      setProject((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: "complete",
+              files: finalFiles,
+              ...(suggestsBackend ? { suggestsBackend: true } : {}),
+              messages: nextMessages,
+            }
+          : prev
+      )
 
       if (finalFiles.length > 0) {
         setSelectedFile(finalFiles[0])
       }
 
-      // Create E2B sandbox (auto-start)
+      // Create E2B sandbox (auto-start) — uses finalFiles; project state already updated above
       await createSandbox(finalFiles)
 
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         await updateDoc(projectRef, { status: "pending" })
+        setProject((prev) => (prev ? { ...prev, status: "pending" } : prev))
       } else {
         console.error("Generation error:", error)
+        const errorMessage = error instanceof Error ? error.message : "Generation failed"
         await updateDoc(projectRef, {
           status: "error",
-          error: error instanceof Error ? error.message : "Generation failed"
+          error: errorMessage,
         })
+        setProject((prev) => (prev ? { ...prev, status: "error", error: errorMessage } : prev))
       }
     } finally {
       abortControllerRef.current = null
@@ -1518,126 +1264,235 @@ function ProjectContent() {
     }
   }
 
-  const createSandbox = async (files: GeneratedFile[]) => {
+  // FIXED: Wrapped createSandbox in useCallback with proper dependencies
+  const createSandbox = useCallback(async (files: GeneratedFile[], options?: { forceNewSandbox?: boolean }) => {
     if (!project) return
 
-    // Kill existing sandbox if any to prevent concurrent sandboxes
-    if (project.sandboxId) {
-      try {
-        await fetch("/api/sandbox", {
-          method: "DELETE",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sandboxId: project.sandboxId }),
-        })
-      } catch (e) {
-        console.warn("Failed to kill existing sandbox:", e)
-      }
+    const forceNewSandbox = options?.forceNewSandbox === true
+    const guardKey = `sandbox:${projectId}:${files.length}:${files.map((f) => f.path).join(",")}:${forceNewSandbox}`
+    if (generationGuardRef.current === guardKey) {
+      console.warn("Prevented duplicate sandbox start")
+      return
     }
+    generationGuardRef.current = guardKey
 
+    sandboxAbortRef.current?.abort()
+    sandboxAbortRef.current = new AbortController()
+    const signal = sandboxAbortRef.current.signal
+    const thisAbort = sandboxAbortRef.current
+    const myRunId = ++sandboxRunIdCounter
+    sandboxRunIdRef.current = myRunId
+
+    const isCurrentRun = () => sandboxRunIdRef.current === myRunId
+
+    setProject((prev) => (prev ? { ...prev, sandboxUrl: undefined } : prev))
     setIsSandboxLoading(true)
     setBuildError(null)
-    setBuildLogs({})
     setBuildFailureCategory(undefined)
     setBuildFailureReason(null)
+    setBuildLogs({ install: "", dev: "" })
     setLogsTail("")
     setBuildSteps([
-      { key: "write", label: "Writing files", status: "success", startedAt: Date.now() - 1000, finishedAt: Date.now() - 500 },
+      { key: "write", label: "Writing files", status: "running" },
       { key: "install", label: "Installing dependencies", status: "idle" },
       { key: "dev", label: "Starting dev server", status: "idle" },
     ])
     const projectRef = doc(db, "projects", projectId)
-    
-    // Clear old sandboxUrl so timeline is shown instead of old iframe
+
+    // Client-side safety timeout: if no terminal success/error within ~120s, show clear error
+    const CLIENT_TIMEOUT_MS = 120_000
+    let clientTimeoutId: ReturnType<typeof setTimeout> | null = null
+    clientTimeoutId = setTimeout(() => {
+      if (!isCurrentRun()) return
+      setBuildError("Preview timed out after 2 minutes. The build may be taking too long or there may be an error.")
+      setBuildFailureCategory("build")
+      setBuildFailureReason("Client timeout")
+      setBuildSteps((prev) =>
+        prev.map((step) =>
+          step.key === "dev" ? { ...step, status: "failed" as const, finishedAt: Date.now() } : step
+        )
+      )
+      setIsSandboxLoading(false)
+    }, CLIENT_TIMEOUT_MS)
+
+    const clearClientTimeout = () => {
+      if (clientTimeoutId != null) {
+        clearTimeout(clientTimeoutId)
+        clientTimeoutId = null
+      }
+    }
+
     try {
-      await updateDoc(projectRef, {
-        sandboxUrl: undefined,
-        sandboxId: undefined,
-      })
+      await updateDoc(projectRef, { sandboxUrl: deleteField() })
     } catch (e) {
       console.warn("Failed to clear old sandbox URL:", e)
     }
 
     try {
       const authHeader = await getAuthHeader()
+      
+      console.log("[createSandbox] Starting sandbox creation with", files.length, "files")
+
       const response = await fetch("/api/sandbox", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeader },
-        body: JSON.stringify({ files, projectId }),
+        body: JSON.stringify({ 
+          files, 
+          projectId, 
+          sandboxId: forceNewSandbox ? undefined : (project.sandboxId ?? undefined),
+        }),
+        signal,
       })
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`)
+        const errorText = await response.text().catch(() => "Unknown error")
+        throw new Error(`HTTP error! status: ${response.status}, body: ${errorText}`)
       }
 
       const reader = response.body?.getReader()
       const decoder = new TextDecoder()
+      let terminalEventSeen = false
+      let lineBuffer = ""
 
-      if (reader) {
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
+      if (!reader) {
+        throw new Error("No response body")
+      }
 
-          const chunk = decoder.decode(value)
-          setLogsTail(prev => prev + chunk)
+      // Helper to handle stream data
+      const handleStreamData = (data: any) => {
+        if (data.type === "step") {
+          setBuildSteps((prev) =>
+            prev.map((step) =>
+              step.key === data.step
+                ? {
+                    ...step,
+                    status: data.status,
+                    message: data.message,
+                    startedAt: data.status === "running" ? Date.now() : step.startedAt,
+                    finishedAt: data.status === "success" || data.status === "failed" ? Date.now() : step.finishedAt,
+                  }
+                : step
+            )
+          )
+        } else if (data.type === "log") {
+          const step = data.step ?? "dev"
+          setBuildLogs((prev) => ({
+            ...prev,
+            [step]: (prev[step as keyof typeof prev] || "") + (data.data ?? ""),
+          }))
+        } else if (data.type === "error") {
+          const errMsg = String(data.error ?? "Preview failed")
+          console.error("[createSandbox] Stream error:", errMsg, data)
+          
+          terminalEventSeen = true
+          clearClientTimeout()
+          setBuildError(errMsg)
+          setBuildFailureCategory(data.failureCategory ?? "unknown")
+          setBuildFailureReason(data.failureReason ?? null)
+          setBuildLogs((prev) => ({ ...prev, ...(data.logs || {}) }))
+          setBuildSteps((prev) =>
+            prev.map((step) =>
+              step.key === (data.failureCategory === "deps" ? "install" : "dev")
+                ? { ...step, status: "failed", finishedAt: Date.now() }
+                : step
+            )
+          )
+          setIsSandboxLoading(false)
+        } else if (data.type === "success") {
+          console.log("[createSandbox] Success:", data)
+          terminalEventSeen = true
+          clearClientTimeout()
+          
+          const url = data.url
+          const newSandboxId = data.sandboxId
+          
+          // Update Firestore
+          updateDoc(projectRef, { sandboxUrl: url, sandboxId: newSandboxId }).catch(console.error)
+          
+          setProject((prev) => (prev ? { ...prev, sandboxUrl: url, sandboxId: newSandboxId } : prev))
+          
+          if (data.warning) {
+            setPreviewRefreshHint(data.warning)
+          }
+          
+          const now = Date.now()
+          setBuildSteps((prev) =>
+            prev.map((step, index) => ({
+              ...step,
+              status: "success" as const,
+              finishedAt: now - (prev.length - index - 1) * 1000,
+            }))
+          )
+          setIsSandboxLoading(false)
+          setActiveTab("preview")
+        } else if (data.type === "ping") {
+          // Heartbeat, ignore
+        }
+      }
 
-          // Process each line
-          const lines = chunk.split('\n').filter(line => line.trim())
-          for (const line of lines) {
+      while (true) {
+        const { done, value } = await reader.read()
+        
+        if (done) {
+          // Process any remaining buffer
+          if (lineBuffer.trim() && !terminalEventSeen) {
             try {
-              const data = JSON.parse(line)
-              
-              if (data.type === 'step') {
-                setBuildSteps(prev => prev.map(step => 
-                  step.key === data.step 
-                    ? { 
-                        ...step, 
-                        status: data.status, 
-                        message: data.message,
-                        startedAt: data.status === 'running' ? Date.now() : step.startedAt,
-                        finishedAt: data.status === 'success' || data.status === 'failed' ? Date.now() : step.finishedAt
-                      }
-                    : step
-                ))
-              } else if (data.type === 'error') {
-                setBuildError(data.error)
-                setBuildLogs(prev => ({ ...prev, ...(data.logs || {}) }))
-                setBuildFailureCategory(data.failureCategory)
-                setBuildFailureReason(data.failureReason)
-                
-                // Update step status to failed
-                setBuildSteps(prev => prev.map(step => 
-                  step.key === (data.failureCategory === 'deps' ? 'install' : 'dev')
-                    ? { ...step, status: 'failed', finishedAt: Date.now() }
-                    : step
-                ))
-              } else if (data.type === 'success') {
-                await updateDoc(projectRef, {
-                  sandboxUrl: data.url,
-                  sandboxId: data.sandboxId,
-                })
-                
-                // Mark all steps as success
-                const now = Date.now()
-                setBuildSteps(prev => prev.map((step, index) => ({
-                  ...step,
-                  status: 'success' as const,
-                  finishedAt: now - (prev.length - index - 1) * 1000
-                })))
-                
-                // Hide build timeline and show iframe
-                setIsSandboxLoading(false)
-                
-                // Auto-switch to preview tab after successful build
-                setActiveTab("preview")
-              }
-            } catch (e) {
-              console.warn("Failed to parse sandbox stream data:", e)
-            }
+              const data = JSON.parse(lineBuffer.trim())
+              handleStreamData(data)
+            } catch {}
+          }
+          break
+        }
+        
+        if (signal.aborted) {
+          console.log("[createSandbox] Aborted")
+          break
+        }
+        
+        if (!isCurrentRun()) {
+          console.log("[createSandbox] Not current run, breaking")
+          break
+        }
+
+        const chunk = decoder.decode(value, { stream: true })
+        setLogsTail((prev) => prev + chunk)
+
+        lineBuffer += chunk
+        const lines = lineBuffer.split("\n")
+        lineBuffer = lines.pop() ?? "" // Keep incomplete line in buffer
+
+        for (const line of lines) {
+          if (!line.trim()) continue
+          if (signal.aborted || !isCurrentRun()) break
+          if (terminalEventSeen) continue
+
+          try {
+            const data = JSON.parse(line)
+            handleStreamData(data)
+          } catch (e) {
+            console.warn("[createSandbox] Failed to parse line:", line, e)
           }
         }
       }
-    } catch (error) {
+
+      // If we exited the loop without seeing a terminal event
+      if (!terminalEventSeen && isCurrentRun()) {
+        console.warn("[createSandbox] Stream ended without terminal event")
+        clearClientTimeout()
+        setBuildError("Connection closed unexpectedly before preview was ready")
+        setIsSandboxLoading(false)
+      }
+      
+    } catch (error: any) {
+      if (error?.name === "AbortError") {
+        console.log("[createSandbox] Aborted by user")
+        clearClientTimeout()
+        return
+      }
+      
+      clearClientTimeout()
       console.error("Sandbox error:", error)
+      
       const now = Date.now()
       setBuildError(error instanceof Error ? error.message : "Failed to create preview")
       setBuildFailureCategory("unknown")
@@ -1648,24 +1503,68 @@ function ProjectContent() {
         { key: "dev", label: "Starting dev server", status: "idle" },
       ])
     } finally {
-      setIsSandboxLoading(false)
+      if (generationGuardRef.current === guardKey) {
+        generationGuardRef.current = null
+      }
+      clearClientTimeout()
+      if (!thisAbort.signal.aborted) {
+        setIsSandboxLoading(false)
+      }
     }
-  }
+  }, [project, projectId, getAuthHeader, canEdit])
 
+  const handleRestartPreview = useCallback(() => {
+    if (!project?.files || !canEdit || isSandboxLoading) return
+    setPreviewRefreshHint(null)
+    // Clear URL so UI shows build timeline; force new sandbox so we get a fresh env and tunnel (avoids "Closed Port")
+    setProject((prev) => (prev ? { ...prev, sandboxUrl: undefined } : prev))
+    createSandbox(project.files, { forceNewSandbox: true })
+  }, [project?.files, canEdit, isSandboxLoading, createSandbox])
+
+  const handleFixWithAI = useCallback(async () => {
+    if (!project || !canEdit || isFixing || isGenerating || !buildError) return
+    setIsFixing(true)
+    try {
+      const parts = [
+        "Fix the following build or runtime error in my project. Apply minimal, targeted changes to resolve it. Output only the changed files (use unified diff or full file content).",
+        "",
+        "Error: " + buildError,
+        ...(buildFailureReason ? ["Failure reason: " + buildFailureReason] : []),
+        ...(buildFailureCategory ? ["Category: " + buildFailureCategory] : []),
+        "",
+        "Relevant logs:",
+        ...(buildLogs?.install ? ["[install]\n" + (buildLogs.install.slice(-2000))] : []),
+        ...(buildLogs?.dev ? ["[dev]\n" + (buildLogs.dev.slice(-2000))] : []),
+      ]
+      const fixPrompt = parts.join("\n")
+      await generateCode(fixPrompt, project.model)
+    } finally {
+      setIsFixing(false)
+    }
+  }, [project, canEdit, isFixing, isGenerating, buildError, buildFailureReason, buildFailureCategory, buildLogs, generateCode])
+
+  // Clear module-level preview key when switching projects so the new project can auto-preview
+  useEffect(() => {
+    lastAutoPreviewKey = null
+  }, [projectId])
+
+  // FIXED: Added createSandbox to dependency array
   useEffect(() => {
     if (!project) return
     if (project.sandboxUrl) return
     if (!project.files || project.files.length === 0) return
     if (project.status !== "complete") return
     if (isSandboxLoading || isGenerating) return
-    if (buildError) return
 
     const signature = `${project.id}:${project.files.length}:${project.files[0]?.path || ""}:${project.files[project.files.length - 1]?.path || ""}`
-    if (lastAutoPreviewSignatureRef.current === signature) return
+    const key = `${projectId}:${signature}`
+    if (lastAutoPreviewKey === key) return
+    lastAutoPreviewKey = key
     lastAutoPreviewSignatureRef.current = signature
 
+    console.log("[AutoPreview] Triggering createSandbox")
     createSandbox(project.files)
-  }, [project, isSandboxLoading, isGenerating, buildError])
+  }, [project, projectId, isSandboxLoading, isGenerating, createSandbox])
 
   const handleSendMessage = async (submittedValue?: string, submittedModel?: string) => {
     const nextMessage = (submittedValue ?? chatInput).trim()
@@ -1747,13 +1646,13 @@ function ProjectContent() {
 
   // Combine project files with generating files
   const displayFiles = isGenerating ? generatingFiles : (project?.files || [])
-  const fileTree = buildFileTree(displayFiles)
   
   // Prefer explicit project name; fall back to prompt-derived title
   const displayProjectName = project?.name || project?.prompt?.split(' ').slice(0, 3).join(' ') || 'Untitled Project'
 
-  // Calculate tokens limit based on remaining tokens
-  const tokensLimit = userData ? userData.tokenUsage.used + userData.tokenUsage.remaining : 0
+  // Calculate tokens limit (never negative remaining)
+  const remainingDisplay = userData ? Math.max(0, userData.tokenUsage.remaining ?? 0) : 0
+  const tokensLimit = userData ? userData.tokenUsage.used + remainingDisplay : 0
 
   if (authLoading || loading) {
     return (
@@ -1816,9 +1715,9 @@ function ProjectContent() {
   }
 
   return (
-    <div className="h-screen w-screen overflow-hidden bg-zinc-950 flex flex-col min-h-0 touch-pan-y overscroll-none">
+    <div className="h-screen w-screen max-w-full min-w-0 overflow-hidden bg-zinc-950 flex flex-col touch-pan-y overscroll-none">
       {/* Top Header Bar - modern glass bar */}
-      <div className="h-auto lg:h-14 flex items-center justify-between px-3 sm:px-4 lg:px-6 py-2.5 lg:py-0 border-b border-zinc-800/80 bg-zinc-900/95 backdrop-blur-xl flex-shrink-0 gap-3 shadow-[0_1px_0_0_rgba(255,255,255,0.03)] safe-area-inset-top">
+      <div className="h-auto lg:h-14 flex items-center justify-between px-3 sm:px-4 lg:px-6 py-2.5 lg:py-0 border-b border-zinc-800/80 bg-zinc-900/95 backdrop-blur-xl flex-shrink-0 gap-3 min-w-0 shadow-[0_1px_0_0_rgba(255,255,255,0.03)] safe-area-inset-top">
         {/* Mobile: Burger menu - touch-friendly */}
         <div className="lg:hidden flex items-center min-w-[44px] min-h-[44px] -ml-2 items-center justify-center">
           <DropdownMenu>
@@ -2044,13 +1943,13 @@ function ProjectContent() {
                     </div>
                     <div className="h-2 w-full bg-zinc-800/80 rounded-full overflow-hidden border border-zinc-700/30">
                       <div
-                        className="h-full rounded-full transition-all duration-300 shadow-sm bg-gradient-to-r from-emerald-500 via-emerald-400 to-emerald-500"
-                        style={{ width: userData && tokensLimit > 0 ? `${Math.min(100, (userData.tokenUsage.used / tokensLimit) * 100)}%` : '0%' }}
+                        className="h-full rounded-full transition-all duration-300 shadow-sm bg-zinc-500"
+                        style={{ width: userData && tokensLimit > 0 ? `${Math.min(100, Math.round((userData.tokenUsage.used / tokensLimit) * 100))}%` : '0%' }}
                       />
                     </div>
                     <div className="flex items-center justify-between text-[10px] text-zinc-500">
                       <span>Used: {userData ? userData.tokenUsage.used.toLocaleString() : '—'}</span>
-                      <span>Remaining: {userData ? userData.tokenUsage.remaining.toLocaleString() : '—'}</span>
+                      <span>Remaining: {userData ? Math.max(0, userData.tokenUsage.remaining ?? 0).toLocaleString() : '—'}</span>
                     </div>
                   </div>
 
@@ -2148,9 +2047,9 @@ function ProjectContent() {
 
         {/* Right: Action Buttons (desktop only) - only when user can edit */}
         {canEdit && (
-        <div className="hidden lg:flex items-center gap-2 overflow-x-auto lg:overflow-visible max-w-[46vw] sm:max-w-[52vw] lg:max-w-none custom-scrollbar">
+        <div className="hidden lg:flex items-center gap-2 overflow-x-auto custom-scrollbar min-w-0 max-w-[min(46vw,24rem)] lg:max-w-[min(52vw,32rem)] xl:max-w-none shrink-0 lg:shrink">
           <button onClick={handleOpenIntegrations} className="h-9 px-4 text-xs font-semibold text-zinc-300 hover:text-zinc-50 hover:bg-zinc-800/90 border border-zinc-800/50 hover:border-zinc-700/70 rounded-lg transition-all duration-200 group shadow-sm hover:shadow-md flex items-center">
-            <Plug className="w-4 h-4 mr-2 text-zinc-400 group-hover:text-blue-400 transition-colors" />
+            <Plug className="w-4 h-4 mr-2 text-zinc-400 group-hover:text-zinc-300 transition-colors" />
             Integrations
           </button>
           <button
@@ -2233,10 +2132,10 @@ function ProjectContent() {
       <div className="flex-1 min-h-0 flex flex-col">
         {/* AI-suggested backend: Connect Supabase? banner */}
         {project?.suggestsBackend && !project?.supabaseUrl && !suggestBackendDismissed && (
-          <div className="flex-shrink-0 px-3 sm:px-4 py-2.5 border-b border-emerald-500/20 bg-emerald-950/30 flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex-shrink-0 px-3 sm:px-4 py-2.5 border-b border-zinc-600/50 bg-zinc-900/50 flex items-center justify-between gap-3 flex-wrap">
             <div className="flex items-center gap-2.5 min-w-0">
-              <div className="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center shrink-0">
-                <Database className="w-4 h-4 text-emerald-400" />
+              <div className="w-8 h-8 rounded-lg bg-zinc-600/20 border border-zinc-500/30 flex items-center justify-center shrink-0">
+                <Database className="w-4 h-4 text-zinc-400" />
               </div>
               <div className="min-w-0">
                 <p className="text-sm font-medium text-zinc-100">This project could use a database</p>
@@ -2265,105 +2164,250 @@ function ProjectContent() {
         <Dialog open={deployOpen} onOpenChange={setDeployOpen}>
           <DialogContent className="bg-zinc-950/98 border border-zinc-800/80 rounded-2xl shadow-2xl backdrop-blur-xl max-w-[min(calc(100vw-1.5rem),28rem)] sm:max-w-2xl">
             <DialogHeader>
-              <DialogTitle className="text-zinc-100">Deploy to Netlify</DialogTitle>
+              <DialogTitle className="text-zinc-100">Deploy</DialogTitle>
               <DialogDescription className="text-zinc-400">
-                Deploy this project to your Netlify account.
+                Deploy this project to Netlify or Vercel.
               </DialogDescription>
             </DialogHeader>
 
+            <div className="flex border-b border-zinc-800 -mx-6 px-6">
+              <button
+                type="button"
+                onClick={() => setDeployTab("netlify")}
+                className={cn(
+                  "py-2.5 px-3 text-sm font-medium border-b-2 transition-colors -mb-px",
+                  deployTab === "netlify"
+                    ? "border-zinc-100 text-zinc-100"
+                    : "border-transparent text-zinc-500 hover:text-zinc-300"
+                )}
+              >
+                Netlify
+              </button>
+              <button
+                type="button"
+                onClick={() => setDeployTab("vercel")}
+                className={cn(
+                  "py-2.5 px-3 text-sm font-medium border-b-2 transition-colors -mb-px",
+                  deployTab === "vercel"
+                    ? "border-zinc-100 text-zinc-100"
+                    : "border-transparent text-zinc-500 hover:text-zinc-300"
+                )}
+              >
+                Vercel
+              </button>
+            </div>
+
             <div className="space-y-4">
-              <div className="flex items-center justify-between gap-3">
-                <div className="text-sm text-zinc-300">
-                  Status: {netlifyConnected === null ? "Checking..." : netlifyConnected ? "Connected" : "Not connected"}
-                </div>
-                <div className="flex items-center gap-2">
-                  {!netlifyConnected ? (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="border-zinc-800 text-zinc-200 bg-transparent hover:bg-zinc-900"
-                      onClick={handleConnectNetlify}
-                      disabled={isDeploying}
-                    >
-                      Connect Netlify
-                    </Button>
-                  ) : (
-                    <Button
-                      type="button"
-                      className="bg-zinc-100 text-zinc-900 hover:bg-white"
-                      onClick={handleDeployToNetlify}
-                      disabled={isDeploying}
-                    >
-                      {isDeploying ? "Deploying..." : "Deploy"}
-                    </Button>
-                  )}
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3">
-                <div className="text-xs text-zinc-400">Current step</div>
-                <div className="mt-1 text-sm text-zinc-100 font-mono">{deployStep || "-"}</div>
-              </div>
-
-              {deployError && (
-                <div className="rounded-xl border border-red-900/40 bg-red-950/30 p-3 text-sm text-red-300">
-                  {deployError}
-                </div>
-              )}
-
-              {deployLinks && (
-                <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3 space-y-2">
-                  <div className="text-xs text-zinc-400">Links</div>
-                  <div className="space-y-1 text-sm">
-                    {deployLinks.siteUrl && (
-                      <a className="text-emerald-300 hover:underline break-all" href={deployLinks.siteUrl} target="_blank" rel="noreferrer">
-                        {deployLinks.siteUrl}
-                      </a>
-                    )}
-                    {deployLinks.deployUrl && (
-                      <a className="text-zinc-200 hover:underline break-all" href={deployLinks.deployUrl} target="_blank" rel="noreferrer">
-                        {deployLinks.deployUrl}
-                      </a>
-                    )}
-                    {deployLinks.adminUrl && (
-                      <a className="text-zinc-400 hover:underline break-all" href={deployLinks.adminUrl} target="_blank" rel="noreferrer">
-                        {deployLinks.adminUrl}
-                      </a>
-                    )}
-                    {deployLinks.adminUrl && deployLinks.deployId && (() => {
-                      try {
-                        const u = new URL(deployLinks.adminUrl as string)
-                        u.pathname = `${u.pathname.replace(/\/$/, "")}/deploys/${deployLinks.deployId}`
-                        const href = u.toString()
-                        return (
-                          <a className="text-zinc-400 hover:underline break-all" href={href} target="_blank" rel="noreferrer">
-                            {href}
-                          </a>
-                        )
-                      } catch {
-                        return null
-                      }
-                    })()}
-                    {netlifyLogUrl && (
-                      <a className="text-zinc-400 hover:underline break-all" href={netlifyLogUrl} target="_blank" rel="noreferrer">
-                        {netlifyLogUrl}
-                      </a>
-                    )}
+              {deployTab === "netlify" && (
+                <>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-sm text-zinc-300">
+                      Status: {netlifyConnected === null ? "Checking..." : netlifyConnected ? "Connected" : "Not connected"}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {!netlifyConnected ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="border-zinc-800 text-zinc-200 bg-transparent hover:bg-zinc-900"
+                          onClick={handleConnectNetlify}
+                          disabled={isDeploying}
+                        >
+                          Connect Netlify
+                        </Button>
+                      ) : (
+                        <Button
+                          type="button"
+                          className="bg-zinc-100 text-zinc-900 hover:bg-white"
+                          onClick={handleDeployToNetlify}
+                          disabled={isDeploying}
+                        >
+                          {isDeploying ? "Deploying..." : "Deploy"}
+                        </Button>
+                      )}
+                    </div>
                   </div>
-                  {netlifyDeployState && (
-                    <div className="pt-2 text-xs text-zinc-400">
-                      Netlify status: <span className="text-zinc-200 font-mono">{netlifyDeployState}</span>
+                  <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3">
+                    <div className="text-xs text-zinc-400">Current step</div>
+                    <div className="mt-1 text-sm text-zinc-100 font-mono">{deployStep || "-"}</div>
+                  </div>
+                  {deployError && (
+                    <div className="rounded-xl border border-red-900/40 bg-red-950/30 p-3 text-sm text-red-300">
+                      {deployError}
                     </div>
                   )}
-                </div>
+                  {deployLinks && (
+                    <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3 space-y-2">
+                      <div className="text-xs text-zinc-400">Links</div>
+                      <div className="space-y-1 text-sm">
+                        {deployLinks.siteUrl && (
+                          <a className="text-zinc-300 hover:underline break-all" href={deployLinks.siteUrl} target="_blank" rel="noreferrer">
+                            {deployLinks.siteUrl}
+                          </a>
+                        )}
+                        {deployLinks.deployUrl && (
+                          <a className="text-zinc-200 hover:underline break-all" href={deployLinks.deployUrl} target="_blank" rel="noreferrer">
+                            {deployLinks.deployUrl}
+                          </a>
+                        )}
+                        {deployLinks.adminUrl && (
+                          <a className="text-zinc-400 hover:underline break-all" href={deployLinks.adminUrl} target="_blank" rel="noreferrer">
+                            {deployLinks.adminUrl}
+                          </a>
+                        )}
+                        {deployLinks.adminUrl && deployLinks.deployId && (() => {
+                          try {
+                            const u = new URL(deployLinks.adminUrl as string)
+                            u.pathname = `${u.pathname.replace(/\/$/, "")}/deploys/${deployLinks.deployId}`
+                            const href = u.toString()
+                            return (
+                              <a className="text-zinc-400 hover:underline break-all" href={href} target="_blank" rel="noreferrer">
+                                {href}
+                              </a>
+                            )
+                          } catch {
+                            return null
+                          }
+                        })()}
+                        {netlifyLogUrl && (
+                          <a className="text-zinc-400 hover:underline break-all" href={netlifyLogUrl} target="_blank" rel="noreferrer">
+                            {netlifyLogUrl}
+                          </a>
+                        )}
+                      </div>
+                      {netlifyDeployState && (
+                        <div className="pt-2 text-xs text-zinc-400">
+                          Netlify status: <span className="text-zinc-200 font-mono">{netlifyDeployState}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <div className="rounded-xl border border-zinc-800 bg-black/30 overflow-hidden">
+                    <div className="px-3 py-2 border-b border-zinc-800 text-xs text-zinc-400">Build logs (E2B)</div>
+                    <div className="max-h-64 overflow-y-auto p-3 font-mono text-xs text-zinc-200 whitespace-pre-wrap">
+                      {deployLogs.length ? deployLogs.join("\n") : "No logs yet."}
+                    </div>
+                  </div>
+                </>
               )}
 
-              <div className="rounded-xl border border-zinc-800 bg-black/30 overflow-hidden">
-                <div className="px-3 py-2 border-b border-zinc-800 text-xs text-zinc-400">Build logs (E2B)</div>
-                <div className="max-h-64 overflow-y-auto p-3 font-mono text-xs text-zinc-200 whitespace-pre-wrap">
-                  {deployLogs.length ? deployLogs.join("\n") : "No logs yet."}
-                </div>
-              </div>
+              {deployTab === "vercel" && (
+                <>
+                  <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-4">
+                    <div className="flex items-center gap-3 mb-3">
+                      <Zap className="w-6 h-6 text-zinc-300" />
+                      <div>
+                        <h3 className="text-sm font-semibold text-zinc-100">Vercel</h3>
+                        <p className="text-xs text-zinc-500">
+                          {vercelConnected === null ? "Checking..." : vercelConnected ? "Connected" : "Enter your Personal Access Token to deploy"}
+                        </p>
+                      </div>
+                    </div>
+                    {!vercelConnected ? (
+                      <div className="space-y-3">
+                        <p className="text-xs text-zinc-400">
+                          We need a Personal Access Token to deploy to your Vercel account. It&apos;s stored per project and only used to create deployments. Create one at:
+                        </p>
+                        <a
+                          href="https://vercel.com/account/tokens"
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1.5 text-xs text-zinc-300 hover:text-zinc-100 underline"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                          vercel.com/account/tokens
+                        </a>
+                        <Input
+                          value={vercelTokenInput}
+                          onChange={(e) => setVercelTokenInput(e.target.value)}
+                          placeholder="vercel_pat_..."
+                          className="bg-zinc-900 border-zinc-700 text-zinc-100 placeholder:text-zinc-500"
+                        />
+                        <Button
+                          type="button"
+                          className="bg-zinc-100 text-zinc-900 hover:bg-white w-full"
+                          onClick={handleSaveVercelToken}
+                          disabled={!vercelTokenInput.trim() || isVercelDeploying}
+                        >
+                          Save Token
+                        </Button>
+                      </div>
+                    ) : (
+                      <Button
+                        type="button"
+                        className="bg-zinc-100 text-zinc-900 hover:bg-white w-full"
+                        onClick={handleDeployToVercel}
+                        disabled={isVercelDeploying}
+                      >
+                        {isVercelDeploying ? "Deploying..." : "Deploy to Vercel"}
+                      </Button>
+                    )}
+                  </div>
+                  <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3">
+                    <div className="text-xs text-zinc-400">Current step</div>
+                    <div className="mt-1 text-sm text-zinc-100 font-mono">{vercelDeployStep || "-"}</div>
+                  </div>
+                  {vercelDeployError && (
+                    <div className="rounded-xl border border-red-900/40 bg-red-950/30 p-3 text-sm text-red-300">
+                      {vercelDeployError}
+                    </div>
+                  )}
+                  {vercelDeployLinks && (
+                    <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3 space-y-3">
+                      <div className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Deployment links</div>
+                      <div className="space-y-2.5 text-sm">
+                        {vercelDeployLinks.siteUrl && (
+                          <div>
+                            <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-0.5">Live site</div>
+                            <a className="flex items-center gap-1.5 text-zinc-200 hover:text-zinc-100 hover:underline break-all" href={vercelDeployLinks.siteUrl} target="_blank" rel="noreferrer">
+                              <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                              {vercelDeployLinks.siteUrl}
+                            </a>
+                          </div>
+                        )}
+                        {vercelDeployLinks.deployUrl && vercelDeployLinks.deployUrl !== vercelDeployLinks.siteUrl && (
+                          <div>
+                            <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-0.5">Preview URL</div>
+                            <a className="flex items-center gap-1.5 text-zinc-300 hover:text-zinc-200 hover:underline break-all" href={vercelDeployLinks.deployUrl} target="_blank" rel="noreferrer">
+                              <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                              {vercelDeployLinks.deployUrl}
+                            </a>
+                          </div>
+                        )}
+                        {vercelDeployLinks.adminUrl && (
+                          <div>
+                            <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-0.5">Vercel dashboard</div>
+                            <a className="flex items-center gap-1.5 text-zinc-400 hover:text-zinc-300 hover:underline break-all" href={vercelDeployLinks.adminUrl} target="_blank" rel="noreferrer">
+                              <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                              View in Vercel
+                            </a>
+                          </div>
+                        )}
+                        {vercelLogUrl && (
+                          <div>
+                            <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-0.5">Build logs</div>
+                            <a className="flex items-center gap-1.5 text-zinc-400 hover:text-zinc-300 hover:underline break-all" href={vercelLogUrl} target="_blank" rel="noreferrer">
+                              <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                              {vercelLogUrl}
+                            </a>
+                          </div>
+                        )}
+                      </div>
+                      {vercelDeployState && (
+                        <div className="pt-2 text-xs text-zinc-500 border-t border-zinc-800">
+                          Status: <span className="text-zinc-300 font-mono">{vercelDeployState}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <div className="rounded-xl border border-zinc-800 bg-black/30 overflow-hidden">
+                    <div className="px-3 py-2 border-b border-zinc-800 text-xs text-zinc-400">Deploy logs</div>
+                    <div className="max-h-64 overflow-y-auto p-3 font-mono text-xs text-zinc-200 whitespace-pre-wrap">
+                      {vercelDeployLogs.length ? vercelDeployLogs.join("\n") : "No logs yet."}
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           </DialogContent>
         </Dialog>
@@ -2412,7 +2456,7 @@ function ProjectContent() {
                     <div className="flex-1 min-w-0">
                       <span className="text-sm font-medium block">GitHub</span>
                       {githubConnected === true && (
-                        <span className="text-[10px] text-emerald-400 font-medium">Connected</span>
+                        <span className="text-[10px] text-zinc-400 font-medium">Connected</span>
                       )}
                     </div>
                   </button>
@@ -2432,7 +2476,27 @@ function ProjectContent() {
                     <div className="flex-1 min-w-0">
                       <span className="text-sm font-medium block">Netlify</span>
                       {netlifyConnected === true && (
-                        <span className="text-[10px] text-emerald-400 font-medium">Connected</span>
+                        <span className="text-[10px] text-zinc-400 font-medium">Connected</span>
+                      )}
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedIntegration("vercel")}
+                    className={cn(
+                      "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all duration-200",
+                      selectedIntegration === "vercel"
+                        ? "bg-zinc-800 text-zinc-100 border border-zinc-700/60"
+                        : "text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200 border border-transparent"
+                    )}
+                  >
+                    <div className="w-9 h-9 rounded-lg bg-zinc-800/80 border border-zinc-700/50 flex items-center justify-center shrink-0">
+                      <Zap className="w-4 h-4 text-zinc-300" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <span className="text-sm font-medium block">Vercel</span>
+                      {vercelConnected === true && (
+                        <span className="text-[10px] text-zinc-400 font-medium">Connected</span>
                       )}
                     </div>
                   </button>
@@ -2446,13 +2510,13 @@ function ProjectContent() {
                         : "text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200 border border-transparent"
                     )}
                   >
-                    <div className="w-9 h-9 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0">
-                      <Database className="w-4 h-4 text-emerald-400" />
+                    <div className="w-9 h-9 rounded-lg bg-zinc-600/10 border border-zinc-500/20 flex items-center justify-center shrink-0">
+                      <Database className="w-4 h-4 text-zinc-400" />
                     </div>
                     <div className="flex-1 min-w-0">
                       <span className="text-sm font-medium block">Supabase</span>
                       {supabaseConnected && (
-                        <span className="text-[10px] text-emerald-400 font-medium">Connected</span>
+                        <span className="text-[10px] text-zinc-400 font-medium">Connected</span>
                       )}
                     </div>
                   </button>
@@ -2474,7 +2538,7 @@ function ProjectContent() {
                 </div>
                 <div className="mt-auto px-2 sm:px-3 pt-3 border-t border-zinc-800/60">
                   <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium">More coming</p>
-                  <p className="text-xs text-zinc-600 mt-0.5">Vercel, Stripe, and others soon.</p>
+                  <p className="text-xs text-zinc-600 mt-0.5">Stripe and others soon.</p>
                 </div>
               </nav>
               {/* Right content - selected integration */}
@@ -2510,7 +2574,6 @@ function ProjectContent() {
                                     {isSyncing ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Github className="w-3.5 h-3.5 mr-2" />} {isSyncing ? "Syncing…" : "Sync to GitHub"}
                                   </Button>
                                 ) : null}
-                                <Button type="button" size="sm" variant="ghost" className="h-9 px-3 text-xs text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50" onClick={() => { handleDisconnectGitHub(); setIntegrationsOpen(false) }}>Disconnect</Button>
                               </>
                             )}
                           </div>
@@ -2529,7 +2592,7 @@ function ProjectContent() {
                             {!netlifyConnected ? (
                               <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={handleConnectNetlify}>Connect Netlify</Button>
                             ) : (
-                              <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={() => { setIntegrationsOpen(false); setDeployOpen(true) }}>Deploy to Netlify</Button>
+                              <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={() => { setIntegrationsOpen(false); setDeployTab("netlify"); setDeployOpen(true) }}>Deploy to Netlify</Button>
                             )}
                           </div>
                         </div>
@@ -2537,12 +2600,54 @@ function ProjectContent() {
                     </div>
                     <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-5 sm:p-6 transition-all">
                       <div className="flex items-start gap-4">
-                        <div className="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0">
-                          <Database className="w-6 h-6 text-emerald-400" />
+                        <div className="w-12 h-12 rounded-xl bg-zinc-800/80 border border-zinc-700/50 flex items-center justify-center shrink-0">
+                          <Zap className="w-6 h-6 text-zinc-300" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <h3 className="text-base font-semibold text-zinc-100">Vercel</h3>
+                          <p className="text-sm text-zinc-500 mt-1">Deploy to Vercel&apos;s global edge network. We need a Personal Access Token (stored per project, only used to create deployments).</p>
+                          <div className="mt-3 text-xs">
+                            <a href="https://vercel.com/account/tokens" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-zinc-400 hover:text-zinc-200 underline">
+                              <ExternalLink className="w-3.5 h-3.5" /> Create token at vercel.com/account/tokens
+                            </a>
+                          </div>
+                          <div className="mt-4 flex flex-wrap gap-2 items-end">
+                            {!vercelConnected ? (
+                              <>
+                                <Input
+                                  value={vercelTokenInput}
+                                  onChange={(e) => setVercelTokenInput(e.target.value)}
+                                  placeholder="vercel_pat_..."
+                                  className="h-9 w-64 bg-zinc-900 border-zinc-700 text-zinc-100 placeholder:text-zinc-500 text-xs"
+                                />
+                                <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={handleSaveVercelToken} disabled={!vercelTokenInput.trim()}>
+                                  Save Token
+                                </Button>
+                              </>
+                            ) : (
+                              <>
+                                <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={() => { setIntegrationsOpen(false); setDeployTab("vercel"); setDeployOpen(true) }} disabled={isVercelDeploying}>
+                                  {isVercelDeploying ? "Deploying..." : "Deploy to Vercel"}
+                                </Button>
+                                {vercelDeployLinks?.siteUrl && (
+                                  <a href={vercelDeployLinks.siteUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-xs text-zinc-400 hover:text-zinc-300 underline break-all">
+                                    <ExternalLink className="w-3.5 h-3.5" /> {vercelDeployLinks.siteUrl}
+                                  </a>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-5 sm:p-6 transition-all">
+                      <div className="flex items-start gap-4">
+                        <div className="w-12 h-12 rounded-xl bg-zinc-600/10 border border-zinc-500/20 flex items-center justify-center shrink-0">
+                          <Database className="w-6 h-6 text-zinc-400" />
                         </div>
                         <div className="flex-1 min-w-0">
                           <h3 className="text-base font-semibold text-zinc-100">Supabase</h3>
-                          <p className="text-sm text-zinc-500 mt-1">Add a backend: auth, database, and real-time. We’ll inject the Supabase client and a starter SQL migration.</p>
+                          <p className="text-sm text-zinc-500 mt-1">Add a backend: auth, database, and real-time. We'll inject the Supabase client and a starter SQL migration.</p>
                           <div className="mt-4 flex flex-wrap gap-2">
                             {!supabaseConnected ? (
                               <Button type="button" size="sm" className="h-9 px-3 py-1.5 rounded-lg bg-white hover:bg-zinc-100 border border-zinc-200/80" onClick={() => setSupabaseConnectOpen(true)}>
@@ -2614,7 +2719,54 @@ function ProjectContent() {
                           {!netlifyConnected ? (
                             <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={handleConnectNetlify}>Connect Netlify</Button>
                           ) : (
-                            <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={() => { setIntegrationsOpen(false); setDeployOpen(true) }}>Deploy to Netlify</Button>
+                            <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={() => { setIntegrationsOpen(false); setDeployTab("netlify"); setDeployOpen(true) }}>Deploy to Netlify</Button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {selectedIntegration === "vercel" && (
+                  <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-5 sm:p-6 transition-all">
+                    <div className="flex items-start gap-4">
+                      <div className="w-12 h-12 rounded-xl bg-zinc-800/80 border border-zinc-700/50 flex items-center justify-center shrink-0">
+                        <Zap className="w-6 h-6 text-zinc-300" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <h3 className="text-base font-semibold text-zinc-100">Vercel</h3>
+                        <p className="text-sm text-zinc-500 mt-1">Deploy to Vercel&apos;s global edge network. We need a Personal Access Token so we can create deployments on your behalf. Your token is stored per project and only used to deploy.</p>
+                        <div className="mt-3 p-3 rounded-lg bg-zinc-900/60 border border-zinc-800 text-xs text-zinc-400">
+                          <span className="font-medium text-zinc-300">How to get your token:</span> Go to{" "}
+                          <a href="https://vercel.com/account/tokens" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-zinc-200 hover:text-zinc-100 underline">
+                            vercel.com/account/tokens <ExternalLink className="w-3 h-3" />
+                          </a>
+                          , create a new token (e.g. &quot;BuilderStudio&quot;), and paste it below.
+                        </div>
+                        <div className="mt-4 flex flex-wrap gap-2 items-end">
+                          {!vercelConnected ? (
+                            <>
+                              <Input
+                                value={vercelTokenInput}
+                                onChange={(e) => setVercelTokenInput(e.target.value)}
+                                placeholder="vercel_pat_..."
+                                className="h-9 w-64 bg-zinc-900 border-zinc-700 text-zinc-100 placeholder:text-zinc-500 text-xs"
+                              />
+                              <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={handleSaveVercelToken} disabled={!vercelTokenInput.trim()}>
+                                Save Token
+                              </Button>
+                            </>
+                          ) : (
+                            <>
+                              <p className="text-xs text-green-500 font-medium">Connected ✓</p>
+                              <Button type="button" size="sm" className="h-9 px-4 text-xs font-semibold bg-zinc-100 text-zinc-900 hover:bg-white border-0" onClick={() => { setIntegrationsOpen(false); setDeployTab("vercel"); setDeployOpen(true) }} disabled={isVercelDeploying}>
+                                {isVercelDeploying ? "Deploying..." : "Deploy to Vercel"}
+                              </Button>
+                              {vercelDeployLinks?.siteUrl && (
+                                <a href={vercelDeployLinks.siteUrl} target="_blank" rel="noreferrer" className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-700/60 bg-zinc-800/50 px-3 text-xs font-medium text-zinc-200 hover:bg-zinc-800 hover:text-zinc-100 transition-colors break-all">
+                                  <ExternalLink className="w-3.5 h-3.5" /> Live site
+                                </a>
+                              )}
+                            </>
                           )}
                         </div>
                       </div>
@@ -2624,12 +2776,12 @@ function ProjectContent() {
                 {selectedIntegration === "supabase" && (
                   <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-5 sm:p-6 transition-all">
                     <div className="flex items-start gap-4">
-                      <div className="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0">
-                        <Database className="w-6 h-6 text-emerald-400" />
+                      <div className="w-12 h-12 rounded-xl bg-zinc-600/10 border border-zinc-500/20 flex items-center justify-center shrink-0">
+                        <Database className="w-6 h-6 text-zinc-400" />
                       </div>
                       <div className="flex-1 min-w-0">
                         <h3 className="text-base font-semibold text-zinc-100">Supabase</h3>
-                        <p className="text-sm text-zinc-500 mt-1">Add a backend: auth, database, and real-time. We’ll inject the Supabase client and a starter SQL migration into your project.</p>
+                        <p className="text-sm text-zinc-500 mt-1">Add a backend: auth, database, and real-time. We'll inject the Supabase client and a starter SQL migration into your project.</p>
                         <div className="mt-4 flex flex-wrap gap-2">
                           {!supabaseConnected ? (
                             <Button type="button" size="sm" className="h-9 px-3 py-1.5 rounded-lg bg-white hover:bg-zinc-100 border border-zinc-200/80" onClick={() => setSupabaseConnectOpen(true)}>
@@ -2825,7 +2977,7 @@ function ProjectContent() {
                   type="url"
                   value={supabaseFormUrl}
                   onChange={(e) => setSupabaseFormUrl(e.target.value)}
-                  placeholder="https://xxxxx.supabase.co"
+                  placeholder="https://xxxxx.supabase.co "
                   className="w-full rounded-lg border border-zinc-800 bg-zinc-900/80 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-zinc-600"
                   required
                 />
@@ -2843,7 +2995,7 @@ function ProjectContent() {
               </div>
               <div className="flex gap-2 justify-end pt-2">
                 <Button type="button" variant="ghost" className="text-zinc-400" onClick={() => setSupabaseConnectOpen(false)}>Cancel</Button>
-                <Button type="submit" className="bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 hover:bg-emerald-500/30">Connect</Button>
+                <Button type="submit" className="bg-zinc-600/20 text-zinc-300 border border-zinc-500/40 hover:bg-zinc-600/30">Connect</Button>
               </div>
             </form>
           </DialogContent>
@@ -2928,15 +3080,25 @@ function ProjectContent() {
                       />
                       <Reasoning isStreaming={true}>
                         <ReasoningTrigger>Show reasoning</ReasoningTrigger>
-                        <ReasoningContent className="ml-2 border-l-2 border-l-slate-200 px-2 pb-1 dark:border-l-slate-700">
+                        <ReasoningContent className="ml-2 border-l-2 border-l-zinc-200 px-2 pb-1 dark:border-l-zinc-700">
                           <div className="space-y-1">
                             {reasoningSteps.length > 0
                               ? reasoningSteps.map((step, i) => (
                                   <div key={i} className="text-zinc-400">
-                                    {i + 1}. {step}
+                                    {i === reasoningSteps.length - 1 ? (
+                                      <TextShimmer duration={1.5}>
+                                        {i + 1}. {step}
+                                      </TextShimmer>
+                                    ) : (
+                                      <>{i + 1}. {step}</>
+                                    )}
                                   </div>
                                 ))
-                              : "Reasoning in progress..."}
+                              : (
+                                <TextShimmer duration={1.5}>
+                                  Reasoning in progress...
+                                </TextShimmer>
+                              )}
                           </div>
                         </ReasoningContent>
                       </Reasoning>
@@ -3014,19 +3176,80 @@ function ProjectContent() {
                     </div>
                   </div>
                 )}
-                <div className="flex-1 min-h-0 overflow-hidden">
-                {project.sandboxUrl ? (
-                  <iframe
-                    key={previewKey}
-                    src={getPreviewUrl() || project.sandboxUrl}
-                    className="w-full h-full min-h-0 border-0"
-                    title="Preview"
-                    sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-                  />
-                ) : (
-                  <div className="relative h-full">
-                    {(isSandboxLoading || isGenerating || buildError) ? (
-                      <div className="h-full bg-zinc-950 flex items-center justify-center">
+                <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+                  {buildError && canEdit && (
+                    <div className="flex-shrink-0 flex items-center justify-between gap-3 px-3 py-2.5 bg-red-950/60 border-b border-red-800/50 text-red-200/90 text-sm">
+                      <span className="truncate flex-1 min-w-0" title={buildError}>
+                        {buildError.length > 80 ? buildError.slice(0, 80) + "…" : buildError}
+                      </span>
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="shrink-0 h-8 px-3 text-xs bg-amber-500/20 border-amber-500/50 text-amber-200 hover:bg-amber-500/30 font-medium"
+                        onClick={handleFixWithAI}
+                        disabled={isFixing || isGenerating}
+                      >
+                        {isFixing || isGenerating ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" />
+                        ) : (
+                          <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+                        )}
+                        {isFixing ? "Applying AI fix…" : "Fix this error with AI"}
+                      </Button>
+                    </div>
+                  )}
+                  {project.sandboxUrl ? (
+                    <div className="relative flex flex-col flex-1 min-h-0">
+                      {(previewRefreshHint || canEdit) && (
+                        <div className="flex-shrink-0 flex items-center justify-between gap-2 px-3 py-2 bg-zinc-900/50 border-b border-zinc-800/50 text-zinc-400 text-xs">
+                          {previewRefreshHint ? <span>{previewRefreshHint}</span> : <span>Not loading? Restart preview below.</span>}
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="h-7 px-2.5 text-[11px] border-zinc-600 text-zinc-300 hover:bg-zinc-800"
+                              onClick={handlePreviewReload}
+                            >
+                              <RefreshCw className="w-3 h-3 mr-1" /> Refresh
+                            </Button>
+                            {canEdit && (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2.5 text-[11px] border-amber-500/40 text-amber-200 hover:bg-amber-500/20"
+                                onClick={handleRestartPreview}
+                                disabled={isSandboxLoading}
+                              >
+                                Restart preview
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                      <iframe
+                        key={previewKey}
+                        src={getPreviewUrl() || project.sandboxUrl}
+                        className="w-full flex-1 min-h-0 border-0"
+                        title="Preview"
+                        sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                      />
+                      {hasSuccessfulPreview && (
+                        <div className="flex-shrink-0 border-t border-zinc-800/50 bg-zinc-950/60 px-3 py-2 flex items-center justify-between">
+                          <span className="text-xs text-zinc-400">
+                            Last build: success
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setIsTimelineCollapsed((v) => !v)}
+                            className="text-xs text-zinc-500 hover:text-zinc-300 inline-flex items-center gap-1"
+                          >
+                            {isTimelineCollapsed ? "Show details" : "Hide details"}
+                          </button>
+                        </div>
+                      )}
+                      {hasSuccessfulPreview && !isTimelineCollapsed && !isSandboxLoading && !buildError && (
                         <BuildTimeline
                           steps={buildSteps}
                           error={buildError}
@@ -3036,33 +3259,53 @@ function ProjectContent() {
                           failureCategory={buildFailureCategory}
                           failureReason={buildFailureReason}
                           onRetry={canEdit ? () => project.files && createSandbox(project.files) : undefined}
+                          onFixWithAI={canEdit ? handleFixWithAI : undefined}
+                          isFixing={isFixing}
                         />
-                      </div>
-                    ) : (
-                      <div className="h-full bg-zinc-950 flex items-center justify-center p-4 sm:p-6 overflow-auto">
-                        <div className="w-full max-w-lg rounded-2xl border border-zinc-800/80 bg-zinc-900/50 backdrop-blur-sm p-4 sm:p-6 shadow-xl">
-                          <div className="flex items-start gap-3 sm:gap-4">
-                            <div className="w-10 h-10 shrink-0 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center">
-                              <Eye className="w-5 h-5 text-zinc-300" />
+                      )}
+                    </div>
+                  ) : (
+                    <div className="relative flex-1 min-h-0">
+                      {(isSandboxLoading || isGenerating || buildError) ? (
+                        <div className="h-full bg-zinc-950 flex items-center justify-center">
+                          <BuildTimeline
+                            steps={buildSteps}
+                            error={buildError}
+                            logs={buildLogs}
+                            logsTail={logsTail}
+                            timer={buildTimer}
+                            failureCategory={buildFailureCategory}
+                            failureReason={buildFailureReason}
+                            onRetry={canEdit ? () => project.files && createSandbox(project.files) : undefined}
+                            onFixWithAI={canEdit ? handleFixWithAI : undefined}
+                            isFixing={isFixing}
+                          />
+                        </div>
+                      ) : (
+                        <div className="h-full bg-zinc-950 flex items-center justify-center p-4 sm:p-6 overflow-auto">
+                          <div className="w-full max-w-lg rounded-2xl border border-zinc-800/80 bg-zinc-900/50 backdrop-blur-sm p-4 sm:p-6 shadow-xl">
+                            <div className="flex items-start gap-3 sm:gap-4">
+                              <div className="w-10 h-10 shrink-0 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center">
+                                <Eye className="w-5 h-5 text-zinc-300" />
+                              </div>
+                              <div className="min-w-0">
+                                <div className="text-sm font-medium text-zinc-100">Preview not running yet</div>
+                                <div className="text-xs text-zinc-500 mt-1">
+                                  Generate your project to start a live preview. When the build completes, it will appear here automatically.
+                                </div>
+                              </div>
                             </div>
-                            <div className="min-w-0">
-                              <div className="text-sm font-medium text-zinc-100">Preview not running yet</div>
-                              <div className="text-xs text-zinc-500 mt-1">
-                                Generate your project to start a live preview. When the build completes, it will appear here automatically.
+
+                            <div className="mt-4 flex items-center gap-2">
+                              <div className="flex-1 min-w-0 rounded-lg border border-zinc-800/50 bg-zinc-900/50 backdrop-blur-sm px-3 py-2 text-xs text-zinc-400 font-medium truncate">
+                                {project.files?.length ? `${project.files.length} files ready` : "No files generated yet"}
                               </div>
                             </div>
                           </div>
-
-                          <div className="mt-4 flex items-center gap-2">
-                            <div className="flex-1 min-w-0 rounded-lg border border-zinc-800/50 bg-zinc-900/50 backdrop-blur-sm px-3 py-2 text-xs text-zinc-400 font-medium truncate">
-                              {project.files?.length ? `${project.files.length} files ready` : "No files generated yet"}
-                            </div>
-                          </div>
                         </div>
-                      </div>
-                    )}
-                  </div>
-                )}
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -3115,15 +3358,25 @@ function ProjectContent() {
                     />
                     <Reasoning isStreaming={true}>
                       <ReasoningTrigger>Show reasoning</ReasoningTrigger>
-                      <ReasoningContent className="ml-2 border-l-2 border-l-slate-200 px-2 pb-1 dark:border-l-slate-700">
+                      <ReasoningContent className="ml-2 border-l-2 border-l-zinc-200 px-2 pb-1 dark:border-l-zinc-700">
                         <div className="space-y-1">
                           {reasoningSteps.length > 0
                             ? reasoningSteps.map((step, i) => (
                                 <div key={i} className="text-zinc-400">
-                                  {i + 1}. {step}
+                                  {i === reasoningSteps.length - 1 ? (
+                                    <TextShimmer duration={1.5}>
+                                      {i + 1}. {step}
+                                    </TextShimmer>
+                                  ) : (
+                                    <>{i + 1}. {step}</>
+                                  )}
                                 </div>
                               ))
-                            : "Reasoning in progress..."}
+                            : (
+                              <TextShimmer duration={1.5}>
+                                Reasoning in progress...
+                              </TextShimmer>
+                            )}
                         </div>
                       </ReasoningContent>
                     </Reasoning>
@@ -3254,7 +3507,7 @@ function ProjectContent() {
                       <div className="flex items-center gap-2 min-w-0 rounded-xl bg-zinc-900/50 border border-zinc-800 px-3 py-1.5">
                         <div className={cn(
                           "w-2 h-2 rounded-full",
-                          project.sandboxUrl ? "bg-emerald-400/80" : "bg-zinc-600"
+                          project.sandboxUrl ? "bg-zinc-500" : "bg-zinc-600"
                         )} />
 
                         {/* v0-like path bar */}
@@ -3317,21 +3570,19 @@ function ProjectContent() {
                       className="text-zinc-400 hover:text-zinc-100 h-8 w-8 p-0 hover:bg-zinc-900"
                       onClick={copyCode}
                     >
-                      {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                      {copied ? <Check className="w-4 h-4 text-zinc-300" /> : <Copy className="w-4 h-4" />}
                     </Button>
                   )}
                   {activeTab === "preview" && project.sandboxUrl && (
-                    <>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className="text-zinc-400 hover:text-zinc-100 h-8 w-8 p-0 hover:bg-zinc-900"
-                        onClick={() => window.open(project.sandboxUrl, "_blank")}
-                      >
-                        <ExternalLink className="w-4 h-4" />
-                      </Button>
-                    </>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="text-zinc-400 hover:text-zinc-100 h-8 w-8 p-0 hover:bg-zinc-900"
+                      onClick={() => window.open(project.sandboxUrl, "_blank")}
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                    </Button>
                   )}
                 </div>
               </div>
@@ -3364,19 +3615,80 @@ function ProjectContent() {
                         </div>
                       </div>
                     )}
-                    <div className="flex-1 min-h-0 overflow-hidden">
-                    {project.sandboxUrl ? (
-                      <iframe
-                        key={previewKey}
-                        src={getPreviewUrl() || project.sandboxUrl}
-                        className="w-full h-full border-0"
-                        title="Preview"
-                        sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-                      />
-                    ) : (
-                      <div className="relative h-full">
-                        {(isSandboxLoading || isGenerating || buildError) ? (
-                          <div className="h-full bg-zinc-950 flex items-center justify-center">
+                    <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+                      {buildError && canEdit && (
+                        <div className="flex-shrink-0 flex items-center justify-between gap-3 px-3 py-2.5 bg-red-950/60 border-b border-red-800/50 text-red-200/90 text-sm">
+                          <span className="truncate flex-1 min-w-0" title={buildError}>
+                            {buildError.length > 80 ? buildError.slice(0, 80) + "…" : buildError}
+                          </span>
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="shrink-0 h-8 px-3 text-xs bg-amber-500/20 border-amber-500/50 text-amber-200 hover:bg-amber-500/30 font-medium"
+                            onClick={handleFixWithAI}
+                            disabled={isFixing || isGenerating}
+                          >
+                            {isFixing || isGenerating ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" />
+                            ) : (
+                              <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+                            )}
+                            {isFixing ? "Applying AI fix…" : "Fix this error with AI"}
+                          </Button>
+                        </div>
+                      )}
+                      {project.sandboxUrl ? (
+                        <div className="relative flex flex-col flex-1 min-h-0">
+                          {(previewRefreshHint || canEdit) && (
+                            <div className="flex-shrink-0 flex items-center justify-between gap-2 px-3 py-2 bg-zinc-900/50 border-b border-zinc-800/50 text-zinc-400 text-xs">
+                              {previewRefreshHint ? <span>{previewRefreshHint}</span> : <span>Seeing &quot;Closed Port&quot; or connection refused? Click Refresh or restart preview below.</span>}
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 px-2.5 text-[11px] border-zinc-600 text-zinc-300 hover:bg-zinc-800"
+                                  onClick={handlePreviewReload}
+                                >
+                                  <RefreshCw className="w-3 h-3 mr-1" /> Refresh
+                                </Button>
+                                {canEdit && (
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 px-2.5 text-[11px] border-amber-500/40 text-amber-200 hover:bg-amber-500/20"
+                                    onClick={handleRestartPreview}
+                                    disabled={isSandboxLoading}
+                                  >
+                                    Restart preview
+                                  </Button>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                          <iframe
+                            key={previewKey}
+                            src={getPreviewUrl() || project.sandboxUrl}
+                            className="w-full flex-1 min-h-0 border-0"
+                            title="Preview"
+                            sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                          />
+                          {hasSuccessfulPreview && (
+                            <div className="flex-shrink-0 border-t border-zinc-800/50 bg-zinc-950/60 px-3 py-2 flex items-center justify-between">
+                              <span className="text-xs text-zinc-400">
+                                Last build: success
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => setIsTimelineCollapsed((v) => !v)}
+                                className="text-xs text-zinc-500 hover:text-zinc-300 inline-flex items-center gap-1"
+                              >
+                                {isTimelineCollapsed ? "Show details" : "Hide details"}
+                              </button>
+                            </div>
+                          )}
+                          {hasSuccessfulPreview && !isTimelineCollapsed && !isSandboxLoading && !buildError && !allBuildSuccess && (
                             <BuildTimeline
                               steps={buildSteps}
                               error={buildError}
@@ -3386,116 +3698,62 @@ function ProjectContent() {
                               failureCategory={buildFailureCategory}
                               failureReason={buildFailureReason}
                               onRetry={canEdit ? () => project.files && createSandbox(project.files) : undefined}
+                              onFixWithAI={canEdit ? handleFixWithAI : undefined}
+                              isFixing={isFixing}
                             />
-                          </div>
-                        ) : (
-                          <div className="h-full bg-gradient-to-b from-zinc-950 to-zinc-900 flex items-center justify-center p-6">
-                            <div className="w-full max-w-lg rounded-2xl border border-zinc-800/50 bg-zinc-900/60 backdrop-blur-sm p-6 shadow-lg hover:shadow-xl transition-shadow duration-300">
-                              <div className="flex items-start gap-4">
-                                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-zinc-800 to-zinc-900 border border-zinc-700/50 flex items-center justify-center shadow-sm">
-                                  <Eye className="w-5 h-5 text-zinc-300" />
+                          )}
+                        </div>
+                      ) : (
+                        <div className="relative flex-1 min-h-0">
+                          {(isSandboxLoading || isGenerating || buildError) ? (
+                            <div className="h-full bg-zinc-950 flex items-center justify-center">
+                              <BuildTimeline
+                                steps={buildSteps}
+                                error={buildError}
+                                logs={buildLogs}
+                                logsTail={logsTail}
+                                timer={buildTimer}
+                                failureCategory={buildFailureCategory}
+                                failureReason={buildFailureReason}
+                                onRetry={canEdit ? () => project.files && createSandbox(project.files) : undefined}
+                                onFixWithAI={canEdit ? handleFixWithAI : undefined}
+                                isFixing={isFixing}
+                              />
+                            </div>
+                          ) : (
+                            <div className="h-full bg-gradient-to-b from-zinc-950 to-zinc-900 flex items-center justify-center p-6">
+                              <div className="w-full max-w-lg rounded-2xl border border-zinc-800/50 bg-zinc-900/60 backdrop-blur-sm p-6 shadow-lg hover:shadow-xl transition-shadow duration-300">
+                                <div className="flex items-start gap-4">
+                                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-zinc-800 to-zinc-900 border border-zinc-700/50 flex items-center justify-center shadow-sm">
+                                    <Eye className="w-5 h-5 text-zinc-300" />
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="text-sm font-medium text-zinc-100">Preview not running yet</div>
+                                    <div className="text-xs text-zinc-500 mt-1">
+                                      Generate your project to start a live preview. When the build completes, it will appear here automatically.
+                                    </div>
+                                  </div>
                                 </div>
-                                <div className="min-w-0">
-                                  <div className="text-sm font-medium text-zinc-100">Preview not running yet</div>
-                                  <div className="text-xs text-zinc-500 mt-1">
-                                    Generate your project to start a live preview. When the build completes, it will appear here automatically.
+
+                                <div className="mt-4 flex items-center gap-2">
+                                  <div className="flex-1 rounded-lg border border-zinc-800/50 bg-zinc-900/50 backdrop-blur-sm px-3 py-2 text-xs text-zinc-400 font-medium">
+                                    {project.files?.length ? `${project.files.length} files ready` : "No files generated yet"}
                                   </div>
                                 </div>
                               </div>
-
-                              <div className="mt-4 flex items-center gap-2">
-                                <div className="flex-1 rounded-lg border border-zinc-800/50 bg-zinc-900/50 backdrop-blur-sm px-3 py-2 text-xs text-zinc-400 font-medium">
-                                  {project.files?.length ? `${project.files.length} files ready` : "No files generated yet"}
-                                </div>
-                              </div>
                             </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 ) : (
-                  <div className="h-full flex min-w-0">
-                    {/* File Tree - modern sidebar */}
-                    <div className="w-56 flex-shrink-0 border-r border-zinc-800/50 bg-gradient-to-b from-zinc-950/90 to-zinc-900/70 overflow-y-auto custom-scrollbar shadow-inner backdrop-blur-sm">
-                      <div className="p-2.5">
-                        <div className="flex items-center justify-between px-2 py-2.5">
-                          <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
-                            Files
-                          </span>
-                          {isGenerating && (
-                            <span className="flex items-center gap-1 text-[10px] text-slate-500">
-                              <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-pulse" />
-                              generating
-                            </span>
-                          )}
-                        </div>
-                        {fileTree.length > 0 ? (
-                          <div className="space-y-0.5">
-                            {fileTree.map(node => (
-                              <FileTreeItem
-                                key={node.path}
-                                node={node}
-                                selectedFile={selectedFile}
-                                onSelect={setSelectedFile}
-                              />
-                            ))}
-                          </div>
-                        ) : (
-                          <div className="px-2 py-8 text-center">
-                            <FileCode className="w-8 h-8 text-zinc-600 mx-auto mb-2" />
-                            <p className="text-zinc-600 text-xs">No files yet</p>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Monaco Editor */}
-                    <div className="flex-1 flex flex-col bg-gradient-to-br from-[#1e1e1e] to-[#1a1a1a]">
-                      {selectedFile ? (
-                        <>
-                          <div className="h-10 border-b border-zinc-800/50 flex items-center px-4 bg-gradient-to-r from-zinc-900/50 to-zinc-950/50 backdrop-blur-sm shadow-sm">
-                            <FileCode className={cn("w-4 h-4 mr-2", getLanguageFromPath(selectedFile.path).includes("typescript") ? "text-zinc-400" : "text-zinc-400")} />
-                            <span className="text-sm text-zinc-400">{selectedFile.path}</span>
-                          </div>
-                          <div className="flex-1">
-                            <Editor
-                              height="100%"
-                              language={getLanguageFromPath(selectedFile.path)}
-                              value={selectedFile.content}
-                              theme="vs-dark"
-                              options={{
-                                readOnly: true,
-                                minimap: { enabled: false },
-                                fontSize: 13,
-                                lineNumbers: "on",
-                                scrollBeyondLastLine: false,
-                                wordWrap: "on",
-                                automaticLayout: true,
-                                padding: { top: 16 },
-                                renderLineHighlight: "none",
-                                overviewRulerLanes: 0,
-                                hideCursorInOverviewRuler: true,
-                                overviewRulerBorder: false,
-                                scrollbar: {
-                                  verticalScrollbarSize: 8,
-                                  horizontalScrollbarSize: 8,
-                                },
-                              }}
-                            />
-                          </div>
-                        </>
-                        ) : (
-                          <div className="flex-1 flex items-center justify-center">
-                            <div className="text-center">
-                              <FileCode className="w-12 h-12 text-zinc-600 mx-auto mb-3" />
-                              <p className="text-zinc-500 text-sm">Select a file to view</p>
-                            </div>
-                          </div>
-                        )}
-                    </div>
-                  </div>
+                  <CodePanel
+                    files={displayFiles}
+                    selectedFile={selectedFile}
+                    onSelectFile={setSelectedFile}
+                    isGenerating={isGenerating}
+                  />
                 )}
               </div>
             </div>
@@ -3507,5 +3765,9 @@ function ProjectContent() {
 }
 
 export default function ProjectPage() {
-  return <ProjectContent />
+  return (
+    <ProjectErrorBoundary>
+      <ProjectContent />
+    </ProjectErrorBoundary>
+  )
 }

@@ -7,6 +7,7 @@ import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   signOut as firebaseSignOut,
+  sendPasswordResetEmail,
   type User,
 } from "firebase/auth"
 import { doc, getDoc, setDoc, updateDoc, serverTimestamp, onSnapshot } from "firebase/firestore"
@@ -35,10 +36,13 @@ interface AuthContextType {
   user: User | null
   userData: UserData | null
   loading: boolean
+  /** Returns Bearer header when auth.currentUser exists (avoids 403 on project fetch when React state lags). */
+  getOptionalAuthHeader: () => Promise<Record<string, string>>
   signInWithGoogle: () => Promise<void>
   signInWithGithub: () => Promise<void>
   signInWithEmail: (email: string, password: string) => Promise<void>
   signUpWithEmail: (email: string, password: string) => Promise<void>
+  sendPasswordResetEmail: (email: string) => Promise<void>
   signOut: () => Promise<void>
   updateTokensUsed: (tokens: number) => Promise<void>
   hasTokens: (required: number) => boolean
@@ -93,17 +97,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             const data = snap.data()
 
             const planId = data.planId || 'free'
-            let planName = DEFAULT_PLANS[planId as UserPlan]?.name
-            let tokensLimit = DEFAULT_PLANS[planId as UserPlan]?.tokensPerMonth || PLAN_TOKEN_LIMITS.free
+            // Prefer Firestore values (set by Stripe webhook / API) over defaults
+            let planName = data.planName || DEFAULT_PLANS[planId as UserPlan]?.name || planId
+            let tokensLimit = data.tokensLimit != null ? Number(data.tokensLimit) : (DEFAULT_PLANS[planId as UserPlan]?.tokensPerMonth ?? PLAN_TOKEN_LIMITS.free)
 
-            // Try to read plan doc if exists
+            // Optionally override from plans collection
             try {
               const planRef = doc(db, 'plans', planId)
               const planSnap = await getDoc(planRef)
               if (planSnap.exists()) {
                 const p = planSnap.data()
-                planName = p.name || planName
-                tokensLimit = p.tokensPerMonth || tokensLimit
+                if (p?.name) planName = p.name
+                if (p?.tokensPerMonth != null) tokensLimit = p.tokensPerMonth
               }
             } catch (e) {
               // ignore
@@ -120,7 +125,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               planName,
               tokenUsage: {
                 used: tokenUsage.used || 0,
-                remaining: tokenUsage.remaining ?? Math.max(0, tokensLimit - (tokenUsage.used || 0)),
+                remaining: Math.max(0, tokenUsage.remaining ?? (tokensLimit - (tokenUsage.used || 0))),
                 periodStart: tokenUsage.periodStart?.toDate ? tokenUsage.periodStart.toDate() : new Date(tokenUsage.periodStart),
                 periodEnd: tokenUsage.periodEnd?.toDate ? tokenUsage.periodEnd.toDate() : new Date(tokenUsage.periodEnd),
               },
@@ -183,6 +188,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  const sendPasswordResetEmailToUser = async (email: string) => {
+    try {
+      await sendPasswordResetEmail(auth, email)
+    } catch (error) {
+      console.error("Password reset email error:", error)
+      throw error
+    }
+  }
+
   const signOut = async () => {
     try {
       await firebaseSignOut(auth)
@@ -195,14 +209,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const updateTokensUsed = async (tokens: number) => {
     if (!user || !userData) return
 
+    const currentRemaining = Math.max(0, userData.tokenUsage.remaining ?? 0)
+    const actualDeduct = Math.min(tokens, currentRemaining)
+    const newRemaining = Math.max(0, currentRemaining - actualDeduct)
+    const newUsed = (userData.tokenUsage.used || 0) + actualDeduct
+
     const userRef = doc(db, "users", user.uid)
     // client-side best-effort update; server-side transaction should be authoritative
     await updateDoc(userRef, {
-      'tokenUsage.used': (userData.tokenUsage.used || 0) + tokens,
-      'tokenUsage.remaining': (userData.tokenUsage.remaining || 0) - tokens,
+      'tokenUsage.used': newUsed,
+      'tokenUsage.remaining': newRemaining,
     } as any)
 
-    setUserData(prev => prev ? { ...prev, tokenUsage: { ...prev.tokenUsage, used: prev.tokenUsage.used + tokens, remaining: prev.tokenUsage.remaining - tokens } } : null)
+    setUserData(prev => prev ? { ...prev, tokenUsage: { ...prev.tokenUsage, used: newUsed, remaining: newRemaining } } : null)
   }
 
   const hasTokens = (required: number): boolean => {
@@ -210,7 +229,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return (userData.tokenUsage.remaining || 0) >= required
   }
 
-  const remainingTokens = userData ? userData.tokenUsage.remaining : 0
+  const remainingTokens = userData ? Math.max(0, userData.tokenUsage.remaining ?? 0) : 0
+
+  const getOptionalAuthHeader = async (): Promise<Record<string, string>> => {
+    const currentUser = auth.currentUser
+    if (!currentUser) return {}
+    try {
+      const token = await currentUser.getIdToken()
+      return { Authorization: `Bearer ${token}` }
+    } catch {
+      return {}
+    }
+  }
 
   return (
     <AuthContext.Provider
@@ -218,10 +248,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user,
         userData,
         loading,
+        getOptionalAuthHeader,
         signInWithGoogle,
         signInWithGithub,
         signInWithEmail,
         signUpWithEmail,
+        sendPasswordResetEmail: sendPasswordResetEmailToUser,
         signOut,
         updateTokensUsed,
         hasTokens,
