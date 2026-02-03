@@ -50,14 +50,6 @@ export async function POST(req: NextRequest) {
       client_reference_id: uid,
       subscription_data: {
         metadata: { firebase_uid: uid },
-        ...(process.env.FRIEND_STRIPE_ACCOUNT_ID
-          ? {
-              transfer_data: {
-                destination: process.env.FRIEND_STRIPE_ACCOUNT_ID,
-                amount_percent: 50,
-              },
-            }
-          : {}),
       },
       allow_promotion_codes: true,
     })
