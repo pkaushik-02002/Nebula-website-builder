@@ -208,9 +208,8 @@ async function ensureViteAllowedHosts(sandbox: Sandbox): Promise<void> {
       if (content.includes("allowedHosts")) continue
       
       let patched = content
-      // open: false so Vite never tries to launch a local browser (xdg-open is not available in the sandbox)
       // allowedHosts: true for E2B proxy; hmr.overlay: false so build errors don't block the preview iframe
-      const serverAdditions = "open: false, allowedHosts: true, hmr: { overlay: false }"
+      const serverAdditions = "allowedHosts: true, hmr: { overlay: false }"
       
       // Try to add to existing server config
       if (content.includes("server:")) {

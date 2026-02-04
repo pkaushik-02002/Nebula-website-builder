@@ -1735,14 +1735,14 @@ function ProjectContent() {
   }
 
   return (
-    <div className="relative min-h-screen min-h-[100dvh] w-full max-w-full min-w-0 overflow-x-hidden bg-zinc-950 flex flex-col touch-pan-y overscroll-none">
+    <div className="relative h-screen w-screen max-w-full min-w-0 overflow-hidden bg-zinc-950 flex flex-col touch-pan-y overscroll-none">
       {/* Subtle ambient background, shared with marketing pages */}
       <div className="pointer-events-none fixed inset-0 -z-20 bg-[radial-gradient(ellipse_80%_60%_at_50%_-20%,rgba(245,158,11,0.10),transparent)]" />
       <div className="pointer-events-none fixed inset-0 -z-30 bg-[linear-gradient(to_bottom,rgba(9,9,11,0.98),rgb(9,9,11))]" />
-      {/* Top Header Bar */}
+      {/* Top Header Bar - modern glass bar */}
       <div
-        className="sticky top-0 z-30 h-auto lg:h-14 flex items-center justify-between px-3 sm:px-4 lg:px-6 pt-3 pb-2 lg:py-0 border-b border-zinc-900/80 bg-zinc-950 flex-shrink-0 gap-2 sm:gap-3 min-w-0 overflow-hidden shadow-[0_1px_0_0_rgba(255,255,255,0.03)]"
-        style={{ paddingTop: "max(0.5rem, env(safe-area-inset-top, 0px))" }}
+        className="h-auto lg:h-14 flex items-center justify-between px-3 sm:px-4 lg:px-6 pt-3 pb-2 lg:py-0 border-b border-zinc-800/80 bg-zinc-900/95 backdrop-blur-xl flex-shrink-0 gap-3 min-w-0 shadow-[0_1px_0_0_rgba(255,255,255,0.03)]"
+        style={{ paddingTop: "max(env(safe-area-inset-top, 0px), 0.75rem)" }}
       >
         {/* Mobile: Burger menu - touch-friendly */}
         <div className="lg:hidden flex items-center min-w-[44px] min-h-[44px] -ml-2 items-center justify-center">
@@ -1902,15 +1902,14 @@ function ProjectContent() {
           </DialogContent>
         </Dialog>
 
-      {/* Title (center on mobile, dropdown on desktop) */}
-      <div className="flex-1 flex justify-center lg:justify-start min-w-0 px-1">
-        {/* Mobile: centered project name */}
-        <div className="lg:hidden text-sm font-semibold text-zinc-100 truncate text-center max-w-[55vw] sm:max-w-[60vw]">
-          {displayProjectName}
-        </div>
+        {/* Title (center on mobile, dropdown on desktop) */}
+        <div className="flex-1 flex justify-center lg:justify-start min-w-0 px-1">
+          <div className="lg:hidden text-sm font-semibold text-zinc-100 truncate text-center max-w-[55vw] sm:max-w-[60vw]">
+            {displayProjectName}
+          </div>
 
-        {/* Desktop: Logo, Separator, Title with Dropdown */}
-        <div className="hidden lg:flex items-center gap-3 min-w-0">
+          {/* Desktop: Logo, Separator, Title with Dropdown */}
+          <div className="hidden lg:flex items-center gap-3 min-w-0">
             <Link href="/" className="font-display text-base font-semibold text-zinc-100 hover:text-zinc-200 transition-colors flex-shrink-0">
               BuildKit
             </Link>
@@ -2156,20 +2155,20 @@ function ProjectContent() {
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 min-h-0 flex flex-col overflow-x-hidden overflow-y-auto lg:overflow-hidden min-w-0">
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden min-w-0">
         {/* AI-suggested backend: Connect Supabase? banner */}
         {project?.suggestsBackend && !project?.supabaseUrl && !suggestBackendDismissed && (
-          <div className="flex-shrink-0 px-3 sm:px-4 py-2.5 border-b border-zinc-600/50 bg-zinc-900/50 flex items-center justify-between gap-3 flex-wrap min-w-0">
-            <div className="flex items-center gap-2.5 min-w-0 flex-1 basis-full sm:basis-auto">
+          <div className="flex-shrink-0 px-3 sm:px-4 py-2.5 border-b border-zinc-600/50 bg-zinc-900/50 flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-2.5 min-w-0">
               <div className="w-8 h-8 rounded-lg bg-zinc-600/20 border border-zinc-500/30 flex items-center justify-center shrink-0">
                 <Database className="w-4 h-4 text-zinc-400" />
               </div>
-              <div className="min-w-0 overflow-hidden">
+              <div className="min-w-0">
                 <p className="text-sm font-medium text-zinc-100">This project could use a database</p>
                 <p className="text-xs text-zinc-500">Connect Supabase to add auth and persistent data—like Rocket.new.</p>
               </div>
             </div>
-            <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto justify-end">
+            <div className="flex items-center gap-2 shrink-0">
               <button
                 type="button"
                 onClick={() => setSuggestBackendDismissed(true)}
@@ -3299,16 +3298,17 @@ function ProjectContent() {
           </DialogContent>
         </Dialog>
 
-        {/* Mobile layout: visible on small screens (CSS-controlled), desktop layout is separate below. */}
-        <div className="h-full flex-1 min-h-0 flex flex-col overflow-hidden overflow-x-hidden w-full max-w-full lg:hidden">
-          {/* Mobile tabs - touch-friendly pill bar (restored) */}
-          <div className="px-3 sm:px-4 py-2.5 border-b border-zinc-800/80 bg-zinc-950 flex-shrink-0 w-full min-w-0">
+        {/* Mobile layout: only in DOM on small screens so desktop layout never shows below. */}
+        {!isLg && (
+        <div className="h-full flex-1 min-h-0 flex flex-col overflow-hidden w-full">
+          {/* Mobile tabs - touch-friendly, modern pill bar */}
+          <div className="px-3 sm:px-4 py-2.5 border-b border-zinc-800/80 bg-zinc-950/60 backdrop-blur-sm flex-shrink-0">
             <div className="flex items-center gap-1.5 rounded-2xl bg-zinc-900/70 border border-zinc-800/60 p-1.5 shadow-inner">
               <button
                 type="button"
                 onClick={() => setMobileTab("chat")}
                 className={cn(
-                  "flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 touch-manipulation min-h-[40px]",
+                  "flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 touch-manipulation min-h-[44px]",
                   mobileTab === "chat"
                     ? "bg-zinc-800 text-zinc-100 shadow-sm"
                     : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50 active:scale-[0.99]"
@@ -3324,7 +3324,7 @@ function ProjectContent() {
                   setActiveTab("preview")
                 }}
                 className={cn(
-                  "flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 touch-manipulation min-h-[40px]",
+                  "flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 touch-manipulation min-h-[44px]",
                   mobileTab === "preview"
                     ? "bg-zinc-800 text-zinc-100 shadow-sm"
                     : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50 active:scale-[0.99]"
@@ -3339,8 +3339,8 @@ function ProjectContent() {
           {/* Mobile content - prevent overflow */}
           <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
             {mobileTab === "chat" ? (
-              <div className="h-full flex flex-col bg-zinc-900/30 min-h-0 overflow-hidden">
-                <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-5 space-y-4 chat-scrollbar overscroll-contain break-words min-w-0">
+              <div className="h-full flex flex-col bg-zinc-900/30 min-h-0">
+                <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-5 space-y-4 chat-scrollbar overscroll-contain">
                   <ChatMessage
                     message={{ role: "user", content: project.prompt }}
                     isLast={false}
@@ -3447,7 +3447,7 @@ function ProjectContent() {
                   />
                 </div>
                 ) : (
-                <div className="p-3 sm:p-4 border-t border-zinc-800/50 bg-zinc-950/40 flex-shrink-0 safe-area-inset-bottom">
+                <div className="p-3 sm:p-4 border-t border-zinc-800/50 bg-zinc-950/40 flex-shrink-0">
                   <p className="text-xs text-zinc-500 text-center">View only — sign in as owner or editor to make changes.</p>
                 </div>
                 )}
@@ -3620,9 +3620,10 @@ function ProjectContent() {
             )}
           </div>
         </div>
+        )}
 
-        {/* Desktop layout: only visible on lg+ via CSS; mobile sees the stacked layout above. */}
-        <div className="hidden lg:flex h-full flex-1 min-h-0 w-full min-w-0">
+        {/* Desktop layout: only in DOM on lg+ so mobile never sees duplicate content. */}
+        {isLg && (
         <ResizablePanelGroup direction="horizontal" className="h-full flex-1 min-h-0 w-full min-w-0">
           {/* Chat Panel - modern glass */}
           <ResizablePanel defaultSize={30} minSize={20} maxSize={50}>
@@ -4080,7 +4081,7 @@ function ProjectContent() {
             </div>
           </ResizablePanel>
         </ResizablePanelGroup>
-        </div>
+        )}
       </div>
     </div>
   )
