@@ -145,6 +145,7 @@ function ProjectContent() {
   const [deployLogs, setDeployLogs] = useState<string[]>([])
   const [deployError, setDeployError] = useState<string | null>(null)
   const [deployLinks, setDeployLinks] = useState<{ siteUrl?: string | null; deployUrl?: string | null; adminUrl?: string | null; siteId?: string | null; deployId?: string | null } | null>(null)
+  const [netlifySiteName, setNetlifySiteName] = useState("")
   const [netlifyDeployState, setNetlifyDeployState] = useState<string | null>(null)
   const [netlifyLogUrl, setNetlifyLogUrl] = useState<string | null>(null)
   const [isDeploying, setIsDeploying] = useState(false)
@@ -446,7 +447,11 @@ function ProjectContent() {
           "Content-Type": "application/json",
           ...authHeader,
         },
-        body: JSON.stringify({ projectId }),
+        body: JSON.stringify({
+          projectId,
+          siteId: deployLinks?.siteId || null,
+          siteName: netlifySiteName || (project?.name ? project.name : ""),
+        }),
       })
 
       if (!res.ok || !res.body) {
@@ -512,7 +517,7 @@ function ProjectContent() {
       setIsDeploying(false)
       refreshNetlifyStatus()
     }
-  }, [getAuthHeader, projectId, refreshNetlifyStatus])
+  }, [deployLinks?.siteId, getAuthHeader, netlifySiteName, project?.name, projectId, refreshNetlifyStatus])
 
   const handleSaveVercelToken = useCallback(async () => {
     if (!projectId || !vercelTokenInput.trim()) return
@@ -1180,7 +1185,11 @@ function ProjectContent() {
           const newFile = parsedBlocks[parsedBlocks.length - 1]
           setCurrentGeneratingFile(newFile.path)
           setAgentStatus(`Creating ${newFile.path}...`)
-          setReasoningSteps(prev => [...prev, `Creating file: ${newFile.path}`])
+          // Keep reasoning high-level like v0.dev / ChatGPT:
+          // show a single "Creating files..." step instead of one entry per file.
+          setReasoningSteps((prev) =>
+            prev.includes("Creating files...") ? prev : [...prev, "Creating files..."]
+          )
           lastFileCount = parsedBlocks.length
         }
 
@@ -1726,9 +1735,15 @@ function ProjectContent() {
   }
 
   return (
-    <div className="h-screen w-screen max-w-full min-w-0 overflow-hidden bg-zinc-950 flex flex-col touch-pan-y overscroll-none">
+    <div className="relative h-screen w-screen max-w-full min-w-0 overflow-hidden bg-zinc-950 flex flex-col touch-pan-y overscroll-none">
+      {/* Subtle ambient background, shared with marketing pages */}
+      <div className="pointer-events-none fixed inset-0 -z-20 bg-[radial-gradient(ellipse_80%_60%_at_50%_-20%,rgba(245,158,11,0.10),transparent)]" />
+      <div className="pointer-events-none fixed inset-0 -z-30 bg-[linear-gradient(to_bottom,rgba(9,9,11,0.98),rgb(9,9,11))]" />
       {/* Top Header Bar - modern glass bar */}
-      <div className="h-auto lg:h-14 flex items-center justify-between px-3 sm:px-4 lg:px-6 py-2.5 lg:py-0 border-b border-zinc-800/80 bg-zinc-900/95 backdrop-blur-xl flex-shrink-0 gap-3 min-w-0 shadow-[0_1px_0_0_rgba(255,255,255,0.03)] safe-area-inset-top">
+      <div
+        className="h-auto lg:h-14 flex items-center justify-between px-3 sm:px-4 lg:px-6 pt-3 pb-2 lg:py-0 border-b border-zinc-800/80 bg-zinc-900/95 backdrop-blur-xl flex-shrink-0 gap-3 min-w-0 shadow-[0_1px_0_0_rgba(255,255,255,0.03)]"
+        style={{ paddingTop: "max(env(safe-area-inset-top, 0px), 0.75rem)" }}
+      >
         {/* Mobile: Burger menu - touch-friendly */}
         <div className="lg:hidden flex items-center min-w-[44px] min-h-[44px] -ml-2 items-center justify-center">
           <DropdownMenu>
@@ -2173,7 +2188,7 @@ function ProjectContent() {
         )}
 
         <Dialog open={deployOpen} onOpenChange={setDeployOpen}>
-          <DialogContent className="bg-zinc-950/98 border border-zinc-800/80 rounded-2xl shadow-2xl backdrop-blur-xl max-w-[min(calc(100vw-1.5rem),28rem)] sm:max-w-2xl">
+          <DialogContent className="bg-zinc-950/98 border border-zinc-800/80 rounded-2xl shadow-2xl backdrop-blur-xl max-w-[min(calc(100vw-1.5rem),28rem)] sm:max-w-2xl max-h-[80vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle className="text-zinc-100">Deploy</DialogTitle>
               <DialogDescription className="text-zinc-400">
@@ -2211,31 +2226,47 @@ function ProjectContent() {
             <div className="space-y-4">
               {deployTab === "netlify" && (
                 <>
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-sm text-zinc-300">
-                      Status: {netlifyConnected === null ? "Checking..." : netlifyConnected ? "Connected" : "Not connected"}
+                  <div className="space-y-3">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                      <div className="text-sm text-zinc-300">
+                        Status: {netlifyConnected === null ? "Checking..." : netlifyConnected ? "Connected" : "Not connected"}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {!netlifyConnected ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="border-zinc-800 text-zinc-200 bg-transparent hover:bg-zinc-900"
+                            onClick={handleConnectNetlify}
+                            disabled={isDeploying}
+                          >
+                            Connect Netlify
+                          </Button>
+                        ) : (
+                          <Button
+                            type="button"
+                            className="bg-zinc-100 text-zinc-900 hover:bg-white"
+                            onClick={handleDeployToNetlify}
+                            disabled={isDeploying}
+                          >
+                            {isDeploying ? "Deploying..." : deployLinks?.siteId ? "Update live site" : "Deploy live site"}
+                          </Button>
+                        )}
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      {!netlifyConnected ? (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="border-zinc-800 text-zinc-200 bg-transparent hover:bg-zinc-900"
-                          onClick={handleConnectNetlify}
-                          disabled={isDeploying}
-                        >
-                          Connect Netlify
-                        </Button>
-                      ) : (
-                        <Button
-                          type="button"
-                          className="bg-zinc-100 text-zinc-900 hover:bg-white"
-                          onClick={handleDeployToNetlify}
-                          disabled={isDeploying}
-                        >
-                          {isDeploying ? "Deploying..." : "Deploy"}
-                        </Button>
-                      )}
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-zinc-400">
+                        Site name (optional)
+                      </label>
+                      <Input
+                        value={netlifySiteName}
+                        onChange={(e) => setNetlifySiteName(e.target.value)}
+                        placeholder={project?.name ? `${project.name.toLowerCase().replace(/[^a-z0-9-]/g, "-")}` : "my-project"}
+                        className="h-9 bg-zinc-900 border-zinc-700 text-xs text-zinc-100 placeholder:text-zinc-500"
+                      />
+                      <p className="text-[11px] text-zinc-500">
+                        This controls how your Netlify URL looks, for example <span className="font-mono">my-project.netlify.app</span>.
+                      </p>
                     </div>
                   </div>
                   <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3">
@@ -2249,41 +2280,141 @@ function ProjectContent() {
                   )}
                   {deployLinks && (
                     <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3 space-y-2">
-                      <div className="text-xs text-zinc-400">Links</div>
-                      <div className="space-y-1 text-sm">
-                        {deployLinks.siteUrl && (
-                          <a className="text-zinc-300 hover:underline break-all" href={deployLinks.siteUrl} target="_blank" rel="noreferrer">
-                            {deployLinks.siteUrl}
-                          </a>
-                        )}
+                      <div className="text-xs font-medium text-zinc-400 uppercase tracking-wide">
+                        Your live website
+                      </div>
+                      <div className="mt-1 space-y-2.5 text-sm">
+                        {deployLinks.siteUrl && (() => {
+                          let label = "your-site.netlify.app"
+                          try {
+                            const u = new URL(deployLinks.siteUrl as string)
+                            label = u.host
+                          } catch {
+                            // ignore parse errors, keep default label
+                          }
+                          return (
+                            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                              <div className="flex flex-col">
+                                <span className="text-zinc-100 font-medium">Shareable link</span>
+                                <span className="text-[11px] text-zinc-500">
+                                  This is the link you send to friends or customers.
+                                </span>
+                              </div>
+                              <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-1.5 sm:min-w-[40%] sm:justify-end">
+                                <a
+                                  className="inline-flex items-center justify-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold text-zinc-950 bg-amber-400 hover:bg-amber-300 shadow-sm w-full sm:w-auto"
+                                  href={deployLinks.siteUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  <span className="truncate max-w-[160px]">{label}</span>
+                                  <ExternalLink className="w-3.5 h-3.5" />
+                                </a>
+                                <button
+                                  type="button"
+                                  className="inline-flex items-center justify-center h-8 w-full sm:w-8 rounded-full border border-zinc-700/70 bg-zinc-900/80 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-50 text-[11px]"
+                                  onClick={() => {
+                                    try {
+                                      navigator.clipboard.writeText(deployLinks.siteUrl as string)
+                                      toast({ title: "Link copied" })
+                                    } catch {
+                                      // ignore clipboard errors
+                                    }
+                                  }}
+                                  aria-label="Copy link"
+                                >
+                                  <Copy className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          )
+                        })()}
                         {deployLinks.deployUrl && (
-                          <a className="text-zinc-200 hover:underline break-all" href={deployLinks.deployUrl} target="_blank" rel="noreferrer">
-                            {deployLinks.deployUrl}
-                          </a>
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                            <div className="flex flex-col">
+                              <span className="text-zinc-300">Most recent publish</span>
+                              <span className="text-[11px] text-zinc-500">
+                                Opens the latest version of your site Netlify put online.
+                              </span>
+                            </div>
+                            <a
+                              className="inline-flex items-center justify-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium text-zinc-900 bg-zinc-100 hover:bg-white w-full sm:w-auto"
+                              href={deployLinks.deployUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              <span>View deployment</span>
+                              <ExternalLink className="w-3.5 h-3.5" />
+                            </a>
+                          </div>
                         )}
                         {deployLinks.adminUrl && (
-                          <a className="text-zinc-400 hover:underline break-all" href={deployLinks.adminUrl} target="_blank" rel="noreferrer">
-                            {deployLinks.adminUrl}
-                          </a>
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                            <div className="flex flex-col">
+                              <span className="text-zinc-300">Website settings</span>
+                              <span className="text-[11px] text-zinc-500">
+                                Change things like domain, redirects, and other options.
+                              </span>
+                            </div>
+                            <a
+                              className="inline-flex items-center justify-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium text-zinc-900 bg-zinc-100 hover:bg-white w-full sm:w-auto"
+                              href={deployLinks.adminUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              <span>Open dashboard</span>
+                              <ExternalLink className="w-3.5 h-3.5" />
+                            </a>
+                          </div>
                         )}
-                        {deployLinks.adminUrl && deployLinks.deployId && (() => {
-                          try {
-                            const u = new URL(deployLinks.adminUrl as string)
-                            u.pathname = `${u.pathname.replace(/\/$/, "")}/deploys/${deployLinks.deployId}`
-                            const href = u.toString()
-                            return (
-                              <a className="text-zinc-400 hover:underline break-all" href={href} target="_blank" rel="noreferrer">
-                                {href}
-                              </a>
-                            )
-                          } catch {
-                            return null
-                          }
-                        })()}
+                        {deployLinks.adminUrl &&
+                          deployLinks.deployId &&
+                          (() => {
+                            try {
+                              const u = new URL(deployLinks.adminUrl as string)
+                              u.pathname = `${u.pathname.replace(/\/$/, "")}/deploys/${deployLinks.deployId}`
+                              const href = u.toString()
+                              return (
+                                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                                  <div className="flex flex-col">
+                                    <span className="text-zinc-300">Previous publishes</span>
+                                    <span className="text-[11px] text-zinc-500">
+                                      Handy if the site broke after a change and you want to inspect it.
+                                    </span>
+                                  </div>
+                                  <a
+                                    className="inline-flex items-center justify-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium text-zinc-900 bg-zinc-100 hover:bg-white w-full sm:w-auto"
+                                    href={href}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                  >
+                                    <span>View in Netlify</span>
+                                    <ExternalLink className="w-3.5 h-3.5" />
+                                  </a>
+                                </div>
+                              )
+                            } catch {
+                              return null
+                            }
+                          })()}
                         {netlifyLogUrl && (
-                          <a className="text-zinc-400 hover:underline break-all" href={netlifyLogUrl} target="_blank" rel="noreferrer">
-                            {netlifyLogUrl}
-                          </a>
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                            <div className="flex flex-col">
+                              <span className="text-zinc-300">Technical details (optional)</span>
+                              <span className="text-[11px] text-zinc-500">
+                                Extra information for developers. Safe to ignore if your site looks good.
+                              </span>
+                            </div>
+                            <a
+                              className="inline-flex items-center justify-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium text-zinc-300 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700/70 w-full sm:w-auto"
+                              href={netlifyLogUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              <span>Open logs</span>
+                              <ExternalLink className="w-3.5 h-3.5" />
+                            </a>
+                          </div>
                         )}
                       </div>
                       {netlifyDeployState && (
@@ -2365,41 +2496,92 @@ function ProjectContent() {
                   )}
                   {vercelDeployLinks && (
                     <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3 space-y-3">
-                      <div className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Deployment links</div>
+                      <div className="text-xs font-medium text-zinc-400 uppercase tracking-wider">
+                        Your site on Vercel
+                      </div>
                       <div className="space-y-2.5 text-sm">
-                        {vercelDeployLinks.siteUrl && (
-                          <div>
-                            <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-0.5">Live site</div>
-                            <a className="flex items-center gap-1.5 text-zinc-200 hover:text-zinc-100 hover:underline break-all" href={vercelDeployLinks.siteUrl} target="_blank" rel="noreferrer">
-                              <ExternalLink className="w-3.5 h-3.5 shrink-0" />
-                              {vercelDeployLinks.siteUrl}
-                            </a>
-                          </div>
-                        )}
+                        {vercelDeployLinks.siteUrl && (() => {
+                          let host = "your-site.vercel.app"
+                          try {
+                            const u = new URL(vercelDeployLinks.siteUrl as string)
+                            host = u.host
+                          } catch {
+                            // ignore
+                          }
+                          return (
+                            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                              <div className="flex flex-col">
+                                <span className="text-zinc-300">Shareable link</span>
+                                <span className="text-[11px] text-zinc-500">
+                                  This is the main URL people will visit.
+                                </span>
+                              </div>
+                              <a
+                                className="inline-flex items-center justify-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold text-zinc-950 bg-zinc-100 hover:bg-white w-full sm:w-auto"
+                                href={vercelDeployLinks.siteUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                <span className="truncate max-w-[160px]">{host}</span>
+                                <ExternalLink className="w-3.5 h-3.5" />
+                              </a>
+                            </div>
+                          )
+                        })()}
                         {vercelDeployLinks.deployUrl && vercelDeployLinks.deployUrl !== vercelDeployLinks.siteUrl && (
-                          <div>
-                            <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-0.5">Preview URL</div>
-                            <a className="flex items-center gap-1.5 text-zinc-300 hover:text-zinc-200 hover:underline break-all" href={vercelDeployLinks.deployUrl} target="_blank" rel="noreferrer">
-                              <ExternalLink className="w-3.5 h-3.5 shrink-0" />
-                              {vercelDeployLinks.deployUrl}
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                            <div className="flex flex-col">
+                              <span className="text-zinc-300">Preview link</span>
+                              <span className="text-[11px] text-zinc-500">
+                                A preview just for this deployment.
+                              </span>
+                            </div>
+                            <a
+                              className="inline-flex items-center justify-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium text-zinc-900 bg-zinc-100 hover:bg-white w-full sm:w-auto"
+                              href={vercelDeployLinks.deployUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              <span>Open preview</span>
+                              <ExternalLink className="w-3.5 h-3.5" />
                             </a>
                           </div>
                         )}
                         {vercelDeployLinks.adminUrl && (
-                          <div>
-                            <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-0.5">Vercel dashboard</div>
-                            <a className="flex items-center gap-1.5 text-zinc-400 hover:text-zinc-300 hover:underline break-all" href={vercelDeployLinks.adminUrl} target="_blank" rel="noreferrer">
-                              <ExternalLink className="w-3.5 h-3.5 shrink-0" />
-                              View in Vercel
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                            <div className="flex flex-col">
+                              <span className="text-zinc-300">Project in Vercel</span>
+                              <span className="text-[11px] text-zinc-500">
+                                Manage domains, env vars, and more.
+                              </span>
+                            </div>
+                            <a
+                              className="inline-flex items-center justify-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium text-zinc-900 bg-zinc-100 hover:bg-white w-full sm:w-auto"
+                              href={vercelDeployLinks.adminUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              <span>Open in Vercel</span>
+                              <ExternalLink className="w-3.5 h-3.5" />
                             </a>
                           </div>
                         )}
                         {vercelLogUrl && (
-                          <div>
-                            <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-0.5">Build logs</div>
-                            <a className="flex items-center gap-1.5 text-zinc-400 hover:text-zinc-300 hover:underline break-all" href={vercelLogUrl} target="_blank" rel="noreferrer">
-                              <ExternalLink className="w-3.5 h-3.5 shrink-0" />
-                              {vercelLogUrl}
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                            <div className="flex flex-col">
+                              <span className="text-zinc-300">Build logs</span>
+                              <span className="text-[11px] text-zinc-500">
+                                Only needed if something goes wrong.
+                              </span>
+                            </div>
+                            <a
+                              className="inline-flex items-center justify-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium text-zinc-300 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700/70 w-full sm:w-auto"
+                              href={vercelLogUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              <span>Open logs</span>
+                              <ExternalLink className="w-3.5 h-3.5" />
                             </a>
                           </div>
                         )}

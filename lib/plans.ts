@@ -1,6 +1,6 @@
 /**
  * Shared plan display config and fallbacks.
- * Used by /pricing page and pricing-section for consistent, dynamic pricing UI.
+ * Used by the /pricing page for consistent, dynamic pricing UI.
  */
 
 export type PlanId = "free" | "pro" | "team"

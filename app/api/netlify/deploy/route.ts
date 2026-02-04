@@ -74,11 +74,13 @@ async function zipDistFromSandbox(sandbox: Sandbox) {
 export async function POST(req: Request) {
   let projectId = ""
   let requestedSiteId: string | null = null
+  let requestedSiteName: string | null = null
 
   try {
     const body = await req.json()
     projectId = String(body?.projectId || "")
     requestedSiteId = body?.siteId ? String(body.siteId) : null
+    requestedSiteName = body?.siteName ? String(body.siteName) : null
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 })
   }
@@ -221,14 +223,27 @@ export async function POST(req: Request) {
         let siteUrl: string | null = project.data?.netlifySiteUrl || null
         let adminUrl: string | null = project.data?.netlifyAdminUrl || null
 
+        // Helper to slugify a human-friendly site name into a Netlify-safe subdomain
+        const slugifySiteName = (name: string) =>
+          (name || "")
+            .toLowerCase()
+            .replace(/[^a-z0-9-]/g, "-")
+            .replace(/-+/g, "-")
+            .replace(/^-|-$/g, "")
+            .slice(0, 60)
+
         if (!siteId) {
+          const fallbackName = `project-${projectId.toLowerCase().slice(0, 12)}`
+          const rawName = (requestedSiteName || "").trim()
+          const safeName = slugifySiteName(rawName) || fallbackName
+
           const createSiteRes = await fetch("https://api.netlify.com/api/v1/sites", {
             method: "POST",
             headers: {
               Authorization: `Bearer ${token}`,
               "Content-Type": "application/json",
             },
-            body: JSON.stringify({ name: `project-${projectId.toLowerCase().slice(0, 12)}` }),
+            body: JSON.stringify({ name: safeName }),
           })
 
           if (!createSiteRes.ok) {
@@ -240,6 +255,30 @@ export async function POST(req: Request) {
           siteId = s?.id
           siteUrl = s?.url || s?.ssl_url || null
           adminUrl = s?.admin_url || null
+        } else if (requestedSiteName) {
+          // Existing site: try to rename it when user provides a new name
+          const rawName = requestedSiteName.trim()
+          const safeName = slugifySiteName(rawName)
+          if (safeName) {
+            try {
+              const updateSiteRes = await fetch(`https://api.netlify.com/api/v1/sites/${siteId}`, {
+                method: "PUT",
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ name: safeName }),
+              })
+
+              if (updateSiteRes.ok) {
+                const s = (await updateSiteRes.json()) as any
+                siteUrl = s?.url || s?.ssl_url || siteUrl
+                adminUrl = s?.admin_url || adminUrl
+              }
+            } catch {
+              // If rename fails, keep using existing site without failing the whole deploy
+            }
+          }
         }
 
         const deployRes = await fetch(`https://api.netlify.com/api/v1/sites/${siteId}/deploys`, {
