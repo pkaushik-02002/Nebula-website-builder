@@ -103,6 +103,14 @@ UI STANDARD: When adding or changing UI, keep it modern and polished—distincti
 
 RESPONSIVE: Preserve or improve responsiveness on all devices. Use Tailwind breakpoints (sm:, md:, lg:) for layout and typography; avoid fixed widths that break on small screens; ensure touch targets are at least 44px on mobile; prevent horizontal overflow (max-w-full, min-w-0, overflow-hidden where needed). Generated UI must work on phone, tablet, and desktop.
 
+DEPENDENCIES (CRITICAL):
+- Before using ANY new import/package in your code, you MUST add it to package.json dependencies or devDependencies.
+- If you use react-icons (e.g., import { FaStar } from 'react-icons/fa'), add "react-icons": "^5.0.0" to dependencies.
+- If you use framer-motion, add "framer-motion": "^11.0.0" to dependencies.
+- If you use lucide-react, add "lucide-react": "^0.400.0" to dependencies.
+- Check the existing package.json first. Only add packages that are truly needed and don't already exist.
+- NEVER use packages that don't exist on npm (e.g., @shadcn/ui).
+
 CRITICAL: Do NOT regenerate the entire project. Output ONLY:
 1. One AGENT_MESSAGE (see below).
 2. For each file that you MODIFY: output that file in ===FILE: path=== ... ===END_FILE===. Inside the block you may use EITHER:
@@ -176,9 +184,17 @@ Dependencies requirements (MUST follow):
 - package.json MUST include react and react-dom in dependencies.
 - package.json MUST include vite and @vitejs/plugin-react in devDependencies.
 - If TypeScript is used (it is), include typescript, @types/react, and @types/react-dom in devDependencies.
+- CRITICAL: Before using ANY import in your code, you MUST add that package to package.json dependencies first.
+- Common packages you might use:
+  * react-icons (for icons like FaIcon, AiIcon, MdIcon, etc.)
+  * framer-motion (for animations)
+  * lucide-react (for icons)
+  * clsx or classnames (for conditional classes)
+  * date-fns (for date utilities)
+- If you use an icon from react-icons (e.g., import { FaStar } from 'react-icons/fa'), you MUST include "react-icons": "^5.0.0" in dependencies.
+- If you use Tailwind CSS, include tailwindcss, postcss, and autoprefixer in devDependencies.
 - Do not reference any package in code unless it exists in package.json.
-
-Do NOT add dependencies that do not exist on npm. In particular, do NOT use @shadcn/ui.
+- NEVER use packages that don't exist on npm (e.g., @shadcn/ui is not a real package).
 
 Ensure the dev server binds to 0.0.0.0 and uses a known port (prefer port 3000). If you use Vite, configure it accordingly.
 

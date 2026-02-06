@@ -58,7 +58,7 @@ import {
 } from "lucide-react"
 import { TextShimmer } from "@/components/prompt-kit/text-shimmer"
 import { ThinkingBar } from "@/components/prompt-kit/thinking-bar"
-import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/prompt-kit/reasoning"
+import { Reasoning, ReasoningContent, ReasoningTrigger, AgentTimeline } from "@/components/prompt-kit/reasoning"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { AnimatedAIInput } from "@/components/ui/animated-ai-input"
@@ -1105,6 +1105,9 @@ function ProjectContent() {
     setAgentStatus("Analyzing your request...")
     setReasoningSteps(["Analyzing your request and understanding scope."])
 
+    // Track if we've auto-selected a file during this generation
+    let hasAutoSelectedFile = false
+
     const projectRef = doc(db, "projects", projectId)
     await updateDoc(projectRef, { status: "generating" })
 
@@ -1204,8 +1207,9 @@ function ProjectContent() {
           })))
         }
 
-        // Auto-select first file
-        if (allFiles.length > 0 && !selectedFile) {
+        // Auto-select first file (only once per generation)
+        if (allFiles.length > 0 && !selectedFile && !hasAutoSelectedFile) {
+          hasAutoSelectedFile = true
           setSelectedFile(allFiles[0])
         }
       }
@@ -3376,30 +3380,34 @@ function ProjectContent() {
                         onStop={() => abortControllerRef.current?.abort()}
                         onClick={undefined}
                       />
-                      <Reasoning isStreaming={true}>
-                        <ReasoningTrigger>Show reasoning</ReasoningTrigger>
-                        <ReasoningContent className="ml-2 border-l-2 border-l-zinc-200 px-2 pb-1 dark:border-l-zinc-700">
-                          <div className="space-y-1">
-                            {reasoningSteps.length > 0
-                              ? reasoningSteps.map((step, i) => (
-                                  <div key={i} className="text-zinc-400">
-                                    {i === reasoningSteps.length - 1 ? (
-                                      <TextShimmer duration={1.5}>
-                                        {i + 1}. {step}
-                                      </TextShimmer>
-                                    ) : (
-                                      <>{i + 1}. {step}</>
-                                    )}
-                                  </div>
-                                ))
-                              : (
-                                <TextShimmer duration={1.5}>
-                                  Reasoning in progress...
-                                </TextShimmer>
-                              )}
-                          </div>
-                        </ReasoningContent>
-                      </Reasoning>
+                      <AgentTimeline
+                        steps={reasoningSteps.map((step, i) => {
+                          // Determine step type based on content
+                          let type: "thinking" | "tool_call" | "code" | "search" | "result" = "thinking"
+                          const lowerStep = step.toLowerCase()
+                          
+                          if (lowerStep.includes("search") || lowerStep.includes("looking") || lowerStep.includes("finding")) {
+                            type = "search"
+                          } else if (lowerStep.includes("generat") || lowerStep.includes("writ") || lowerStep.includes("creat")) {
+                            type = "code"
+                          } else if (lowerStep.includes("final") || lowerStep.includes("complet") || lowerStep.includes("preview")) {
+                            type = "result"
+                          } else if (lowerStep.includes("analyz") || lowerStep.includes("plan") || lowerStep.includes("understand")) {
+                            type = "thinking"
+                          } else if (i > 0 && i < reasoningSteps.length - 1) {
+                            type = "tool_call"
+                          }
+
+                          return {
+                            id: `step-${i}`,
+                            type,
+                            title: step,
+                            status: i === reasoningSteps.length - 1 ? "running" : "completed",
+                            expanded: false,
+                          }
+                        })}
+                        isStreaming={true}
+                      />
                     </div>
                   )}
 

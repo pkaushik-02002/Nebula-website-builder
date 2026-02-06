@@ -247,8 +247,14 @@ export async function POST(req: Request) {
           })
 
           if (!createSiteRes.ok) {
-            const t = await createSiteRes.text().catch(() => "")
-            throw new Error(`Failed to create site: ${createSiteRes.status} ${t}`)
+            const responseText = await createSiteRes.text().catch(() => "")
+            
+            // Check if the error is about subdomain uniqueness
+            if (createSiteRes.status === 422 && responseText.includes("must be unique")) {
+              throw new Error(`The site name "${safeName}" is already taken. Please choose a different name.`)
+            }
+            
+            throw new Error(`Failed to create site: ${createSiteRes.status} ${responseText}`)
           }
 
           const s = (await createSiteRes.json()) as any
@@ -260,23 +266,27 @@ export async function POST(req: Request) {
           const rawName = requestedSiteName.trim()
           const safeName = slugifySiteName(rawName)
           if (safeName) {
-            try {
-              const updateSiteRes = await fetch(`https://api.netlify.com/api/v1/sites/${siteId}`, {
-                method: "PUT",
-                headers: {
-                  Authorization: `Bearer ${token}`,
-                  "Content-Type": "application/json",
-                },
-                body: JSON.stringify({ name: safeName }),
-              })
+            const updateSiteRes = await fetch(`https://api.netlify.com/api/v1/sites/${siteId}`, {
+              method: "PUT",
+              headers: {
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ name: safeName }),
+            })
 
-              if (updateSiteRes.ok) {
-                const s = (await updateSiteRes.json()) as any
-                siteUrl = s?.url || s?.ssl_url || siteUrl
-                adminUrl = s?.admin_url || adminUrl
+            if (updateSiteRes.ok) {
+              const s = (await updateSiteRes.json()) as any
+              siteUrl = s?.url || s?.ssl_url || siteUrl
+              adminUrl = s?.admin_url || adminUrl
+            } else {
+              const responseText = await updateSiteRes.text().catch(() => "")
+              
+              // Check if the error is about subdomain uniqueness
+              if (updateSiteRes.status === 422 && responseText.includes("must be unique")) {
+                throw new Error(`The site name "${safeName}" is already taken. Please choose a different name.`)
               }
-            } catch {
-              // If rename fails, keep using existing site without failing the whole deploy
+              // For other errors, continue with the deploy (don't fail just because rename failed)
             }
           }
         }
