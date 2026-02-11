@@ -3494,7 +3494,7 @@ function ProjectContent() {
 
                   {isGenerating && (
                     <div className="space-y-3 rounded-2xl border border-zinc-800/70 bg-zinc-900/60 p-3 sm:p-4">
-                      <TextShimmer className="text-sm text-zinc-300">
+                      <TextShimmer className="text-sm">
                         {agentStatus || "Working on your update"}
                       </TextShimmer>
                       <Steps defaultOpen>
@@ -3813,7 +3813,7 @@ function ProjectContent() {
                 {/* Thinking bar + reasoning (agent-like) */}
                 {isGenerating && (
                   <div className="space-y-3 rounded-2xl border border-zinc-800/70 bg-zinc-900/60 p-4">
-                    <TextShimmer className="text-sm text-zinc-300">
+                    <TextShimmer className="text-sm">
                       {agentStatus || "Working on your update"}
                     </TextShimmer>
                     <Steps defaultOpen>
