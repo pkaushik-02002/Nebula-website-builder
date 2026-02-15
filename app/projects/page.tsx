@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { doc, deleteDoc } from "firebase/firestore"
+import { deleteDoc, doc } from "firebase/firestore"
 import {
   LayoutGrid,
   Compass,
@@ -21,6 +21,9 @@ import {
   User,
   CreditCard,
   Users,
+  Loader2,
+  Globe,
+  Lock,
 } from "lucide-react"
 
 import { ProtectedRoute } from "@/components/auth/protected-route"
@@ -51,6 +54,7 @@ type ProjectSummary = {
   prompt: string
   model?: string
   status: ProjectStatus
+  visibility?: "public" | "private" | "link-only"
   createdAt?: any
   updatedAt?: any
   sandboxUrl?: string
@@ -128,8 +132,11 @@ export default function ProjectsPage() {
   const isTeamsPlan = !!userData?.planId && planIdForDisplay(userData.planId) === "team"
 
   const [scope, setScope] = useState<"user" | "team">("user")
+  const [galleryTab, setGalleryTab] = useState<"recent" | "projects" | "templates">("templates")
   const [search, setSearch] = useState("")
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
+  const [isCreatingTeamWorkspace, setIsCreatingTeamWorkspace] = useState(false)
+  const [teamWorkspaceError, setTeamWorkspaceError] = useState<string | null>(null)
 
   // Open sidebar by default on lg+ screens
   useEffect(() => {
@@ -156,8 +163,10 @@ export default function ProjectsPage() {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
-    if (!q) return projects
-    return projects.filter((p) => (p.prompt || "").toLowerCase().includes(q))
+    return projects.filter((p) => {
+      const matchesQuery = !q || (p.prompt || "").toLowerCase().includes(q)
+      return matchesQuery
+    })
   }, [projects, search])
 
   const grouped = useMemo(() => {
@@ -174,6 +183,29 @@ export default function ProjectsPage() {
   }, [filtered])
 
   const workspaceCards = useMemo(() => filtered.slice(0, 6), [filtered])
+  const recentCards = useMemo(
+    () =>
+      [...filtered]
+        .sort((a, b) => {
+          const aTs = toDate(a.updatedAt || a.createdAt)?.getTime() ?? 0
+          const bTs = toDate(b.updatedAt || b.createdAt)?.getTime() ?? 0
+          return bTs - aTs
+        })
+        .slice(0, 8),
+    [filtered]
+  )
+  const publicTemplateCards = useMemo(
+    () =>
+      [...projects]
+        .filter((p) => p.visibility === "public")
+        .sort((a, b) => {
+          const aTs = toDate(a.updatedAt || a.createdAt)?.getTime() ?? 0
+          const bTs = toDate(b.updatedAt || b.createdAt)?.getTime() ?? 0
+          return bTs - aTs
+        })
+        .slice(0, 12),
+    [projects]
+  )
 
   const handleDeleteProject = async (e: React.MouseEvent, projectId: string) => {
     e.preventDefault()
@@ -182,6 +214,39 @@ export default function ProjectsPage() {
       await deleteDoc(doc(db, "projects", projectId))
     } catch (err) {
       console.error("Failed to delete project:", err)
+    }
+  }
+
+  const handleCreateTeamWorkspace = async () => {
+    if (!user || !isTeamsPlan || isCreatingTeamWorkspace) return
+    setIsCreatingTeamWorkspace(true)
+    setTeamWorkspaceError(null)
+    try {
+      const token = await user.getIdToken()
+      const suggestedName =
+        userData?.displayName?.trim()
+          ? `${userData.displayName.split(" ")[0]}'s Team`
+          : "Team Workspace"
+      const res = await fetch("/api/workspaces", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ name: suggestedName }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(json?.error || "Could not create workspace")
+      }
+      const workspaceId = json?.workspaceId
+      if (workspaceId) {
+        router.push(`/projects?workspace=${workspaceId}`)
+      }
+    } catch (err) {
+      setTeamWorkspaceError(err instanceof Error ? err.message : "Could not create workspace")
+    } finally {
+      setIsCreatingTeamWorkspace(false)
     }
   }
 
@@ -484,11 +549,11 @@ export default function ProjectsPage() {
           <div className="flex-1 overflow-y-auto">
             <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-12 lg:py-16">
               {/* Hero */}
-              <section className="rounded-[2rem] border border-zinc-200 bg-gradient-to-b from-white to-[#f8f8f4] px-4 py-8 text-center shadow-[0_25px_80px_-60px_rgba(0,0,0,0.8)] sm:px-8 sm:py-12">
-                <h1 className="text-balance text-3xl font-semibold tracking-tight text-zinc-900 sm:text-4xl lg:text-5xl">
+              <section className="px-1 py-2 text-center sm:py-3">
+                <h1 className="text-balance text-2xl font-semibold tracking-tight text-zinc-900 sm:text-3xl lg:text-4xl">
                   What do you want to create?
                 </h1>
-                <p className="mx-auto mt-2 max-w-lg text-sm text-zinc-500 sm:mt-3 sm:text-base">
+                <p className="mx-auto mt-2 max-w-xl text-sm text-zinc-500 sm:text-base">
                   Describe your idea. We'll generate the app.
                 </p>
               </section>
@@ -500,6 +565,56 @@ export default function ProjectsPage() {
               >
                 <AnimatedAIInput />
               </div>
+
+              <section className="mt-6 rounded-2xl border border-zinc-200 bg-white p-4 sm:mt-8 sm:p-5">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-zinc-900">Team Workspace</p>
+                    <p className="mt-1 text-xs text-zinc-500 sm:text-sm">
+                      {isTeamsPlan
+                        ? "Collaborate with your team in a shared workspace."
+                        : "Upgrade to Teams to unlock shared workspaces and team projects."}
+                    </p>
+                  </div>
+                  {isTeamsPlan ? (
+                    <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-9 border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
+                        onClick={() => setScope("team")}
+                      >
+                        <Users className="mr-2 h-4 w-4" />
+                        View Team Projects
+                      </Button>
+                      <Button
+                        type="button"
+                        className="h-9 bg-zinc-900 text-white hover:bg-black"
+                        onClick={handleCreateTeamWorkspace}
+                        disabled={isCreatingTeamWorkspace}
+                      >
+                        {isCreatingTeamWorkspace ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Users className="mr-2 h-4 w-4" />}
+                        Create Team Workspace
+                      </Button>
+                    </div>
+                  ) : (
+                    <Link
+                      href="/pricing"
+                      className="inline-flex h-9 items-center justify-center rounded-lg bg-zinc-900 px-4 text-sm font-medium text-white transition-colors hover:bg-black"
+                    >
+                      Upgrade to Teams
+                    </Link>
+                  )}
+                </div>
+                {!isTeamsPlan && (
+                  <div className="mt-3 inline-flex items-center rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs text-zinc-600">
+                    Teams plan required for shared workspaces
+                  </div>
+                )}
+                {teamWorkspaceError && (
+                  <p className="mt-3 text-xs text-red-600">{teamWorkspaceError}</p>
+                )}
+              </section>
 
               {isTeamsPlan && (
                 <div className="mt-8 flex justify-center sm:mt-10">
@@ -540,36 +655,64 @@ export default function ProjectsPage() {
                   </div>
                 )}
                 <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <h2 className="text-base font-semibold text-zinc-900 sm:text-lg">
-                      {scope === "team" ? "Team Projects" : "Your Workspace"}
-                    </h2>
-                    <p className="mt-0.5 text-xs text-zinc-500 sm:text-sm">
-                      {scope === "team"
-                        ? "Projects shared with your team."
-                        : "Continue from where you left off."}
-                    </p>
+                  <div className="inline-flex rounded-xl border border-zinc-200 bg-[#fbfbf8] p-1">
+                    {[
+                      { key: "recent", label: "Recently viewed" },
+                      { key: "projects", label: "My projects" },
+                      { key: "templates", label: "Templates" },
+                    ].map((tab) => (
+                      <button
+                        key={tab.key}
+                        type="button"
+                        onClick={() => setGalleryTab(tab.key as "recent" | "projects" | "templates")}
+                        className={cn(
+                          "rounded-lg px-3 py-2 text-sm transition-colors",
+                          galleryTab === tab.key
+                            ? "border border-zinc-200 bg-white text-zinc-900 shadow-sm"
+                            : "text-zinc-600 hover:text-zinc-900"
+                        )}
+                      >
+                        {tab.label}
+                      </button>
+                    ))}
                   </div>
-                  {filtered.length > 6 && (
-                    <button
-                      type="button"
-                      onClick={() => setIsSidebarOpen(true)}
-                      className="inline-flex items-center gap-1.5 text-sm text-zinc-600 transition-colors hover:text-zinc-800"
-                    >
-                      View all ({filtered.length})
-                      <ChevronRight className="h-4 w-4" />
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => setIsSidebarOpen(true)}
+                    className="inline-flex items-center gap-1.5 text-sm text-zinc-600 transition-colors hover:text-zinc-800"
+                  >
+                    Browse all
+                    <ChevronRight className="h-4 w-4" />
+                  </button>
                 </div>
 
                 {/* Workspace cards */}
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5 xl:grid-cols-3">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5 xl:grid-cols-4">
                   {projectsLoading && (
                     <div className="col-span-full rounded-2xl border border-zinc-200 bg-zinc-50 p-6 text-sm text-zinc-500">
                       Loading projects...
                     </div>
                   )}
-                  {workspaceCards.map((p) => (
+                  {galleryTab === "templates" &&
+                    publicTemplateCards.map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => router.push(`/project/${p.id}`)}
+                        className="text-left outline-none"
+                      >
+                        <Card className="group h-full rounded-2xl border border-zinc-200 bg-white shadow-none transition-all duration-200 hover:-translate-y-0.5 hover:border-zinc-300 focus-visible:ring-2 focus-visible:ring-zinc-600 focus-visible:ring-offset-2 focus-visible:ring-offset-[#f5f5f2]">
+                          <CardContent className="p-4">
+                            <div className="h-28 rounded-xl border border-zinc-200 bg-zinc-100 sm:h-32" />
+                            <p className="mt-3 truncate text-base font-medium text-zinc-900">{projectTitle(p.prompt)}</p>
+                            <p className="mt-1 text-sm text-zinc-500">
+                              {p.workspaceName || "Public Project"}
+                            </p>
+                          </CardContent>
+                        </Card>
+                      </button>
+                    ))}
+                  {galleryTab !== "templates" && (galleryTab === "recent" ? recentCards : workspaceCards).map((p) => (
                     <button
                       key={p.id}
                       type="button"
@@ -586,6 +729,19 @@ export default function ProjectsPage() {
                               </div>
                               <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-zinc-500">
                                 <span className="truncate">{p.model || "AI"}</span>
+                                <span className="inline-flex items-center gap-1 rounded-full border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-[10px] uppercase tracking-wider text-zinc-600">
+                                  {p.visibility === "public" || p.visibility === "link-only" ? (
+                                    <>
+                                      <Globe className="h-3 w-3" />
+                                      Public
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Lock className="h-3 w-3" />
+                                      Private
+                                    </>
+                                  )}
+                                </span>
                                 {scope === "team" && (
                                   <span className="inline-flex items-center gap-1 rounded-full border border-zinc-200 bg-zinc-100 px-2 py-0.5 text-[10px] uppercase tracking-wider text-zinc-600">
                                     <Users className="h-3 w-3" />
@@ -620,18 +776,31 @@ export default function ProjectsPage() {
                 </div>
 
                 {/* Empty state */}
-                {!projectsLoading && workspaceCards.length === 0 && (
+                {!projectsLoading && galleryTab !== "templates" && (galleryTab === "recent" ? recentCards.length === 0 : workspaceCards.length === 0) && (
                   <div className="mt-4 rounded-2xl border border-zinc-200 bg-white p-8 text-center sm:mt-6 sm:p-10">
                     <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl border border-zinc-200 bg-zinc-100">
                       <LayoutGrid className="h-6 w-6 text-zinc-500" />
                     </div>
                     <p className="mt-4 text-sm font-medium text-zinc-800">
-                      {scope === "team" ? "No team projects yet" : "No projects yet"}
+                      {galleryTab === "recent" ? "No recently viewed projects yet" : scope === "team" ? "No team projects yet" : "No projects yet"}
                     </p>
                     <p className="mt-1 mx-auto max-w-sm text-xs text-zinc-500">
                       {scope === "team"
                         ? "No team projects yet — create one or ask your teammates to share."
                         : "Use the prompt above to create your first project."}
+                    </p>
+                  </div>
+                )}
+                {!projectsLoading && galleryTab === "templates" && publicTemplateCards.length === 0 && (
+                  <div className="mt-4 rounded-2xl border border-zinc-200 bg-white p-8 text-center sm:mt-6 sm:p-10">
+                    <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl border border-zinc-200 bg-zinc-100">
+                      <LayoutGrid className="h-6 w-6 text-zinc-500" />
+                    </div>
+                    <p className="mt-4 text-sm font-medium text-zinc-800">
+                      No public templates yet
+                    </p>
+                    <p className="mt-1 mx-auto max-w-sm text-xs text-zinc-500">
+                      Public projects will appear here automatically.
                     </p>
                   </div>
                 )}

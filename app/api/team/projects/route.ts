@@ -68,6 +68,7 @@ export async function GET(req: Request) {
           prompt: data.prompt || "",
           status: data.status || "pending",
           model: data.model || null,
+          visibility: data.visibility || "private",
           slug: data.slug || null,
           workspaceId: data.workspaceId || null,
           workspaceName: data.workspaceId ? workspaceNameById.get(data.workspaceId) || "Workspace" : "Workspace",
@@ -87,4 +88,3 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: message }, { status })
   }
 }
-

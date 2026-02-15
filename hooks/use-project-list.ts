@@ -12,6 +12,7 @@ export type ProjectListItem = {
   prompt: string
   model?: string
   status: ProjectStatus
+  visibility?: "public" | "private" | "link-only"
   createdAt?: any
   updatedAt?: any
   sandboxUrl?: string
@@ -88,6 +89,7 @@ export function useProjectList({
               prompt: data.prompt || "",
               model: data.model,
               status: (data.status as ProjectStatus) || "pending",
+              visibility: (data.visibility as "public" | "private" | "link-only") || "private",
               createdAt: data.createdAt,
               updatedAt: data.updatedAt,
               sandboxUrl: data.sandboxUrl,
@@ -116,6 +118,7 @@ export function useProjectList({
               prompt: data.prompt || "",
               model: data.model,
               status: (data.status as ProjectStatus) || "pending",
+              visibility: (data.visibility as "public" | "private" | "link-only") || "private",
               createdAt: data.createdAt,
               updatedAt: data.updatedAt,
               sandboxUrl: data.sandboxUrl,
@@ -144,6 +147,7 @@ export function useProjectList({
               prompt: data.prompt || "",
               model: data.model,
               status: (data.status as ProjectStatus) || "pending",
+              visibility: (data.visibility as "public" | "private" | "link-only") || "private",
               createdAt: data.createdAt,
               updatedAt: data.updatedAt,
               sandboxUrl: data.sandboxUrl,
