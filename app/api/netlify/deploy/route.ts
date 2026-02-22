@@ -31,6 +31,37 @@ async function writeFilesToSandbox(sandbox: Sandbox, files: any[]) {
   }
 }
 
+async function normalizePostcssConfigForBuild(sandbox: Sandbox) {
+  const postcssPath = "/home/user/project/postcss.config.js"
+  const packageJsonPath = "/home/user/project/package.json"
+
+  let postcssContent = ""
+  try {
+    postcssContent = (await sandbox.files.read(postcssPath)).toString()
+  } catch {
+    return
+  }
+
+  if (!/^\s*export\s+default\b/m.test(postcssContent)) {
+    return
+  }
+
+  let packageType = ""
+  try {
+    const pkg = JSON.parse((await sandbox.files.read(packageJsonPath)).toString())
+    packageType = String(pkg?.type || "")
+  } catch {}
+
+  if (packageType === "module") {
+    return
+  }
+
+  const normalized = postcssContent.replace(/^\s*export\s+default\b/m, "module.exports =")
+  if (normalized !== postcssContent) {
+    await sandbox.files.write(postcssPath, normalized)
+  }
+}
+
 async function zipDistFromSandbox(sandbox: Sandbox) {
   // List all files under dist
   const list = await sandbox.commands.run(
@@ -142,6 +173,7 @@ export async function POST(req: Request) {
         })
 
         await writeFilesToSandbox(sandbox, project.files)
+        await normalizePostcssConfigForBuild(sandbox)
 
         const hasLockFile = project.files.some(
           (f: any) => f?.path === "package-lock.json" || f?.path === "npm-shrinkwrap.json"
