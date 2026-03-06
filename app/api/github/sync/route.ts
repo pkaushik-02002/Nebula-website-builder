@@ -76,7 +76,8 @@ export async function POST(req: Request) {
     }
 
     let installationId = Number(projectData?.githubInstallationId || 0)
-    let repoFullName = String(projectData?.githubRepoFullName || "")
+    const preferredRepoFullName = String(projectData?.githubRepoFullName || "")
+    let repoFullName = preferredRepoFullName
 
     for (const installation of installations) {
       const iid = Number(installation.id)
@@ -84,17 +85,19 @@ export async function POST(req: Request) {
       const repos = await getUserInstallationRepos(token, iid)
       if (!repos.length) continue
 
-      if (repoFullName) {
-        const found = repos.find((r) => String(r.full_name) === repoFullName)
+      if (preferredRepoFullName) {
+        const found = repos.find((r) => String(r.full_name) === preferredRepoFullName)
         if (found) {
           installationId = iid
+          repoFullName = preferredRepoFullName
           break
         }
-      } else {
-        installationId = iid
-        repoFullName = String(repos[0]?.full_name || "")
-        break
       }
+
+      // Fallback: if the saved repo is no longer accessible, use first installed repo.
+      installationId = iid
+      repoFullName = String(repos[0]?.full_name || "")
+      if (repoFullName) break
     }
 
     if (!installationId || !repoFullName) {
