@@ -419,11 +419,6 @@ export function WebsiteSettingsPanel({ projectId, initialSettings, projectName, 
             {githubLoading || githubSyncing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
             {!githubConnected ? "Connect & Publish" : githubIntegration?.repoFullName ? "Sync Latest Changes" : "Publish to GitHub"}
           </Button>
-          {githubConnected ? (
-            <Button type="button" variant="outline" onClick={handleDisconnectGitHub} disabled={githubLoading || githubSyncing} className="border-zinc-300 text-zinc-700">
-              Disconnect GitHub
-            </Button>
-          ) : null}
         </div>
         {githubError ? <p className="mt-2 text-xs text-red-600">{githubError}</p> : null}
         {githubSuccess ? (
