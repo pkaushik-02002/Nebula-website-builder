@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react"
 import { doc, updateDoc } from "firebase/firestore"
-import { ChevronDown, Globe, Loader2, Save } from "lucide-react"
+import { CheckCircle2, ChevronDown, ExternalLink, Globe, Loader2, Save } from "lucide-react"
 import { db } from "@/lib/firebase"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -27,6 +27,8 @@ type Props = {
   }
   githubIntegration?: {
     repoFullName?: string
+    repoUrl?: string
+    syncedAt?: string | Date | { toDate: () => Date }
   }
   onSaved?: (next: WebsiteSettings) => void
 }
@@ -80,10 +82,24 @@ export function WebsiteSettingsPanel({ projectId, initialSettings, projectName, 
   const [schemaPushLoading, setSchemaPushLoading] = useState(false)
   const [githubConnected, setGithubConnected] = useState<boolean | null>(null)
   const [githubLoading, setGithubLoading] = useState(false)
+  const [githubSyncing, setGithubSyncing] = useState(false)
   const [githubError, setGithubError] = useState("")
+  const [githubSuccess, setGithubSuccess] = useState("")
 
   const envVars = useMemo(() => settings.envVars || [], [settings.envVars])
   const databaseConnected = !!databaseIntegration?.connected || !!databaseIntegration?.projectRef
+  const githubSyncedLabel = useMemo(() => {
+    const raw = githubIntegration?.syncedAt
+    if (!raw) return ""
+    const date =
+      typeof raw === "object" && raw && "toDate" in raw && typeof raw.toDate === "function"
+        ? raw.toDate()
+        : raw instanceof Date
+          ? raw
+          : new Date(String(raw))
+    if (Number.isNaN(date.getTime())) return ""
+    return `Last synced ${date.toLocaleString()}`
+  }, [githubIntegration?.syncedAt])
 
   const update = <K extends keyof WebsiteSettings>(key: K, value: WebsiteSettings[K]) => {
     setSettings((prev) => ({ ...prev, [key]: value }))
@@ -140,6 +156,7 @@ export function WebsiteSettingsPanel({ projectId, initialSettings, projectName, 
     try {
       setGithubLoading(true)
       setGithubError("")
+      setGithubSuccess("")
       const authHeader = await getAuthHeader()
       const res = await fetch(`/api/github/oauth/start?projectId=${encodeURIComponent(projectId)}`, { headers: authHeader })
       const json = await res.json().catch(() => ({}))
@@ -155,6 +172,7 @@ export function WebsiteSettingsPanel({ projectId, initialSettings, projectName, 
     try {
       setGithubLoading(true)
       setGithubError("")
+      setGithubSuccess("")
       const authHeader = await getAuthHeader()
       const res = await fetch("/api/github/disconnect", { method: "POST", headers: authHeader })
       if (!res.ok) throw new Error("Failed to disconnect GitHub.")
@@ -164,6 +182,35 @@ export function WebsiteSettingsPanel({ projectId, initialSettings, projectName, 
     } finally {
       setGithubLoading(false)
     }
+  }
+
+  const handleSyncToGitHub = async () => {
+    try {
+      setGithubSyncing(true)
+      setGithubError("")
+      setGithubSuccess("")
+      const authHeader = await getAuthHeader()
+      const res = await fetch("/api/github/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeader },
+        body: JSON.stringify({ projectId }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json?.error || "Failed to sync project to GitHub.")
+      setGithubSuccess("Project synced to GitHub.")
+    } catch (e) {
+      setGithubError(e instanceof Error ? e.message : "Failed to sync to GitHub.")
+    } finally {
+      setGithubSyncing(false)
+    }
+  }
+
+  const handleConnectAndPublish = async () => {
+    if (!githubConnected) {
+      await handleConnectGitHub()
+      return
+    }
+    await handleSyncToGitHub()
   }
 
   const refreshSupabaseState = async () => {
@@ -337,6 +384,7 @@ export function WebsiteSettingsPanel({ projectId, initialSettings, projectName, 
 
       <section className="rounded-2xl border border-zinc-200 bg-white p-5">
         <h3 className="text-sm font-semibold text-zinc-900">GitHub</h3>
+        <p className="mt-1 text-xs text-zinc-500">Connect once, then publish your full project files to GitHub in one click.</p>
         <div className="mt-4 flex items-center justify-between rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2.5">
           <span className="text-sm text-zinc-700">Account</span>
           <span className="inline-flex items-center rounded-full border border-zinc-300 bg-white px-2.5 py-1 text-xs text-zinc-700">
@@ -347,22 +395,43 @@ export function WebsiteSettingsPanel({ projectId, initialSettings, projectName, 
           <div className="mt-3 rounded-xl border border-zinc-200 bg-white px-3 py-2.5">
             <p className="text-[11px] uppercase tracking-wider text-zinc-500">Linked Repository</p>
             <p className="mt-1 text-sm text-zinc-800">{githubIntegration.repoFullName}</p>
+            {githubSyncedLabel ? <p className="mt-1 text-xs text-zinc-500">{githubSyncedLabel}</p> : null}
+            {githubIntegration.repoUrl ? (
+              <a
+                href={githubIntegration.repoUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-2 inline-flex items-center gap-1 text-xs text-zinc-700 underline underline-offset-2"
+              >
+                Open Repository
+                <ExternalLink className="h-3.5 w-3.5" />
+              </a>
+            ) : null}
           </div>
         ) : null}
-        <div className="mt-3 flex gap-2">
-          {!githubConnected ? (
-            <Button type="button" variant="outline" onClick={handleConnectGitHub} disabled={githubLoading} className="border-zinc-300 text-zinc-700">
-              {githubLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-              Connect GitHub
-            </Button>
-          ) : (
-            <Button type="button" variant="outline" onClick={handleDisconnectGitHub} disabled={githubLoading} className="border-zinc-300 text-zinc-700">
-              {githubLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button
+            type="button"
+            onClick={handleConnectAndPublish}
+            disabled={githubLoading || githubSyncing}
+            className="bg-zinc-900 text-white hover:bg-black disabled:opacity-60"
+          >
+            {githubLoading || githubSyncing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            {!githubConnected ? "Connect & Publish" : githubIntegration?.repoFullName ? "Sync Latest Changes" : "Publish to GitHub"}
+          </Button>
+          {githubConnected ? (
+            <Button type="button" variant="outline" onClick={handleDisconnectGitHub} disabled={githubLoading || githubSyncing} className="border-zinc-300 text-zinc-700">
               Disconnect GitHub
             </Button>
-          )}
+          ) : null}
         </div>
         {githubError ? <p className="mt-2 text-xs text-red-600">{githubError}</p> : null}
+        {githubSuccess ? (
+          <p className="mt-2 inline-flex items-center gap-1 text-xs text-emerald-700">
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            {githubSuccess}
+          </p>
+        ) : null}
       </section>
 
       <section className="rounded-2xl border border-zinc-200 bg-white p-5">

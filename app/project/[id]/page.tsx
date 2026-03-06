@@ -2615,6 +2615,8 @@ function ProjectContent() {
               }}
               githubIntegration={{
                 repoFullName: project?.githubRepoFullName,
+                repoUrl: project?.githubRepoUrl,
+                syncedAt: project?.githubSyncedAt,
               }}
               onSaved={(next) => setProject((prev) => (prev ? { ...prev, websiteSettings: next } : prev))}
             />
