@@ -87,7 +87,7 @@ import { motion, AnimatePresence } from "framer-motion"
 import { applyPatch } from "diff"
 import type { GeneratedFile, Message, Project, ProjectVisibility } from "./types"
 import { extractAgentMessage } from "./utils"
-import { ProjectErrorBoundary, ChatMessage, CodePanel, ResponsivePreview, BrowserNavigator } from "@/components/project"
+import { ProjectErrorBoundary, ChatMessage, ResponsivePreview, BrowserNavigator } from "@/components/project"
 import { WebsiteSettingsPanel } from "@/components/project/website-settings-panel"
 import { VisualEditDesignPanel, type DesignSnapshot } from "@/components/project/visual-edit-design-panel"
 
@@ -104,7 +104,7 @@ function ProjectContent() {
 
   const [project, setProject] = useState<Project | null>(null)
   const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<"preview" | "code">("code")
+  const [activeTab, setActiveTab] = useState<"preview" | "code">("preview")
   const [chatInput, setChatInput] = useState("")
   const [isGenerating, setIsGenerating] = useState(false)
   const [generatingFiles, setGeneratingFiles] = useState<GeneratedFile[]>([])
@@ -2437,33 +2437,35 @@ function ProjectContent() {
   return (
     <div className="min-h-screen bg-[#f5f5f2] text-[#1f1f1f]">
       <div className="mx-auto flex min-h-screen max-w-[1800px] flex-col px-3 py-3 sm:px-5 sm:py-4 lg:h-screen lg:px-6">
-        <header className="mb-3 flex flex-col gap-3 border-b border-zinc-200 bg-[#f5f5f2] px-1 pb-3 sm:mb-4 sm:flex-row sm:items-center sm:justify-between sm:pb-4 lg:h-14 lg:flex-row lg:items-center lg:pb-0">
-          <div className="flex min-w-0 items-center gap-4">
-            <Link href="/projects" className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500 transition-colors hover:text-zinc-800">
-              Studio
-            </Link>
-            <div className="flex min-w-0 items-center gap-2">
-              <h1 className="truncate text-base font-semibold text-[#1f1f1f] sm:text-lg lg:text-xl">{displayProjectName}</h1>
-              {canEdit && (
-                <button
-                  type="button"
-                  onClick={() => setWebsiteSettingsOpen(true)}
-                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-zinc-200 bg-white text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900"
-                  aria-label="Open website settings"
-                  title="Website Settings"
-                >
-                  <Edit2 className="h-3.5 w-3.5" />
-                </button>
-              )}
+        <header className="mb-3 border-b border-zinc-200 bg-[#f5f5f2] px-1 pb-3 sm:mb-4 sm:pb-4 lg:h-14 lg:pb-0">
+          <div className="flex items-start justify-between gap-3 sm:items-center">
+            <div className="flex min-w-0 items-center gap-4">
+              <Link href="/projects" className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500 transition-colors hover:text-zinc-800">
+                Studio
+              </Link>
+              <div className="flex min-w-0 items-center gap-2">
+                <h1 className="truncate text-base font-semibold text-[#1f1f1f] sm:text-lg lg:text-xl">{displayProjectName}</h1>
+                {canEdit && (
+                  <button
+                    type="button"
+                    onClick={() => setWebsiteSettingsOpen(true)}
+                    className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-zinc-200 bg-white text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900"
+                    aria-label="Open website settings"
+                    title="Website Settings"
+                  >
+                    <Edit2 className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
             </div>
-          </div>
-          <div className="hidden items-center gap-2 lg:flex">
-            <Button type="button" size="sm" variant="outline" className="h-9 rounded-lg border-zinc-300 bg-white px-3 text-zinc-700 hover:bg-zinc-100" onClick={() => setWebsiteSettingsOpen(true)}>
+            <div className="flex shrink-0 items-center gap-2">
+            <Button type="button" size="sm" variant="outline" className="hidden h-9 rounded-lg border-zinc-300 bg-white px-3 text-zinc-700 hover:bg-zinc-100 lg:inline-flex" onClick={() => setWebsiteSettingsOpen(true)}>
               Website Settings
             </Button>
             <Button type="button" size="sm" className="h-9 rounded-lg bg-[#1f1f1f] px-3 text-white hover:bg-black" onClick={() => setDeployOpen(true)}>
               Go Live
             </Button>
+          </div>
           </div>
         </header>
 
@@ -2481,7 +2483,10 @@ function ProjectContent() {
             </button>
             <button
               type="button"
-              onClick={() => setMobileTab("preview")}
+              onClick={() => {
+                setActiveTab("preview")
+                setMobileTab("preview")
+              }}
               className={cn(
                 "flex-1 rounded-xl px-3 py-2 text-sm font-medium transition-colors",
                 mobileTab === "preview" ? "bg-zinc-900 text-white" : "text-zinc-600 hover:bg-zinc-100"
@@ -2950,53 +2955,22 @@ function ProjectContent() {
             <div className="flex h-full min-h-0 flex-col">
               <div className="flex items-center justify-between gap-3 border-b border-zinc-100 px-4 py-3 sm:px-5 sm:py-4">
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold tracking-wide text-zinc-800">
-                    {activeTab === "code" ? "Project Code" : "Live Website"}
-                  </p>
+                  <p className="text-sm font-semibold tracking-wide text-zinc-800">Live Website</p>
                   <p className="mt-1 truncate text-xs text-zinc-500">
-                    {activeTab === "code"
-                      ? "Browse the project file tree and inspect generated source code."
-                      : "Select a section in the preview to edit with context."}
+                    Select a section in the preview to edit with context.
                   </p>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
-                  <div className="inline-flex rounded-xl border border-zinc-200 bg-zinc-50 p-1">
-                    <button
-                      type="button"
-                      onClick={() => setActiveTab("preview")}
-                      className={cn(
-                        "rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
-                        activeTab === "preview" ? "bg-zinc-900 text-white" : "text-zinc-600 hover:bg-white"
-                      )}
-                    >
-                      Preview
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setActiveTab("code")}
-                      className={cn(
-                        "rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
-                        activeTab === "code" ? "bg-zinc-900 text-white" : "text-zinc-600 hover:bg-white"
-                      )}
-                    >
-                      Code
-                    </button>
-                  </div>
                   <Button type="button" size="sm" variant="outline" className="h-9 rounded-lg border-zinc-300 bg-white px-3 text-zinc-700 hover:bg-zinc-100 lg:hidden" onClick={() => setWebsiteSettingsOpen(true)}>
                     Website Settings
                   </Button>
-                  <Button type="button" size="sm" className="h-9 rounded-lg bg-[#1f1f1f] px-3 text-white hover:bg-black lg:hidden" onClick={() => setDeployOpen(true)}>
-                    Go Live
+                  <Button type="button" size="sm" variant="outline" className="h-9 rounded-lg border-zinc-300 bg-white px-3 text-zinc-700 hover:bg-zinc-100" onClick={handlePreviewReload}>
+                    Refresh
                   </Button>
-                  {activeTab === "preview" && (
-                    <Button type="button" size="sm" variant="outline" className="h-9 rounded-lg border-zinc-300 bg-white px-3 text-zinc-700 hover:bg-zinc-100" onClick={handlePreviewReload}>
-                      Refresh
-                    </Button>
-                  )}
                 </div>
               </div>
               <div className="relative min-h-0 flex-1 overflow-hidden">
-                {activeTab === "preview" && ((isSandboxLoading || !!buildError) && !isTimelineCollapsed) && (
+                {((isSandboxLoading || !!buildError) && !isTimelineCollapsed) && (
                   <BuildTimeline
                     className="p-4 sm:p-6"
                     steps={buildSteps}
@@ -3010,14 +2984,7 @@ function ProjectContent() {
                     isFixing={isFixing}
                   />
                 )}
-                {activeTab === "code" ? (
-                  <CodePanel
-                    files={displayFiles}
-                    selectedFile={selectedFile}
-                    onSelectFile={setSelectedFile}
-                    isGenerating={isGenerating}
-                  />
-                ) : resolvedPreviewUrl ? (
+                {resolvedPreviewUrl ? (
                   <ResponsivePreview
                     src={resolvedPreviewUrl}
                     canEdit={canEdit}
