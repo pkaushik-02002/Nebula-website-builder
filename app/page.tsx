@@ -102,7 +102,7 @@ export default function Home() {
           <div className="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_50%_20%,rgba(255,255,255,0.25),transparent_60%)]" />
 
           {/* CONTENT */}
-          <div className="relative z-10 mx-auto flex min-h-[calc(100vh-7rem)] max-w-5xl items-center justify-center text-center">
+          <div className="relative z-10 mx-auto flex min-h-[calc(100vh-7rem)] max-w-5xl items-center justify-center pb-20 text-center sm:pb-24">
             <div className="w-full">
               
               <h1 className="font-display text-5xl font-bold leading-[0.92] tracking-tight text-white sm:text-6xl md:text-7xl lg:text-[5.5rem]">
