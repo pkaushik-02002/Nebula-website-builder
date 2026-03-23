@@ -183,7 +183,7 @@ function PlanningResponseCard(props: {
         </div>
 
         {!useCustomAnswer && guidedAnswerSet ? (
-          <div className="mb-5 flex flex-wrap gap-2">
+          <div className="mb-5 space-y-2">
             {guidedAnswerSet.options.map((option) => {
               const selected = selectedGuidedOptions.includes(option.label)
               return (
@@ -192,13 +192,24 @@ function PlanningResponseCard(props: {
                   type="button"
                   onClick={() => onToggleGuidedOption(option.label)}
                   className={cn(
-                    "rounded-full px-3 py-2 text-sm transition-colors ring-1",
+                    "flex w-full items-start gap-3 rounded-xl border px-3.5 py-3 text-left text-sm transition-colors",
                     selected
-                      ? "bg-zinc-900 text-white ring-zinc-900"
-                      : "bg-[#faf8f2] text-zinc-700 ring-[#e8e1d6] hover:bg-white hover:text-zinc-900"
+                      ? "border-zinc-900 bg-zinc-900 text-white"
+                      : "border-[#e8e1d6] bg-[#faf8f2] text-zinc-700 hover:bg-white hover:text-zinc-900"
                   )}
                 >
-                  {option.label}
+                  <span
+                    className={cn(
+                      "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border text-[10px]",
+                      selected
+                        ? "border-white/80 bg-white text-zinc-900"
+                        : "border-zinc-300 bg-white text-transparent"
+                    )}
+                    aria-hidden="true"
+                  >
+                    •
+                  </span>
+                  <span className="leading-6">{option.label}</span>
                 </button>
               )
             })}
@@ -382,6 +393,8 @@ export function ProjectCreationStudio(props: {
     if (isSubmitting || !canEdit) return
     const value = blueprintVisible
       ? draft.trim()
+      : !guidedAnswerSet
+        ? draft.trim()
       : useCustomAnswer
         ? draft.trim()
         : buildGuidedAnswerDraft(guidedAnswerSet, selectedGuidedOptions)
@@ -428,6 +441,8 @@ export function ProjectCreationStudio(props: {
 
   const canSubmitCurrentAnswer = blueprintVisible
     ? !!draft.trim()
+    : !guidedAnswerSet
+      ? !!draft.trim()
     : useCustomAnswer
       ? !!draft.trim()
       : !!buildGuidedAnswerDraft(guidedAnswerSet, selectedGuidedOptions)

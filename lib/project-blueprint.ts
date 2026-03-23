@@ -711,11 +711,35 @@ export function getGuidedAnswerSet(blueprint: ProjectBlueprint): GuidedAnswerSet
     .find((item) => item.status === "unknown" || item.status === "suggested")
 
   if (!unresolvedItem) return null
-  const options = deriveGuidedOptions(blueprint, unresolvedItem)
+  const derivedOptions = deriveGuidedOptions(blueprint, unresolvedItem)
+  const fallbackOptions: Record<string, string[]> = {
+    audience: [
+      "Early-stage B2B founders; first action: book a demo",
+      "Startup operators and growth leads; first action: start a free trial",
+      "SMB owners; first action: request pricing",
+      "Technical teams and product managers; first action: explore features",
+    ],
+    pages: ["Home", "Features", "Pricing", "FAQ", "Contact"],
+    systems: ["Authentication", "Payments", "CMS", "Persistent backend data", "None of these for version one"],
+    features: ["Lead capture forms", "Testimonials", "Pricing comparison", "FAQ accordion", "Analytics"],
+    scope: ["Focused version one (fast launch)", "Balanced scope (core + polish)", "Larger scope (more depth before launch)"],
+  }
+  const options = derivedOptions.length >= 2
+    ? derivedOptions
+    : fallbackOptions[unresolvedItem.key] || []
   if (options.length < 2) return null
 
-  const selectionMode =
+  const questionText = (blueprint.openQuestions[0] || unresolvedItem.label || "").toLowerCase()
+  const optionCount = options.length
+  const mentionsMultipleIntent =
+    /\b(select all|all that apply|which of these|any of these|what pages|which pages|what features|which features|integrations|systems)\b/i.test(
+      questionText
+    )
+  const keyDefaultsToMultiple =
     unresolvedItem.key === "pages" || unresolvedItem.key === "systems" || unresolvedItem.key === "features"
+
+  const selectionMode: "single" | "multiple" =
+    keyDefaultsToMultiple || mentionsMultipleIntent || optionCount >= 5
       ? "multiple"
       : "single"
 

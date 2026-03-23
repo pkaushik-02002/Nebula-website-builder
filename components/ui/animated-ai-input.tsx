@@ -92,6 +92,21 @@ const MODEL_META: Record<string, { label: string; description: string; badges: s
     description: "Stronger general-purpose model for larger refactors and more detailed builds.",
     badges: ["Premium", "General"],
   },
+  "Claude Sonnet 4.6": {
+    label: "Claude Sonnet 4.6",
+    description: "High-quality Claude model for robust coding, UI generation, and iterative product edits.",
+    badges: ["Premium", "Claude"],
+  },
+  "Claude Sonnet 4": {
+    label: "Claude Sonnet 4",
+    description: "Balanced Claude model for reliable implementation and design-oriented updates.",
+    badges: ["Premium", "Claude"],
+  },
+  "Claude Opus 4": {
+    label: "Claude Opus 4",
+    description: "Most capable Claude model for complex refactors and deeper reasoning workflows.",
+    badges: ["Premium", "Claude"],
+  },
   "minimaxai/minimax-m2.1": {
     label: "MiniMax M2.1",
     description: "Multi-language coding, app and web dev, office AI, and agent-style workflows.",
@@ -164,6 +179,7 @@ export function AnimatedAIInput({
     "o3-mini",
     "GPT-4-1 Mini",
     "GPT-4-1",
+    "Claude Sonnet 4.6",
     "minimaxai/minimax-m2.1",
     "meta/llama-3.3-70b-instruct",
     "deepseek-ai/deepseek-r1",

@@ -1,4 +1,5 @@
 import OpenAI from "openai"
+import { AgentClient } from "@21st-sdk/node"
 import { adminAuth, adminDb } from "@/lib/firebase-admin"
 import { Timestamp } from "firebase-admin/firestore"
 import { DEFAULT_PLANS } from "@/lib/firebase"
@@ -8,12 +9,20 @@ const nvidia = new OpenAI({
   apiKey: process.env.NVIDIA_API_KEY || process.env.NGC_API_KEY,
   baseURL: "https://integrate.api.nvidia.com/v1",
 })
+const anClient = process.env.API_KEY_21ST
+  ? new AgentClient({ apiKey: process.env.API_KEY_21ST })
+  : null
 
 const DEFAULT_MODEL = "GPT-4-1 Mini"
 const OPENAI_MODEL_MAP: Record<string, string> = {
   "o3-mini": "o3-mini",
   "GPT-4-1 Mini": "gpt-4.1-mini",
   "GPT-4-1": "gpt-4.1",
+}
+const CLAUDE_MODEL_MAP: Record<string, string> = {
+  "Claude Sonnet 4.6": "claude-sonnet-4-6",
+  "Claude Sonnet 4": "claude-sonnet-4",
+  "Claude Opus 4": "claude-opus-4",
 }
 
 const CURATED_NVIDIA_MODELS = [
@@ -42,6 +51,88 @@ let cachedNvidiaModels: { models: string[]; expiresAt: number } | null = null
 type ParsedFileBlock = {
   path: string
   content: string
+}
+
+type AgentStreamParseResult = {
+  content: string
+  streamedLength: number
+}
+
+function parse21stUiMessageSSE(raw: string): AgentStreamParseResult {
+  const lines = raw.split(/\r?\n/)
+  let content = ""
+
+  for (const line of lines) {
+    if (!line.startsWith("data:")) continue
+    const payload = line.slice(5).trim()
+    if (!payload || payload === "[DONE]") continue
+
+    try {
+      const event = JSON.parse(payload) as Record<string, unknown>
+      const type = typeof event.type === "string" ? event.type : ""
+
+      if (type === "text-delta" && typeof event.delta === "string") {
+        content += event.delta
+        continue
+      }
+
+      if (type === "text" && typeof event.text === "string") {
+        content += event.text
+        continue
+      }
+
+      if (type === "message-delta" && typeof event.delta === "string") {
+        content += event.delta
+        continue
+      }
+
+      if (type === "response.output_text.delta" && typeof event.delta === "string") {
+        content += event.delta
+        continue
+      }
+    } catch {
+      // ignore malformed non-JSON events
+    }
+  }
+
+  return { content, streamedLength: content.length }
+}
+
+async function generateWith21stAgent(params: {
+  agentSlug: string
+  model?: string
+  systemPrompt: string
+  userMessageContent: string
+}): Promise<AgentStreamParseResult> {
+  if (!anClient) {
+    throw new Error("21st agent API key is not configured")
+  }
+
+  const result = await anClient.threads.run({
+    agent: params.agentSlug,
+    messages: [
+      {
+        role: "user",
+        parts: [{ type: "text", text: params.userMessageContent }],
+      },
+    ],
+    options: {
+      ...(params.model ? { model: params.model } : {}),
+      systemPrompt: {
+        type: "preset",
+        preset: "claude_code",
+        append: params.systemPrompt,
+      },
+      maxTurns: 6,
+    },
+  })
+
+  const raw = await result.response.text()
+  const parsed = parse21stUiMessageSSE(raw)
+  if (!parsed.content.trim()) {
+    throw new Error("21st agent returned empty content")
+  }
+  return parsed
 }
 
 function isOpenSourceNvidiaModel(modelId: string): boolean {
@@ -309,7 +400,7 @@ export async function GET() {
   const nvidiaModels = await getNvidiaModels()
   return Response.json({
     defaultModel: DEFAULT_MODEL,
-    models: [...Object.keys(OPENAI_MODEL_MAP), ...nvidiaModels],
+    models: [...Object.keys(OPENAI_MODEL_MAP), ...Object.keys(CLAUDE_MODEL_MAP), ...nvidiaModels],
   })
 }
 
@@ -319,8 +410,17 @@ export async function POST(req: Request) {
     model?: string
     idToken?: string
     existingFiles?: { path: string; content: string }[]
+    creationMode?: "build" | "agent"
+    agentSlug?: string
   }
-  const { prompt, model = DEFAULT_MODEL, idToken, existingFiles } = body
+  const {
+    prompt,
+    model = DEFAULT_MODEL,
+    idToken,
+    existingFiles,
+    creationMode = "build",
+    agentSlug,
+  } = body
 
   // authenticate user via Firebase ID token (body) or Authorization Bearer token (header)
   const authHeader = req.headers.get("authorization") || req.headers.get("Authorization")
@@ -389,6 +489,9 @@ export async function POST(req: Request) {
 
   const { client, selectedModel, provider } = await resolveModel(model)
   const isFollowUp = Array.isArray(existingFiles) && existingFiles.length > 0
+  const shouldUse21stAgent = creationMode === "agent" && Boolean(agentSlug)
+  const selectedClaudeModel = CLAUDE_MODEL_MAP[model]
+  const shouldUse21stProvider = shouldUse21stAgent || Boolean(selectedClaudeModel)
 
   const systemPromptFollowUp = `You are an expert React developer. The user is asking for CHANGES or ADDITIONS to an existing project. You will receive the current project files.
 
@@ -535,7 +638,68 @@ OPEN-SOURCE MODEL RELIABILITY RULES (MANDATORY):
   const stream = new ReadableStream({
     async start(controller) {
       try {
-        if (provider === "nvidia") {
+        if (shouldUse21stProvider) {
+          try {
+            const agentResult = await generateWith21stAgent({
+              agentSlug: agentSlug || "my-agent",
+              model: selectedClaudeModel,
+              systemPrompt: finalSystemPrompt,
+              userMessageContent,
+            })
+            streamedLength = agentResult.streamedLength
+            controller.enqueue(encoder.encode(agentResult.content))
+          } catch (agentError) {
+            console.error("21st agent generation failed, falling back to default provider:", agentError)
+            if (provider === "nvidia") {
+              const validated = await generateWithNvidiaValidation({
+                client,
+                selectedModel,
+                systemPrompt: finalSystemPrompt,
+                userMessageContent,
+                existingFiles,
+              })
+              usageInfo = validated.usageInfo
+              streamedLength = validated.streamedLength
+              if (validated.remainingIssues.length > 0) {
+                console.warn("NVIDIA generation still has unresolved validation issues:", validated.remainingIssues)
+                const salvaged = await salvageWithOpenAI({
+                  systemPrompt: finalSystemPrompt,
+                  userMessageContent,
+                  brokenContent: validated.finalContent,
+                  issues: validated.remainingIssues,
+                })
+                usageInfo = salvaged.usage || usageInfo
+                streamedLength = salvaged.content.length
+                controller.enqueue(encoder.encode(salvaged.content))
+              } else {
+                controller.enqueue(encoder.encode(validated.finalContent))
+              }
+            } else {
+              const completion = await client.chat.completions.create({
+                model: selectedModel,
+                stream: true,
+                messages: [
+                  { role: "system", content: finalSystemPrompt },
+                  { role: "user", content: userMessageContent },
+                ],
+                max_tokens: 8000,
+                stream_options: { include_usage: true } as any,
+              })
+
+              for await (const chunk of completion) {
+                if ((chunk as any).usage) usageInfo = (chunk as any).usage
+                if ((chunk as any).choices && (chunk as any).choices[0]?.usage) {
+                  usageInfo = (chunk as any).choices[0].usage
+                }
+                const content = chunk.choices[0]?.delta?.content
+                if (content) {
+                  streamedLength += content.length
+                  controller.enqueue(encoder.encode(content))
+                }
+              }
+            }
+          }
+        } else if (provider === "nvidia") {
           const validated = await generateWithNvidiaValidation({
             client,
             selectedModel,

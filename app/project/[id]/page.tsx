@@ -118,6 +118,7 @@ function ProjectContent() {
   const [loading, setLoading] = useState(true)
   const [isPlanningReplyPending, setIsPlanningReplyPending] = useState(false)
   const [creationStudioExited, setCreationStudioExited] = useState(false)
+  const [planningStudioOpenManual, setPlanningStudioOpenManual] = useState(false)
   const [activeTab, setActiveTab] = useState<"preview" | "code">("preview")
   const [chatInput, setChatInput] = useState("")
   const [isGenerating, setIsGenerating] = useState(false)
@@ -726,10 +727,16 @@ function ProjectContent() {
     : []
   const shouldShowCreationStudio =
     !!project &&
-    project.status === "pending" &&
-    !creationStudioExited &&
-    planningStatus !== "approved" &&
-    planningStatus !== "skipped" &&
+    creationMode === "agent" &&
+    (
+      planningStudioOpenManual ||
+      (
+        project.status === "pending" &&
+        !creationStudioExited &&
+        planningStatus !== "approved" &&
+        planningStatus !== "skipped"
+      )
+    ) &&
     !isGenerating
 
   const handleShare = () => {
@@ -1445,6 +1452,7 @@ function ProjectContent() {
     pendingGenerationStartedRef.current = null
     generationGuardRef.current = null
     setCreationStudioExited(false)
+    setPlanningStudioOpenManual(false)
   }, [projectId])
 
   useEffect(() => {
@@ -1477,15 +1485,19 @@ function ProjectContent() {
     )
   }, [project, canEdit, projectId])
 
-  // Start generation on mount if pending and already explicitly approved or skipped.
+  // Start generation on mount:
+  // - build mode: generate directly from prompt (no default planning gate)
+  // - agent mode: only after explicit plan approval/skip
   useEffect(() => {
     if (!project || project.status !== "pending" || isGenerating) return
-    if (project.planningStatus !== "approved" && project.planningStatus !== "skipped") return
+    if (project.creationMode === "agent") {
+      if (project.planningStatus !== "approved" && project.planningStatus !== "skipped") return
+    }
     if (pendingGenerationStartedRef.current === projectId) return
     pendingGenerationStartedRef.current = projectId
     setCreationStudioExited(true)
     generateCode(project.prompt, project.model)
-  }, [project?.status, projectId, isGenerating, project?.prompt, project?.model, project?.planningStatus])
+  }, [project?.status, projectId, isGenerating, project?.prompt, project?.model, project?.planningStatus, project?.creationMode])
 
   /** Merge model output (diffs or full files) into existing project; applies patches when content is unified diff. */
   const mergeWithExistingFiles = (
@@ -1663,10 +1675,19 @@ function ProjectContent() {
         throw new Error("Not authenticated - please sign in")
       }
 
-      const body: { prompt: string; model: string; idToken: string; existingFiles?: { path: string; content: string }[] } = {
+      const body: {
+        prompt: string
+        model: string
+        idToken: string
+        existingFiles?: { path: string; content: string }[]
+        creationMode?: "build" | "agent"
+        agentSlug?: string
+      } = {
         prompt,
         model: model || "GPT-4-1 Mini",
         idToken,
+        creationMode: project.creationMode || "build",
+        agentSlug: project.creationMode === "agent" ? project.agentSlug : undefined,
       }
       if (project.files && project.files.length > 0) {
         body.existingFiles = project.files
@@ -2803,7 +2824,13 @@ function ProjectContent() {
         onGeneratePlan={handleGeneratePlan}
         onBuildFromPlan={handleBuildFromPlan}
         onSkip={handleSkipPlanAndBuild}
-        onBack={() => router.push("/projects")}
+        onBack={() => {
+          if (planningStudioOpenManual) {
+            setPlanningStudioOpenManual(false)
+            return
+          }
+          router.push("/projects")
+        }}
       />
     )
   }
@@ -2833,6 +2860,17 @@ function ProjectContent() {
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-2">
+            {creationMode === "agent" ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-9 rounded-lg border-zinc-300 bg-white px-3 text-zinc-700 hover:bg-zinc-100"
+                onClick={() => setPlanningStudioOpenManual(true)}
+              >
+                Plan mode
+              </Button>
+            ) : null}
             <Button
               type="button"
               size="sm"

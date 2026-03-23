@@ -58,15 +58,26 @@ export function CreationStudioActions(props: {
             {isDraftingPlan ? "Generating plan..." : "Approve answers and generate plan"}
           </Button>
         ) : null}
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={onSkip}
-          disabled={disabled}
-          className="h-10 justify-start rounded-full px-3 text-zinc-500 hover:bg-white/70 hover:text-zinc-900"
-        >
-          Skip plan and build now
-        </Button>
+      </div>
+
+      <div className="rounded-2xl border border-[#e8e1d6] bg-[#fcfbf7] px-4 py-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-medium text-zinc-900">Need speed over review?</p>
+            <p className="mt-1 text-xs leading-5 text-zinc-600">
+              Use the fast path to build immediately without generating a plan first.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={onSkip}
+            disabled={disabled}
+            className="h-10 rounded-full border-zinc-300 bg-white px-4 text-zinc-800 hover:bg-zinc-100"
+          >
+            Skip plan and build now
+          </Button>
+        </div>
       </div>
 
       <p className="text-xs leading-5 text-zinc-500">
