@@ -19,7 +19,12 @@ export function CreateAfterLogin() {
     const raw = sessionStorage.getItem(PENDING_CREATE_KEY)
     if (!raw || handledRef.current) return
 
-    let data: { prompt: string; model: string }
+    let data: {
+      prompt: string
+      model: string
+      creationMode?: "build" | "agent"
+      agentSlug?: string
+    }
     try {
       data = JSON.parse(raw)
     } catch {
@@ -38,6 +43,8 @@ export function CreateAfterLogin() {
       prompt: data.prompt.trim(),
       model: data.model || "GPT-4-1 Mini",
       status: "pending",
+      creationMode: data.creationMode || "build",
+      agentSlug: data.creationMode === "agent" ? data.agentSlug || undefined : undefined,
       createdAt: serverTimestamp(),
       messages: [],
       ownerId: user.uid,

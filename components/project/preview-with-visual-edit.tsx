@@ -3,6 +3,7 @@
 import React, { useRef, useState, useEffect, useCallback } from "react"
 import { cn } from "@/lib/utils"
 import type { DesignSnapshot } from "./visual-edit-design-panel"
+import type { VisualEditSectionItem, VisualEditStructureCommand } from "./visual-edit-structure"
 
 type Rect = { x: number; y: number; width: number; height: number }
 type Viewport = { w: number; h: number }
@@ -11,6 +12,7 @@ type SelectedElement = {
   rect: Rect
   viewport: Viewport
   description: string | null
+  sectionId?: string | null
   snapshot: DesignSnapshot
 }
 
@@ -23,6 +25,7 @@ export interface PreviewWithVisualEditProps {
     primary?: {
       id: string
       description: string | null
+      sectionId?: string | null
       snapshot: DesignSnapshot
     }
   } | null) => void
@@ -31,6 +34,8 @@ export interface PreviewWithVisualEditProps {
     snapshot: DesignSnapshot
   } | null
   onIframeNavigate?: (path: string) => void
+  onStructureChange?: (sections: VisualEditSectionItem[]) => void
+  command?: { nonce: number; payload: VisualEditStructureCommand } | null
   className?: string
   iframeKey?: string | number
 }
@@ -42,6 +47,8 @@ export function PreviewWithVisualEdit({
   onSelectionChange,
   externalDraft,
   onIframeNavigate,
+  onStructureChange,
+  command,
   className,
   iframeKey,
 }: PreviewWithVisualEditProps) {
@@ -84,6 +91,7 @@ export function PreviewWithVisualEdit({
               ? {
                   id: selectedItems[0].id,
                   description: selectedItems[0].description,
+                  sectionId: selectedItems[0].sectionId,
                   snapshot: selectedItems[0].snapshot,
                 }
               : undefined,
@@ -114,6 +122,21 @@ export function PreviewWithVisualEdit({
         return
       }
 
+      if (d.type === "preview-structure" && Array.isArray(d.sections)) {
+        const sections = d.sections
+          .map((item: any, index: number): VisualEditSectionItem | null => {
+            if (!item || typeof item !== "object") return null
+            const id = typeof item.id === "string" ? item.id : ""
+            const label = typeof item.label === "string" ? item.label : `Section ${index + 1}`
+            const kind = typeof item.kind === "string" ? item.kind : "generic"
+            if (!id) return null
+            return { id, label, kind: kind as VisualEditSectionItem["kind"], index }
+          })
+          .filter((item: VisualEditSectionItem | null): item is VisualEditSectionItem => item !== null)
+        onStructureChange?.(sections)
+        return
+      }
+
       if (d.type !== "preview-select") return
 
       const raw = d.snapshot && typeof d.snapshot === "object" ? d.snapshot : null
@@ -138,6 +161,7 @@ export function PreviewWithVisualEdit({
         rect: d.rect,
         viewport: d.viewport,
         description: d.description ?? null,
+        sectionId: typeof d.sectionId === "string" ? d.sectionId : null,
         snapshot: { content, styles },
       }
 
@@ -156,7 +180,7 @@ export function PreviewWithVisualEdit({
 
     window.addEventListener("message", handler)
     return () => window.removeEventListener("message", handler)
-  }, [enabled, onSelectionChange])
+  }, [enabled, onSelectionChange, onStructureChange])
 
   const hoverStyle =
     hover && previewSize.w > 0
@@ -222,6 +246,14 @@ export function PreviewWithVisualEdit({
       "*"
     )
   }, [externalDraft])
+
+  useEffect(() => {
+    if (!command || !iframeRef.current?.contentWindow) return
+    iframeRef.current.contentWindow.postMessage(
+      { type: "bstudio-structure-command", command: command.payload },
+      "*"
+    )
+  }, [command])
 
   return (
     <div className={cn("relative flex w-full min-h-0 flex-1 flex-col", className)}>

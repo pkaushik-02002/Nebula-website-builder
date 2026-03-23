@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useCallback, useEffect } from "react";
-import { ArrowUp, Check, Loader2, Sparkles, X } from "lucide-react";
+import { ArrowUp, Check, Loader2, Pause, Sparkles, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Textarea } from "@/components/ui/textarea";
@@ -19,6 +19,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { buildkitAgents } from "@/lib/buildkit-agents";
 
 interface UseAutoResizeTextareaProps {
   minHeight: number;
@@ -65,6 +66,7 @@ function useAutoResizeTextarea({ minHeight, maxHeight }: UseAutoResizeTextareaPr
 interface AnimatedAIInputProps {
   mode?: "create" | "chat";
   onSubmit?: (value: string, model: string) => void | Promise<void>;
+  onStop?: () => void;
   placeholder?: string;
   isLoading?: boolean;
   compact?: boolean;
@@ -141,6 +143,7 @@ function getModelMeta(model: string) {
 export function AnimatedAIInput({
   mode = "create",
   onSubmit,
+  onStop,
   placeholder = "What can I help you build today?",
   isLoading = false,
   compact = false,
@@ -154,6 +157,7 @@ export function AnimatedAIInput({
   const [value, setValue] = useState("");
   const [isCreating, setIsCreating] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
+  const [creationMode, setCreationMode] = useState<"build" | "agent">("build");
   const [autoMode, setAutoMode] = useState(true);
   const [selectedModel, setSelectedModel] = useState("GPT-4-1 Mini");
   const [availableModels, setAvailableModels] = useState([
@@ -173,12 +177,20 @@ export function AnimatedAIInput({
 
   const isPaidUser = userData?.planId && userData.planId !== "free";
   const effectiveModel = autoMode ? "GPT-4-1 Mini" : selectedModel;
+  const primaryAgent = buildkitAgents[0];
+  const isAgentCreateMode = mode === "create" && creationMode === "agent";
 
   const PENDING_CREATE_KEY = "buildkit_pending_create";
 
   useEffect(() => {
     if (!isPaidUser) setAutoMode(true);
   }, [isPaidUser]);
+
+  useEffect(() => {
+    if (mode !== "create") {
+      setCreationMode("build");
+    }
+  }, [mode]);
 
   useEffect(() => {
     if (!initialModel) return;
@@ -204,10 +216,11 @@ export function AnimatedAIInput({
 
         const data = (await response.json()) as { models?: string[]; defaultModel?: string };
         if (!isMounted || !Array.isArray(data.models) || data.models.length === 0) return;
+        const models = data.models;
 
-        setAvailableModels(data.models);
+        setAvailableModels(models);
         if (data.defaultModel && !autoMode) {
-          setSelectedModel((current) => (data.models.includes(current) ? current : data.defaultModel!));
+          setSelectedModel((current) => (models.includes(current) ? current : data.defaultModel!));
         }
       } catch (error) {
         console.error("Failed to load model list:", error);
@@ -235,7 +248,12 @@ export function AnimatedAIInput({
     if (mode === "create" && !user) {
       sessionStorage.setItem(
         PENDING_CREATE_KEY,
-        JSON.stringify({ prompt: value.trim(), model: effectiveModel })
+        JSON.stringify({
+          prompt: value.trim(),
+          model: effectiveModel,
+          creationMode,
+          agentSlug: creationMode === "agent" ? primaryAgent.slug : undefined,
+        })
       );
       router.push("/login?redirect=" + encodeURIComponent("/"));
       return;
@@ -247,6 +265,8 @@ export function AnimatedAIInput({
         prompt: value.trim(),
         model: effectiveModel,
         status: "pending",
+        creationMode,
+        agentSlug: creationMode === "agent" ? primaryAgent.slug : undefined,
         createdAt: serverTimestamp(),
         messages: [],
         ownerId: user?.uid ?? undefined,
@@ -269,6 +289,12 @@ export function AnimatedAIInput({
   };
 
   const canSubmit = value.trim().length > 0 && !isCreating && !isLoading && !disabled;
+  const canStop = mode === "chat" && isLoading && !disabled && typeof onStop === "function";
+  const resolvedPlaceholder =
+    isAgentCreateMode
+      ? `Ask ${primaryAgent.name} how BuildKit works, what to build, or what to do next`
+      : placeholder;
+  const submitAriaLabel = isAgentCreateMode ? `Start ${primaryAgent.name}` : "Start build";
 
   return (
     <div className="group w-full max-w-2xl">
@@ -307,13 +333,14 @@ export function AnimatedAIInput({
           <Textarea
             id="ai-input-hero"
             value={value}
-            placeholder={placeholder}
+            placeholder={resolvedPlaceholder}
             className={cn(
               "w-full resize-none border-none bg-transparent px-0 pb-16 pt-0 text-[15px] text-zinc-900 sm:text-base",
               "placeholder:text-zinc-500",
               "focus-visible:ring-0 focus-visible:ring-offset-0",
               "scrollbar-thin scrollbar-track-transparent scrollbar-thumb-zinc-300",
-              compact ? "min-h-[88px]" : "min-h-[132px]"
+              compact ? "min-h-[88px]" : "min-h-[132px]",
+              isAgentCreateMode && "placeholder:text-[#7b6b55]"
             )}
             ref={textareaRef}
             onKeyDown={handleKeyDown}
@@ -326,7 +353,36 @@ export function AnimatedAIInput({
             }}
           />
 
-          <div className="absolute bottom-3 left-3 flex items-center gap-2 sm:bottom-4 sm:left-4">
+          <div className="absolute bottom-3 left-3 flex max-w-[calc(100%-4.5rem)] items-center gap-2 sm:bottom-4 sm:left-4">
+            {mode === "create" && !compact ? (
+              <div className="inline-flex shrink-0 rounded-full border border-zinc-200 bg-white/90 p-1 shadow-sm">
+                <button
+                  type="button"
+                  onClick={() => setCreationMode("build")}
+                  className={cn(
+                    "rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
+                    creationMode === "build"
+                      ? "bg-zinc-900 text-white"
+                      : "text-zinc-600 hover:text-zinc-900"
+                  )}
+                >
+                  Build
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCreationMode("agent")}
+                  className={cn(
+                    "rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
+                    creationMode === "agent"
+                      ? "bg-[#6f6557] text-white"
+                      : "text-zinc-600 hover:text-zinc-900"
+                  )}
+                >
+                  {primaryAgent.shortLabel}
+                </button>
+              </div>
+            ) : null}
+
             {mode === "chat" && visualEditToggle && (
               <Button
                 type="button"
@@ -348,7 +404,12 @@ export function AnimatedAIInput({
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="h-8 rounded-full border-zinc-200 bg-white px-3 text-xs text-zinc-700 hover:bg-zinc-50"
+                className={cn(
+                  "h-8 rounded-full px-3 text-xs hover:bg-zinc-50",
+                  isAgentCreateMode
+                    ? "border-[#d8cec0] bg-[#fbf7f0] text-[#6f6557]"
+                    : "border-zinc-200 bg-white text-zinc-700"
+                  )}
                 >
                   {autoMode ? "Model: Auto" : `Model: ${selectedModel}`}
                 </Button>
@@ -433,14 +494,21 @@ export function AnimatedAIInput({
             className={cn(
               "absolute bottom-3 right-3 sm:bottom-4 sm:right-4 flex h-10 w-10 items-center justify-center rounded-full transition-all duration-200",
               "focus-visible:ring-1 focus-visible:ring-zinc-300 focus-visible:ring-offset-0",
-              canSubmit ? "bg-zinc-900 text-white hover:bg-black active:scale-95" : "bg-zinc-100 text-zinc-400 cursor-not-allowed"
+              canStop
+                ? "bg-zinc-900 text-white hover:bg-black active:scale-95"
+                : canSubmit
+                ? isAgentCreateMode
+                  ? "bg-[#6f6557] text-white hover:bg-[#5d5447] active:scale-95"
+                  : "bg-zinc-900 text-white hover:bg-black active:scale-95"
+                : "bg-zinc-100 text-zinc-400 cursor-not-allowed"
             )}
-            aria-label="Send message"
-            disabled={!canSubmit}
-            onClick={handleSubmit}
-            whileTap={canSubmit ? { scale: 0.92 } : {}}
+            aria-label={canStop ? "Pause generation" : submitAriaLabel}
+            title={canStop ? "Pause generation" : submitAriaLabel}
+            disabled={!canSubmit && !canStop}
+            onClick={canStop ? onStop : handleSubmit}
+            whileTap={canSubmit || canStop ? { scale: 0.92 } : {}}
           >
-            {isCreating || isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
+            {canStop ? <Pause className="h-4 w-4" /> : isCreating || isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
           </motion.button>
         </div>
       </div>

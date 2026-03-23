@@ -10,7 +10,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 
-import { useEffect, useState, useRef, useCallback, useMemo } from "react"
+import { useEffect, useState, useRef, useCallback, useMemo, type FormEvent } from "react"
 import { useParams, useRouter } from "next/navigation"
 import { doc, getDoc, updateDoc, onSnapshot, collection, addDoc, serverTimestamp, deleteField } from "firebase/firestore"
 import { db } from "@/lib/firebase"
@@ -40,6 +40,9 @@ import {
   Loader2,
   Menu,
   ArrowLeft,
+  Monitor,
+  Tablet,
+  Smartphone,
   Plug,
   Github,
   Edit2,
@@ -85,11 +88,20 @@ import { toast } from "@/hooks/use-toast"
 import { useIsLg } from "@/hooks/use-is-lg"
 import { motion, AnimatePresence } from "framer-motion"
 import { applyPatch } from "diff"
-import type { GeneratedFile, Message, Project, ProjectVisibility } from "./types"
+import type { GeneratedFile, Message, PlanningStatus, Project, ProjectBlueprint, ProjectVisibility } from "./types"
 import { extractAgentMessage } from "./utils"
-import { ProjectErrorBoundary, ChatMessage, ResponsivePreview, BrowserNavigator } from "@/components/project"
+import { ProjectErrorBoundary, ChatMessage, ResponsivePreview, BrowserNavigator, ProjectCreationStudio, AgentTimelinePanel } from "@/components/project"
+import type { AgentTimelineItem } from "@/components/project/agent-timeline-panel"
 import { WebsiteSettingsPanel } from "@/components/project/website-settings-panel"
 import { VisualEditDesignPanel, type DesignSnapshot } from "@/components/project/visual-edit-design-panel"
+import type { VisualEditSectionItem, VisualEditStructureCommand } from "@/components/project/visual-edit-structure"
+import {
+  buildPlanningAssistantReply,
+  createInitialBlueprint,
+  createPlanningMessages,
+  updateBlueprintFromReply,
+} from "@/lib/project-blueprint"
+import { buildkitAgents } from "@/lib/buildkit-agents"
 
 // Persists across Strict Mode remounts so only one sandbox run can update logs
 let sandboxRunIdCounter = 0
@@ -104,6 +116,8 @@ function ProjectContent() {
 
   const [project, setProject] = useState<Project | null>(null)
   const [loading, setLoading] = useState(true)
+  const [isPlanningReplyPending, setIsPlanningReplyPending] = useState(false)
+  const [creationStudioExited, setCreationStudioExited] = useState(false)
   const [activeTab, setActiveTab] = useState<"preview" | "code">("preview")
   const [chatInput, setChatInput] = useState("")
   const [isGenerating, setIsGenerating] = useState(false)
@@ -111,6 +125,7 @@ function ProjectContent() {
   const [selectedFile, setSelectedFile] = useState<GeneratedFile | null>(null)
   const [previewKey, setPreviewKey] = useState(0)
   const [previewPath, setPreviewPath] = useState("/")
+  const [previewPathDraft, setPreviewPathDraft] = useState("/")
   const [previewDevice, setPreviewDevice] = useState<"desktop" | "tablet" | "phone">("desktop")
   const [previewReloadNonce, setPreviewReloadNonce] = useState(0)
   const [ensuredPreviewUrl, setEnsuredPreviewUrl] = useState<string | null>(null)
@@ -155,9 +170,18 @@ function ProjectContent() {
     initial: DesignSnapshot
   } | null>(null)
   const [visualEditDraft, setVisualEditDraft] = useState<DesignSnapshot | null>(null)
+  const [visualEditSections, setVisualEditSections] = useState<VisualEditSectionItem[]>([])
+  const [selectedVisualSectionId, setSelectedVisualSectionId] = useState<string | null>(null)
+  const [visualEditCommandNonce, setVisualEditCommandNonce] = useState(0)
+  const [visualEditCommand, setVisualEditCommand] = useState<VisualEditStructureCommand | null>(null)
   const [visualEditConfirmAction, setVisualEditConfirmAction] = useState<null | "exit" | "clear">(null)
   const [deployOpen, setDeployOpen] = useState(false)
   const [websiteSettingsOpen, setWebsiteSettingsOpen] = useState(false)
+  const visualEditAutoEnteredRef = useRef(false)
+
+  useEffect(() => {
+    setPreviewPathDraft(previewPath)
+  }, [previewPath])
   const [integrationsOpen, setIntegrationsOpen] = useState(false)
   const [selectedIntegration, setSelectedIntegration] = useState<"all" | "github" | "netlify" | "vercel" | "supabase" | "vars">("all")
   const [requiredEnvVars, setRequiredEnvVars] = useState<string[]>([])
@@ -350,17 +374,21 @@ function ProjectContent() {
     return { ok: false as const, error: "Sandbox verification ended without a result", logsTail }
   }, [getAuthHeader])
 
-  const agentTimeline = useMemo(() => {
+  const agentTimeline = useMemo<AgentTimelineItem[]>(() => {
     const base = [
       {
         key: "analyze",
         title: "Understanding your request",
         description: "Reviewing the prompt, website context, and current project files.",
+        detail: "Parsing intent, product scope, and constraints before touching the build.",
+        accent: "Brief",
       },
       {
         key: "plan",
         title: "Planning the update",
         description: "Choosing components, layout changes, and implementation steps.",
+        detail: "Sequencing the right changes and reducing risky assumptions first.",
+        accent: "Strategy",
       },
       {
         key: "build",
@@ -368,11 +396,17 @@ function ProjectContent() {
         description: currentGeneratingFile
           ? `Working on ${currentGeneratingFile}`
           : "Writing and updating the files needed for this change.",
+        detail: currentGeneratingFile
+          ? "Applying the current file-level update inside the project workspace."
+          : "Turning the approved direction into concrete file edits.",
+        accent: "Execution",
       },
       {
         key: "finalize",
         title: "Finalizing output",
         description: "Wrapping up the response and preparing the updated website state.",
+        detail: "Preparing the handoff back into preview and the next edit loop.",
+        accent: "Handoff",
       },
     ] as const
 
@@ -679,6 +713,24 @@ function ProjectContent() {
 
   const projectUrl = typeof window !== "undefined" ? `${window.location.origin}/project/${projectId}` : ""
   const canEdit = !!user && !!project && (!project.ownerId || project.ownerId === user.uid || (Array.isArray(project.editorIds) && project.editorIds.includes(user.uid)))
+  const creationMode = project?.creationMode || "build"
+  const activeAgent = creationMode === "agent"
+    ? buildkitAgents.find((agent) => agent.slug === project?.agentSlug) || buildkitAgents[0]
+    : null
+  const planningStatus: PlanningStatus = project?.planningStatus || "draft"
+  const resolvedBlueprint: ProjectBlueprint | null = project
+    ? project.blueprint || createInitialBlueprint(project.prompt)
+    : null
+  const planningMessages = project && resolvedBlueprint
+    ? createPlanningMessages(project.prompt, project.messages || [], resolvedBlueprint)
+    : []
+  const shouldShowCreationStudio =
+    !!project &&
+    project.status === "pending" &&
+    !creationStudioExited &&
+    planningStatus !== "approved" &&
+    planningStatus !== "skipped" &&
+    !isGenerating
 
   const handleShare = () => {
     setShareVisibility(project?.visibility ?? "private")
@@ -1392,15 +1444,48 @@ function ProjectContent() {
   useEffect(() => {
     pendingGenerationStartedRef.current = null
     generationGuardRef.current = null
+    setCreationStudioExited(false)
   }, [projectId])
 
-  // Start generation on mount if pending (once per project; ref guards against Strict Mode double-run)
+  useEffect(() => {
+    if (!project || project.status !== "pending" || !canEdit) return
+
+    const needsBlueprint = !project.blueprint
+    const needsPlanningMessage = !project.messages || project.messages.length === 0
+    if (!needsBlueprint && !needsPlanningMessage && project.planningStatus) return
+
+    const nextBlueprint = project.blueprint || createInitialBlueprint(project.prompt)
+    const nextMessages = createPlanningMessages(project.prompt, project.messages || [], nextBlueprint)
+    const inferredStatus = buildPlanningAssistantReply(nextBlueprint).planningStatus
+    const projectRef = doc(db, "projects", projectId)
+
+    updateDoc(projectRef, {
+      blueprint: nextBlueprint,
+      messages: nextMessages,
+      planningStatus: project.planningStatus || inferredStatus,
+    }).catch(() => {})
+
+    setProject((prev) =>
+      prev
+        ? {
+            ...prev,
+            blueprint: nextBlueprint,
+            messages: nextMessages,
+            planningStatus: prev.planningStatus || inferredStatus,
+          }
+        : prev
+    )
+  }, [project, canEdit, projectId])
+
+  // Start generation on mount if pending and already explicitly approved or skipped.
   useEffect(() => {
     if (!project || project.status !== "pending" || isGenerating) return
+    if (project.planningStatus !== "approved" && project.planningStatus !== "skipped") return
     if (pendingGenerationStartedRef.current === projectId) return
     pendingGenerationStartedRef.current = projectId
+    setCreationStudioExited(true)
     generateCode(project.prompt, project.model)
-  }, [project?.status, projectId, isGenerating, project?.prompt, project?.model])
+  }, [project?.status, projectId, isGenerating, project?.prompt, project?.model, project?.planningStatus])
 
   /** Merge model output (diffs or full files) into existing project; applies patches when content is unified diff. */
   const mergeWithExistingFiles = (
@@ -1408,6 +1493,50 @@ function ProjectContent() {
     blocks: GeneratedFile[]
   ): GeneratedFile[] => {
     const result = existingFiles.map(f => ({ ...f }))
+
+    const normalizeUnifiedDiffHunkCounts = (diffText: string) => {
+      const lines = diffText.split("\n")
+      const normalized: string[] = []
+      let index = 0
+
+      while (index < lines.length) {
+        const line = lines[index]
+        const hunkMatch = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/)
+
+        if (!hunkMatch) {
+          normalized.push(line)
+          index += 1
+          continue
+        }
+
+        let oldCount = 0
+        let newCount = 0
+        const body: string[] = []
+        index += 1
+
+        while (index < lines.length && !lines[index].startsWith("@@ ")) {
+          const bodyLine = lines[index]
+          body.push(bodyLine)
+
+          if (bodyLine.startsWith("+")) {
+            newCount += 1
+          } else if (bodyLine.startsWith("-")) {
+            oldCount += 1
+          } else if (bodyLine.startsWith(" ") || bodyLine === "") {
+            oldCount += 1
+            newCount += 1
+          }
+
+          index += 1
+        }
+
+        const [, oldStart, , newStart, , suffix] = hunkMatch
+        normalized.push(`@@ -${oldStart},${oldCount} +${newStart},${newCount} @@${suffix}`)
+        normalized.push(...body)
+      }
+
+      return normalized.join("\n")
+    }
 
     for (const block of blocks) {
       const path = block.path
@@ -1435,7 +1564,10 @@ function ProjectContent() {
         const existingIndex = result.findIndex(f => f.path === path)
         const oldContent = existingIndex !== -1 ? result[existingIndex].content : ""
         try {
-          const patched = applyPatch(oldContent, content)
+          let patched = applyPatch(oldContent, content)
+          if (patched === false) {
+            patched = applyPatch(oldContent, normalizeUnifiedDiffHunkCounts(content))
+          }
           if (typeof patched === "string") {
             if (existingIndex !== -1) {
               result[existingIndex] = { ...result[existingIndex], content: patched }
@@ -1444,6 +1576,17 @@ function ProjectContent() {
             }
           }
         } catch (err) {
+          try {
+            const patched = applyPatch(oldContent, normalizeUnifiedDiffHunkCounts(content))
+            if (typeof patched === "string") {
+              if (existingIndex !== -1) {
+                result[existingIndex] = { ...result[existingIndex], content: patched }
+              } else {
+                result.push({ path, content: patched })
+              }
+              continue
+            }
+          } catch {}
           // Malformed/partial diff from model: keep existing file unchanged.
           console.warn("Patch apply failed for file:", path, err)
         }
@@ -2063,7 +2206,6 @@ function ProjectContent() {
   useEffect(() => {
     if (!project) return
     if (!project.files || project.files.length === 0) return
-    if (project.status !== "complete") return
     if (isSandboxLoading || isGenerating || isPreparingPreview) return
     if (ensuredPreviewUrl) return
 
@@ -2114,6 +2256,15 @@ function ProjectContent() {
     setSelectedVisualEditElement(null)
     setVisualEditDraft(null)
   }
+
+  const handleStopGeneration = useCallback(() => {
+    abortControllerRef.current?.abort()
+    setIsGenerating(false)
+    setGeneratingFiles([])
+    setCurrentGeneratingFile("")
+    setAgentStatus("")
+    setReasoningSteps([])
+  }, [])
 
   const handleManualVisualSave = useCallback(async (payload: {
     id: string
@@ -2213,6 +2364,7 @@ function ProjectContent() {
     setEditingContextLabel(null)
     setSelectedVisualEditElement(null)
     setVisualEditDraft(null)
+    setSelectedVisualSectionId(null)
   }, [])
 
   const requestVisualEditExit = useCallback(() => {
@@ -2239,6 +2391,16 @@ function ProjectContent() {
   const exitVisualEdit = useCallback(() => {
     return requestVisualEditExit()
   }, [requestVisualEditExit])
+
+  useEffect(() => {
+    if (visualEditAutoEnteredRef.current) return
+    if (!canEdit) return
+    if (project?.status !== "complete") return
+    if (!ensuredPreviewUrl) return
+
+    setVisualEditActive(true)
+    visualEditAutoEnteredRef.current = true
+  }, [canEdit, project?.status, ensuredPreviewUrl])
 
   const copyCode = async () => {
     if (selectedFile) {
@@ -2304,6 +2466,7 @@ function ProjectContent() {
       id: string
       description: string | null
       snapshot: DesignSnapshot
+      sectionId?: string | null
     }
   } | null) => {
     const descriptions = selection?.descriptions || []
@@ -2320,6 +2483,7 @@ function ProjectContent() {
     )
 
     if (selection?.primary) {
+      if (selection.primary.sectionId) setSelectedVisualSectionId(selection.primary.sectionId)
       setSelectedVisualEditElement({
         id: selection.primary.id,
         description: selection.primary.description,
@@ -2362,6 +2526,133 @@ function ProjectContent() {
     return getSelectionBadgeValue(raw)
   }, [getSelectionBadgeValue])
 
+  const handlePlanningSubmit = useCallback(async (value: string) => {
+    if (!project || !resolvedBlueprint || !canEdit) return
+
+    setIsPlanningReplyPending(true)
+    const nextBlueprint = updateBlueprintFromReply(resolvedBlueprint, value)
+    const assistant = buildPlanningAssistantReply(nextBlueprint, value)
+    const nextMessages = [
+      ...(project.messages || []),
+      { role: "user" as const, content: value, timestamp: new Date().toISOString() },
+      { role: "assistant" as const, content: assistant.content, timestamp: new Date().toISOString() },
+    ]
+
+    const projectRef = doc(db, "projects", projectId)
+    try {
+      await updateDoc(projectRef, {
+        blueprint: nextBlueprint,
+        messages: nextMessages,
+        planningStatus: assistant.planningStatus,
+      })
+      setProject((prev) =>
+        prev
+          ? {
+              ...prev,
+              blueprint: nextBlueprint,
+              messages: nextMessages,
+              planningStatus: assistant.planningStatus,
+            }
+          : prev
+      )
+    } finally {
+      setIsPlanningReplyPending(false)
+    }
+  }, [project, resolvedBlueprint, canEdit, projectId])
+
+  const handleGeneratePlan = useCallback(async () => {
+    if (!project || !resolvedBlueprint || !canEdit) return
+    const projectRef = doc(db, "projects", projectId)
+    const plannedMessages = [
+      ...(project.messages || []),
+      {
+        role: "assistant" as const,
+        content: "Your answers are approved. I drafted the plan so you can review it, refine anything that feels off, and build from it when you're ready.",
+        timestamp: new Date().toISOString(),
+      },
+    ]
+
+    await updateDoc(projectRef, {
+      blueprint: resolvedBlueprint,
+      planningStatus: "plan-generated",
+      messages: plannedMessages,
+    })
+    setProject((prev) =>
+      prev
+        ? {
+            ...prev,
+            blueprint: resolvedBlueprint,
+            planningStatus: "plan-generated",
+            messages: plannedMessages,
+          }
+        : prev
+    )
+  }, [project, resolvedBlueprint, canEdit, projectId])
+
+  const handleBuildFromPlan = useCallback(async () => {
+    if (!project || !resolvedBlueprint || !canEdit) return
+    const projectRef = doc(db, "projects", projectId)
+    const approvedMessages = [
+      ...(project.messages || []),
+      {
+        role: "assistant" as const,
+        content: "Plan approved. I'm moving into generation now and will use the reviewed plan as the working brief.",
+        timestamp: new Date().toISOString(),
+      },
+    ]
+
+    setCreationStudioExited(true)
+    await updateDoc(projectRef, {
+      blueprint: resolvedBlueprint,
+      planningStatus: "approved",
+      messages: approvedMessages,
+    })
+    setProject((prev) =>
+      prev
+        ? {
+            ...prev,
+            blueprint: resolvedBlueprint,
+            planningStatus: "approved",
+            messages: approvedMessages,
+          }
+        : prev
+    )
+    pendingGenerationStartedRef.current = projectId
+    await generateCode(project.prompt, project.model)
+  }, [project, resolvedBlueprint, canEdit, projectId, generateCode])
+
+  const handleSkipPlanAndBuild = useCallback(async () => {
+    if (!project || !resolvedBlueprint || !canEdit) return
+    const projectRef = doc(db, "projects", projectId)
+    const skippedMessages = [
+      ...(project.messages || []),
+      {
+        role: "assistant" as const,
+        content: "Skipping the full planning pass. I’ll build now using the current brief and the visible assumptions in the blueprint.",
+        timestamp: new Date().toISOString(),
+      },
+    ]
+
+    setCreationStudioExited(true)
+    await updateDoc(projectRef, {
+      blueprint: resolvedBlueprint,
+      planningStatus: "skipped",
+      messages: skippedMessages,
+    })
+    setProject((prev) =>
+      prev
+        ? {
+            ...prev,
+            blueprint: resolvedBlueprint,
+            planningStatus: "skipped",
+            messages: skippedMessages,
+          }
+        : prev
+    )
+    pendingGenerationStartedRef.current = projectId
+    await generateCode(project.prompt, project.model)
+  }, [project, resolvedBlueprint, canEdit, projectId, generateCode])
+
   const quickActionChips = [
     "Improve headline",
     "Add pricing section",
@@ -2374,11 +2665,60 @@ function ProjectContent() {
     ? quickActionChips.map((chip) => `${chip} in this section`)
     : quickActionChips
 
+  const latestAssistantMessage = [...(project?.messages || [])]
+    .reverse()
+    .find((message) => message.role === "assistant")
+
+  const previewDeviceOptions: Array<{ key: "desktop" | "tablet" | "phone"; label: string; icon: typeof Monitor }> = [
+    { key: "desktop", label: "Desktop", icon: Monitor },
+    { key: "tablet", label: "Tablet", icon: Tablet },
+    { key: "phone", label: "Phone", icon: Smartphone },
+  ]
+
+  const handlePreviewPathSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const normalized = previewPathDraft.trim()
+    if (!normalized) {
+      setPreviewPath("/")
+      return
+    }
+    setPreviewPath(normalized.startsWith("/") ? normalized : `/${normalized}`)
+  }
+
+  const queueVisualEditCommand = useCallback((command: VisualEditStructureCommand) => {
+    setVisualEditCommand(command)
+    setVisualEditCommandNonce((prev) => prev + 1)
+  }, [])
+
+  const handleVisualSectionMove = useCallback((sectionId: string, direction: "up" | "down") => {
+    queueVisualEditCommand({ type: "move-section", sectionId, direction })
+  }, [queueVisualEditCommand])
+
+  const handleVisualSectionDuplicate = useCallback((sectionId: string) => {
+    queueVisualEditCommand({ type: "duplicate-section", sectionId })
+  }, [queueVisualEditCommand])
+
+  const handleVisualSectionDelete = useCallback((sectionId: string) => {
+    queueVisualEditCommand({ type: "delete-section", sectionId })
+    if (selectedVisualSectionId === sectionId) setSelectedVisualSectionId(null)
+  }, [queueVisualEditCommand, selectedVisualSectionId])
+
+  const handleVisualSectionInsert = useCallback((afterSectionId: string | null, variant: "blank" | "hero" | "features" | "cta") => {
+    queueVisualEditCommand({ type: "insert-section", afterSectionId, variant })
+  }, [queueVisualEditCommand])
+
   const isVisualEditPanelMode = visualEditActive && selectedVisualEditElement && selectedElementCount === 1 && visualEditDraft
+  const shouldApplyVisualDraftToPreview = Boolean(
+    visualEditActive &&
+    selectedVisualEditElement &&
+    visualEditDraft &&
+    !isSameDesignSnapshot(selectedVisualEditElement.initial, visualEditDraft)
+  )
 
   // Combine project files with generating files
   const displayFiles = isGenerating ? generatingFiles : (project?.files || [])
   const resolvedPreviewUrl = getPreviewUrl()
+  const hasProjectFiles = (project?.files?.length || 0) > 0
   
   // Prefer explicit project name; fall back to prompt-derived title
   const displayProjectName = project?.name || project?.prompt?.split(' ').slice(0, 3).join(' ') || 'Untitled Project'
@@ -2447,6 +2787,27 @@ function ProjectContent() {
     )
   }
 
+  if (shouldShowCreationStudio && resolvedBlueprint) {
+    return (
+      <ProjectCreationStudio
+        projectName={project.name || project.prompt?.split(" ").slice(0, 3).join(" ") || "Untitled Project"}
+        prompt={project.prompt}
+        messages={planningMessages}
+        blueprint={resolvedBlueprint}
+        planningStatus={planningStatus}
+        creationMode={creationMode}
+        agentName={activeAgent?.name || null}
+        canEdit={canEdit}
+        isSubmitting={isPlanningReplyPending}
+        onSubmit={handlePlanningSubmit}
+        onGeneratePlan={handleGeneratePlan}
+        onBuildFromPlan={handleBuildFromPlan}
+        onSkip={handleSkipPlanAndBuild}
+        onBack={() => router.push("/projects")}
+      />
+    )
+  }
+
   return (
     <div className="min-h-screen bg-[#f5f5f2] text-[#1f1f1f]">
       <div className="mx-auto flex min-h-screen max-w-[1800px] flex-col px-3 py-3 sm:px-5 sm:py-4 lg:h-screen lg:px-6">
@@ -2472,6 +2833,24 @@ function ProjectContent() {
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className={cn(
+                "h-9 rounded-lg border-zinc-300 bg-white px-3 text-zinc-700 hover:bg-zinc-100",
+                visualEditActive && "border-zinc-900 bg-zinc-900 text-white hover:bg-black hover:text-white"
+              )}
+              onClick={() => {
+                if (visualEditActive) {
+                  exitVisualEdit()
+                  return
+                }
+                setVisualEditActive(true)
+              }}
+            >
+              {visualEditActive ? "Exit Visual Edit" : "Visual Edit"}
+            </Button>
             <Button type="button" size="sm" variant="outline" className="hidden h-9 rounded-lg border-zinc-300 bg-white px-3 text-zinc-700 hover:bg-zinc-100 lg:inline-flex" onClick={() => setWebsiteSettingsOpen(true)}>
               Website Settings
             </Button>
@@ -2510,19 +2889,241 @@ function ProjectContent() {
           </div>
         </div>
 
-        <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-10 lg:gap-6">
+        <div className={cn(
+          "grid min-h-0 flex-1 grid-cols-1 gap-4 lg:gap-6",
+          visualEditActive ? "lg:grid-cols-12" : "lg:grid-cols-10"
+        )}>
           <section className={cn(
-            "flex min-h-[52vh] flex-col overflow-hidden border border-zinc-200 bg-white lg:col-span-3 lg:min-h-0",
+            "flex min-h-[52vh] flex-col overflow-hidden border border-zinc-200 bg-white lg:min-h-0",
+            visualEditActive ? "lg:col-span-4" : "lg:col-span-3",
             mobileTab !== "chat" && "hidden lg:flex"
           )}>
             <div className="border-b border-zinc-100 px-4 py-3 sm:px-5 sm:py-4">
               <div className="min-w-0">
-                <p className="text-sm font-semibold tracking-wide text-zinc-800">Conversation</p>
-                <p className="mt-1 text-xs text-zinc-500">{editingContextLabel || "Editing entire website"}</p>
+                <p className="text-sm font-semibold tracking-wide text-zinc-800">{visualEditActive ? "AI Creative Assistant" : "Conversation"}</p>
+                <p className="mt-1 text-xs text-zinc-500">
+                  {visualEditActive
+                    ? (editingContextLabel || "Select a section in the canvas to refine it with AI.")
+                    : (editingContextLabel || "Editing entire website")}
+                </p>
               </div>
             </div>
 
-            {isVisualEditPanelMode ? (
+            {visualEditActive ? (
+              <>
+                <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 sm:px-5 sm:py-5">
+                  <div className="rounded-2xl border border-zinc-200 bg-[#f8f8f6] px-4 py-3">
+                    <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-zinc-500">Current focus</p>
+                    <p className="mt-2 text-sm text-zinc-900">
+                      {selectedElementDescription ? getSelectionBadgeDisplay(selectedElementDescription, selectedElementCount) : "Entire page"}
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl border border-zinc-200 bg-white px-4 py-3">
+                    <div className="flex items-center justify-between">
+                      <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-zinc-500">Page structure</p>
+                      <button
+                        type="button"
+                        onClick={() => handleVisualSectionInsert(null, "blank")}
+                        className="rounded-full border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-[11px] text-zinc-700 transition-colors hover:bg-zinc-100"
+                      >
+                        Add section
+                      </button>
+                    </div>
+                    <div className="mt-3 space-y-2">
+                      {visualEditSections.map((section) => (
+                        <div
+                          key={section.id}
+                          className={cn(
+                            "rounded-xl border px-3 py-2 transition-colors",
+                            selectedVisualSectionId === section.id
+                              ? "border-zinc-900 bg-zinc-900 text-white"
+                              : "border-zinc-200 bg-[#fafaf8] text-zinc-800"
+                          )}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedVisualSectionId(section.id)
+                              queueVisualEditCommand({ type: "select-section", sectionId: section.id })
+                            }}
+                            className="w-full text-left"
+                          >
+                            <p className="text-xs font-medium">{section.label}</p>
+                            <p className={cn("mt-0.5 text-[11px]", selectedVisualSectionId === section.id ? "text-zinc-200" : "text-zinc-500")}>
+                              {section.kind}
+                            </p>
+                          </button>
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleVisualSectionMove(section.id, "up")}
+                              className={cn(
+                                "rounded-full border px-2 py-0.5 text-[10px]",
+                                selectedVisualSectionId === section.id
+                                  ? "border-white/30 bg-white/10 text-white"
+                                  : "border-zinc-200 bg-white text-zinc-700"
+                              )}
+                            >
+                              Up
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleVisualSectionMove(section.id, "down")}
+                              className={cn(
+                                "rounded-full border px-2 py-0.5 text-[10px]",
+                                selectedVisualSectionId === section.id
+                                  ? "border-white/30 bg-white/10 text-white"
+                                  : "border-zinc-200 bg-white text-zinc-700"
+                              )}
+                            >
+                              Down
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleVisualSectionDuplicate(section.id)}
+                              className={cn(
+                                "rounded-full border px-2 py-0.5 text-[10px]",
+                                selectedVisualSectionId === section.id
+                                  ? "border-white/30 bg-white/10 text-white"
+                                  : "border-zinc-200 bg-white text-zinc-700"
+                              )}
+                            >
+                              Duplicate
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleVisualSectionDelete(section.id)}
+                              className={cn(
+                                "rounded-full border px-2 py-0.5 text-[10px]",
+                                selectedVisualSectionId === section.id
+                                  ? "border-white/30 bg-white/10 text-white"
+                                  : "border-zinc-200 bg-white text-zinc-700"
+                              )}
+                            >
+                              Delete
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleVisualSectionInsert(section.id, "blank")}
+                              className={cn(
+                                "rounded-full border px-2 py-0.5 text-[10px]",
+                                selectedVisualSectionId === section.id
+                                  ? "border-white/30 bg-white/10 text-white"
+                                  : "border-zinc-200 bg-white text-zinc-700"
+                              )}
+                            >
+                              Add below
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                      {visualEditSections.length === 0 ? (
+                        <p className="text-xs text-zinc-500">Scanning sections from the live page...</p>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  {latestAssistantMessage ? (
+                    <div className="rounded-2xl border border-zinc-200 bg-white px-4 py-3">
+                      <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-zinc-500">Latest AI update</p>
+                      <p className="mt-2 text-sm leading-relaxed text-zinc-700">{latestAssistantMessage.content}</p>
+                    </div>
+                  ) : null}
+
+                  {isVisualEditPanelMode ? (
+                    <div className="overflow-hidden rounded-2xl border border-zinc-200 bg-white">
+                      <VisualEditDesignPanel
+                        key={selectedVisualEditElement!.id}
+                        className="border-l-0"
+                        selectedId={selectedVisualEditElement!.id}
+                        description={selectedVisualEditElement!.description}
+                        snapshot={selectedVisualEditElement!.initial}
+                        onApply={(draft) => {
+                          setVisualEditDraft((prev) => {
+                            const base = prev ?? selectedVisualEditElement!.initial
+                            return {
+                              content: draft.content !== undefined ? draft.content : base.content,
+                              styles: draft.styles !== undefined ? draft.styles : base.styles,
+                            }
+                          })
+                        }}
+                        onClose={requestVisualEditClear}
+                      />
+                      <div className="border-t border-zinc-100 bg-[#fafaf8] p-3">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="h-9 rounded-lg border-zinc-300 bg-white text-xs text-zinc-700 hover:bg-zinc-100"
+                          disabled={
+                            isGenerating ||
+                            isSameDesignSnapshot(selectedVisualEditElement!.initial, visualEditDraft)
+                          }
+                          onClick={() => handleManualVisualSave({
+                            id: selectedVisualEditElement!.id,
+                            description: selectedVisualEditElement!.description,
+                            initial: selectedVisualEditElement!.initial,
+                            current: visualEditDraft!,
+                          })}
+                        >
+                          {isGenerating ? "Saving..." : "Apply visual edits"}
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl border border-dashed border-zinc-300 bg-[#fafaf8] px-4 py-6 text-center">
+                      <p className="text-sm font-medium text-zinc-800">Pick a section in the canvas</p>
+                      <p className="mt-1 text-xs text-zinc-500">Then adjust it directly or ask AI for a focused change.</p>
+                    </div>
+                  )}
+                </div>
+                {canEdit ? (
+                  <div className="border-t border-zinc-100 p-2.5 sm:p-3">
+                    <div className="mb-2 flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+                      {contextualChips.map((chip) => (
+                        <button
+                          key={chip}
+                          type="button"
+                          onClick={() => handleSendMessage(chip)}
+                          disabled={!canEdit || isGenerating || remainingTokens <= 0}
+                          className="whitespace-nowrap rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs text-zinc-700 transition-colors hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {chip}
+                        </button>
+                      ))}
+                    </div>
+                    <AnimatedAIInput
+                      mode="chat"
+                      compact
+                      isLoading={isGenerating}
+                      placeholder={editingContextLabel ? "Describe what to improve in this section..." : "Describe what to improve on your website..."}
+                      onSubmit={(value, model) => handleSendMessage(value, model)}
+                      onStop={handleStopGeneration}
+                      disabled={remainingTokens <= 0}
+                      initialModel={project?.model}
+                      visualEditToggle={{
+                        active: visualEditActive,
+                        onToggle: () => {
+                          if (visualEditActive) {
+                            exitVisualEdit()
+                            return
+                          }
+                          setVisualEditActive(true)
+                        },
+                      }}
+                      contextBadge={selectedElementDescription ? {
+                        label: "Design",
+                        value: getSelectionBadgeDisplay(selectedElementDescription, selectedElementCount),
+                        onClear: requestVisualEditClear,
+                      } : null}
+                    />
+                  </div>
+                ) : (
+                  <div className="border-t border-zinc-100 p-3 text-center text-xs text-zinc-500">View only</div>
+                )}
+              </>
+            ) : isVisualEditPanelMode ? (
               <>
               <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5 sm:py-5">
                 <div className="overflow-hidden rounded-[24px] border border-zinc-200 bg-[#f5f5f2]">
@@ -2618,6 +3219,7 @@ function ProjectContent() {
                     isLoading={isGenerating}
                     placeholder={editingContextLabel ? "Describe what to improve in this section..." : "Describe what to improve on your website..."}
                     onSubmit={(value, model) => handleSendMessage(value, model)}
+                    onStop={handleStopGeneration}
                     disabled={remainingTokens <= 0}
                     initialModel={project?.model}
                     visualEditToggle={{
@@ -2801,102 +3403,24 @@ function ProjectContent() {
                           <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
                           Agent Run Live
                         </div>
-                        <div className="space-y-1">
-                          <p className="text-sm font-semibold text-zinc-900">
-                            Building your update with a clearer live timeline
-                          </p>
-                          <TextShimmer className="text-sm text-zinc-600">
-                            {agentStatus || "Preparing the next implementation step"}
-                          </TextShimmer>
-                        </div>
-                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                          <div className="rounded-2xl border border-zinc-200 bg-white px-3 py-2">
-                            <p className="text-[10px] uppercase tracking-[0.16em] text-zinc-400">Progress</p>
-                            <p className="mt-1 text-sm font-semibold text-zinc-900">
-                              {Math.min(
-                                agentTimeline.filter((step) => step.status === "complete").length + 1,
-                                agentTimeline.length
-                              )}/{agentTimeline.length}
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                          <div className="space-y-1">
+                            <p className="text-sm font-semibold text-zinc-900">
+                              The agent is shaping, implementing, and validating this update
                             </p>
-                          </div>
-                          <div className="rounded-2xl border border-zinc-200 bg-white px-3 py-2">
-                            <p className="text-[10px] uppercase tracking-[0.16em] text-zinc-400">Files</p>
-                            <p className="mt-1 text-sm font-semibold text-zinc-900">{generatedFileCount}</p>
-                          </div>
-                          <div className="col-span-2 rounded-2xl border border-zinc-200 bg-white px-3 py-2">
-                            <p className="text-[10px] uppercase tracking-[0.16em] text-zinc-400">Current file</p>
-                            <p className="mt-1 truncate text-sm font-medium text-zinc-900">
-                              {currentGeneratingFile || "Choosing the next file to update"}
-                            </p>
+                            <TextShimmer className="text-sm text-zinc-600">
+                              {agentStatus || "Preparing the next implementation step"}
+                            </TextShimmer>
                           </div>
                         </div>
                       </div>
                     </div>
 
-                    <div className="space-y-4 px-4 py-4">
-                      <div className="rounded-[1.25rem] border border-zinc-200 bg-zinc-50/70 p-3 sm:p-4">
-                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Timeline</p>
-                        <p className="mt-1 text-sm text-zinc-600">Follow what the agent is doing without losing context.</p>
-
-                        <div className="mt-4 space-y-3">
-                          {agentTimeline.map((step, idx) => {
-                            const isActive = step.status === "active"
-                            const isComplete = step.status === "complete"
-                            const isPending = step.status === "pending"
-
-                            return (
-                              <div key={step.key} className="relative flex items-start gap-3">
-                                {idx < agentTimeline.length - 1 ? (
-                                  <div className="absolute left-3 top-8 h-[calc(100%-0.25rem)] w-px bg-zinc-200" />
-                                ) : null}
-                                <div className="relative z-10 mt-0.5 shrink-0">
-                                  {isComplete ? (
-                                    <div className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-500 text-white">
-                                      <Check className="h-3.5 w-3.5" />
-                                    </div>
-                                  ) : (
-                                    <div className="h-6 w-6 rounded-full border border-zinc-300 bg-white" />
-                                  )}
-                                </div>
-                                <div
-                                  className={cn(
-                                    "min-w-0 flex-1 rounded-2xl border px-3 py-3",
-                                    isActive && "border-zinc-300 bg-white shadow-sm",
-                                    isComplete && "border-emerald-200 bg-emerald-50/70",
-                                    isPending && "border-zinc-200 bg-white/70"
-                                  )}
-                                >
-                                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                                    <TextShimmer
-                                      className={cn(
-                                        "bg-gradient-to-r from-zinc-700 via-zinc-400 to-zinc-700 text-sm font-medium",
-                                        isActive ? "from-zinc-950 via-zinc-500 to-zinc-950" : undefined
-                                      )}
-                                    >
-                                      {step.title}
-                                    </TextShimmer>
-                                    <span
-                                      className={cn(
-                                        "w-fit rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em]",
-                                        isComplete && "bg-emerald-100 text-emerald-700",
-                                        isActive && "bg-zinc-900 text-white",
-                                        isPending && "bg-zinc-100 text-zinc-500"
-                                      )}
-                                    >
-                                      {isComplete ? "Done" : isActive ? "In progress" : "Queued"}
-                                    </span>
-                                  </div>
-                                  <TextShimmer className="mt-1 bg-gradient-to-r from-zinc-600 via-zinc-400 to-zinc-600 text-xs">
-                                    {step.description}
-                                  </TextShimmer>
-                                </div>
-                              </div>
-                            )
-                          })}
-                        </div>
-                      </div>
-
-                    </div>
+                    <AgentTimelinePanel
+                      steps={agentTimeline}
+                      generatedFileCount={generatedFileCount}
+                      currentGeneratingFile={currentGeneratingFile}
+                    />
                   </div>
                 )}
               <div ref={messagesEndRef} />
@@ -2935,6 +3459,7 @@ function ProjectContent() {
                   isLoading={isGenerating}
                   placeholder={editingContextLabel ? "Describe what to improve in this section..." : "Describe what to improve on your website..."}
                   onSubmit={(value, model) => handleSendMessage(value, model)}
+                  onStop={handleStopGeneration}
                   disabled={remainingTokens <= 0}
                   initialModel={project?.model}
                   visualEditToggle={{
@@ -2962,25 +3487,62 @@ function ProjectContent() {
           </section>
 
           <section className={cn(
-            "min-h-[56vh] overflow-hidden border border-zinc-200 bg-white lg:col-span-7 lg:min-h-0",
+            "min-h-[56vh] overflow-hidden border border-zinc-200 bg-white lg:min-h-0",
+            visualEditActive ? "lg:col-span-8" : "lg:col-span-7",
             mobileTab !== "preview" && "hidden lg:block"
           )}>
             <div className="flex h-full min-h-0 flex-col">
               <div className="flex items-center justify-between gap-3 border-b border-zinc-100 px-4 py-3 sm:px-5 sm:py-4">
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold tracking-wide text-zinc-800">Live Website</p>
+                  <p className="text-sm font-semibold tracking-wide text-zinc-800">{visualEditActive ? "Website Canvas" : "Live Website"}</p>
                   <p className="mt-1 truncate text-xs text-zinc-500">
-                    Select a section in the preview to edit with context.
+                    {visualEditActive ? "Select, edit, and see updates instantly." : "Select a section in the preview to edit with context."}
                   </p>
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <Button type="button" size="sm" variant="outline" className="h-9 rounded-lg border-zinc-300 bg-white px-3 text-zinc-700 hover:bg-zinc-100 lg:hidden" onClick={() => setWebsiteSettingsOpen(true)}>
-                    Website Settings
-                  </Button>
-                  <Button type="button" size="sm" variant="outline" className="h-9 rounded-lg border-zinc-300 bg-white px-3 text-zinc-700 hover:bg-zinc-100" onClick={handlePreviewReload}>
-                    Refresh
-                  </Button>
-                </div>
+                {visualEditActive ? (
+                  <div className="flex shrink-0 items-center gap-2">
+                    <form onSubmit={handlePreviewPathSubmit} className="hidden items-center rounded-lg border border-zinc-200 bg-[#fafaf8] px-2.5 py-1.5 sm:flex">
+                      <span className="mr-2 text-xs text-zinc-400">/</span>
+                      <input
+                        value={previewPathDraft.replace(/^\//, "")}
+                        onChange={(event) => setPreviewPathDraft(`/${event.target.value}`)}
+                        className="w-36 bg-transparent text-xs text-zinc-700 outline-none placeholder:text-zinc-400"
+                        placeholder="page path"
+                        aria-label="Preview page path"
+                      />
+                    </form>
+                    <div className="inline-flex items-center rounded-lg border border-zinc-200 bg-[#fafaf8] p-1">
+                      {previewDeviceOptions.map(({ key, icon: Icon, label }) => (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => setPreviewDevice(key)}
+                          className={cn(
+                            "inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs transition-colors",
+                            previewDevice === key ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-600 hover:text-zinc-900"
+                          )}
+                          aria-label={label}
+                          title={label}
+                        >
+                          <Icon className="h-3.5 w-3.5" />
+                          <span className="hidden sm:inline">{label}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <Button type="button" size="sm" variant="outline" className="h-8 rounded-lg border-zinc-300 bg-white px-3 text-zinc-700 hover:bg-zinc-100" onClick={handlePreviewReload}>
+                      Refresh
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="flex shrink-0 items-center gap-2">
+                    <Button type="button" size="sm" variant="outline" className="h-9 rounded-lg border-zinc-300 bg-white px-3 text-zinc-700 hover:bg-zinc-100 lg:hidden" onClick={() => setWebsiteSettingsOpen(true)}>
+                      Website Settings
+                    </Button>
+                    <Button type="button" size="sm" variant="outline" className="h-9 rounded-lg border-zinc-300 bg-white px-3 text-zinc-700 hover:bg-zinc-100" onClick={handlePreviewReload}>
+                      Refresh
+                    </Button>
+                  </div>
+                )}
               </div>
               <div className="relative min-h-0 flex-1 overflow-hidden">
                 {((isSandboxLoading || !!buildError) && !isTimelineCollapsed) && (
@@ -3003,12 +3565,14 @@ function ProjectContent() {
                     canEdit={canEdit}
                     enabled={visualEditActive}
                     externalDraft={
-                      visualEditActive && selectedVisualEditElement && visualEditDraft
+                      shouldApplyVisualDraftToPreview && selectedVisualEditElement && visualEditDraft
                         ? { id: selectedVisualEditElement.id, snapshot: visualEditDraft }
                         : null
                     }
                     onIframeNavigate={handlePreviewNavigate}
                     onSelectionChange={handleVisualSelectionChange}
+                    onStructureChange={setVisualEditSections}
+                    command={visualEditCommand ? { nonce: visualEditCommandNonce, payload: visualEditCommand } : null}
                     selectedDevice={previewDevice}
                     onDeviceChange={setPreviewDevice}
                     className="h-full w-full"
@@ -3016,7 +3580,7 @@ function ProjectContent() {
                   />
                 ) : (
                   <div className="flex h-full items-center justify-center px-5 text-center sm:px-8">
-                    {(isPreparingPreview || (project?.status === "complete" && (project?.files?.length || 0) > 0 && previewEnsureFailures < 2)) ? (
+                    {(isPreparingPreview || (hasProjectFiles && previewEnsureFailures < 2)) ? (
                       <div className="flex flex-col items-center">
                         <Loader2 className="h-6 w-6 animate-spin text-zinc-500" />
                         <p className="mt-3 text-base font-medium text-zinc-800">Waking up your preview environment...</p>

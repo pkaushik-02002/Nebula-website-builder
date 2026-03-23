@@ -4,74 +4,14 @@ import { CreateAfterLogin } from "@/components/create-after-login"
 import { FooterSection } from "@/components/sections/footer-section"
 import { AnimatedAIInput } from "@/components/ui/animated-ai-input"
 import { Blocks, ShieldCheck, Sparkles, Gauge } from "lucide-react"
+import {
+  buildkitFeatureItems,
+  buildkitMetrics,
+  buildkitTestimonials,
+  buildkitUseCases,
+} from "@/lib/buildkit-site-content"
 
-const featureItems = [
-  {
-    icon: Sparkles,
-    title: "Prompt to Product",
-    description: "Describe your idea and get a working website in seconds.",
-  },
-  {
-    icon: Blocks,
-    title: "Live Editing",
-    description: "Refine sections instantly with guided, contextual updates.",
-  },
-  {
-    icon: Gauge,
-    title: "Fast Iteration",
-    description: "Go from rough concept to polished launch-ready pages quickly.",
-  },
-  {
-    icon: ShieldCheck,
-    title: "Production Quality",
-    description: "Clean outputs designed for real companies and real customers.",
-  },
-]
-
-const metrics = [
-  { value: "50K+", label: "Apps Built" },
-  { value: "100M+", label: "Lines Generated" },
-  { value: "<30s", label: "Average Build Time" },
-  { value: "98%", label: "User Satisfaction" },
-]
-
-const useCases = [
-  {
-    title: "SaaS Launch",
-    description: "Create your homepage, pricing, and onboarding flow in one guided session.",
-  },
-  {
-    title: "Client Prototyping",
-    description: "Ship polished concept sites for clients without long design-engineering loops.",
-  },
-  {
-    title: "Founder Validation",
-    description: "Test ideas quickly with premium-looking websites built from plain language.",
-  },
-]
-
-const testimonials = [
-  {
-    text: "I built a complete SaaS dashboard in 30 minutes. What would have taken weeks was done in a single prompt session.",
-    name: "Sarah Chen",
-    role: "Indie Hacker",
-  },
-  {
-    text: "BuildKit is like having a senior developer on demand. It understands exactly what I want to build.",
-    name: "Marcus Johnson",
-    role: "Startup Founder",
-  },
-  {
-    text: "We use BuildKit to prototype client projects. It's 10x faster than our previous workflow.",
-    name: "Emily Rodriguez",
-    role: "Agency Owner",
-  },
-  {
-    text: "As a non-developer, I finally built my dream app without getting blocked by complexity.",
-    name: "David Park",
-    role: "Product Designer",
-  },
-]
+const featureIcons = [Sparkles, Blocks, Gauge, ShieldCheck]
 
 export default function Home() {
   return (
@@ -81,10 +21,7 @@ export default function Home() {
       <main className="relative min-h-screen overflow-x-clip bg-[#f5f5f2] text-[#1f1f1f]">
         <Navbar />
 
-        {/* HERO */}
         <section className="relative isolate min-h-screen overflow-hidden px-4 pt-28 pb-16 sm:px-6 sm:pt-32 lg:px-8">
-          
-          {/* ✅ FIXED BACKGROUND (INLINE STYLE — RELIABLE) */}
           <div
             className="absolute inset-0 -z-30 scale-105"
             style={{
@@ -95,16 +32,11 @@ export default function Home() {
             }}
           />
 
-
           <div className="absolute inset-0 -z-20 bg-gradient-to-b from-black/40 via-black/20 to-black/60" />
-
-          {/* ✨ SOFT LIGHT GLOW (premium touch) */}
           <div className="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_50%_20%,rgba(255,255,255,0.25),transparent_60%)]" />
 
-          {/* CONTENT */}
           <div className="relative z-10 mx-auto flex min-h-[calc(100vh-7rem)] max-w-5xl items-center justify-center pb-20 text-center sm:pb-24">
             <div className="w-full">
-              
               <h1 className="font-display text-5xl font-bold leading-[0.92] tracking-tight text-white sm:text-6xl md:text-7xl lg:text-[5.5rem]">
                 Describe your idea.
                 <span className="mt-2 block text-white/90">We build it.</span>
@@ -122,7 +54,6 @@ export default function Home() {
           </div>
         </section>
 
-        {/* SUBTEXT */}
         <section className="relative px-4 py-8 sm:px-6 lg:px-8">
           <div className="mx-auto max-w-5xl text-center">
             <p className="text-lg font-medium tracking-tight text-zinc-700 sm:text-xl">
@@ -131,11 +62,11 @@ export default function Home() {
           </div>
         </section>
 
-        {/* FEATURES */}
         <section id="features" className="relative px-4 py-10 sm:px-6 sm:py-12 lg:px-8">
           <div className="mx-auto grid max-w-6xl grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {featureItems.map((item, idx) => {
-              const Icon = item.icon
+            {buildkitFeatureItems.map((item, idx) => {
+              const Icon = featureIcons[idx] ?? Sparkles
+
               return (
                 <article
                   key={item.title}
@@ -154,10 +85,9 @@ export default function Home() {
           </div>
         </section>
 
-        {/* METRICS */}
         <section className="relative mt-6 bg-[linear-gradient(180deg,#ecece6_0%,#e6e5dd_100%)] px-4 py-12 sm:px-6 lg:px-8">
           <div className="mx-auto grid max-w-6xl grid-cols-2 gap-6 text-center md:grid-cols-4">
-            {metrics.map((metric) => (
+            {buildkitMetrics.map((metric) => (
               <div key={metric.label}>
                 <p className="font-display text-4xl font-bold text-zinc-900 sm:text-5xl">{metric.value}</p>
                 <p className="mt-2 text-xs uppercase tracking-[0.14em] text-zinc-600">{metric.label}</p>
@@ -166,10 +96,9 @@ export default function Home() {
           </div>
         </section>
 
-        {/* USE CASES */}
         <section className="bg-[#ecece6] px-4 py-12 sm:px-6 lg:px-8">
           <div className="mx-auto grid max-w-6xl gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {useCases.map((useCase) => (
+            {buildkitUseCases.map((useCase) => (
               <article key={useCase.title} className="rounded-2xl bg-white/70 p-6">
                 <h3 className="text-lg font-semibold text-zinc-900">{useCase.title}</h3>
                 <p className="mt-2 text-sm text-zinc-600">{useCase.description}</p>
@@ -178,7 +107,6 @@ export default function Home() {
           </div>
         </section>
 
-        {/* TESTIMONIALS */}
         <section id="testimonials" className="bg-[#ecece6] px-4 pb-16 pt-6 sm:px-6 lg:px-8">
           <div className="mx-auto max-w-6xl">
             <div className="mb-6">
@@ -187,7 +115,7 @@ export default function Home() {
             </div>
 
             <div className="flex gap-4 overflow-x-auto pb-2 [scrollbar-width:thin] [&::-webkit-scrollbar]:h-1 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-zinc-300/80 hover:[&::-webkit-scrollbar-thumb]:bg-zinc-400/80">
-              {testimonials.map((testimonial, idx) => (
+              {buildkitTestimonials.map((testimonial, idx) => (
                 <blockquote
                   key={idx}
                   className="w-[300px] shrink-0 rounded-2xl border border-zinc-200 bg-white/80 p-5"
@@ -202,7 +130,6 @@ export default function Home() {
             </div>
           </div>
         </section>
-
         <FooterSection />
       </main>
     </LenisProvider>

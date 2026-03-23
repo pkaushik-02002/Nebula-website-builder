@@ -556,6 +556,8 @@ function sanitizeEnvVar(key: string, value: string): { key: string; value: strin
 const VISUAL_EDIT_SCRIPT = `
 (function() {
   var idCounter = 0;
+  var sectionCounter = 0;
+  var SECTION_SELECTOR = 'section, header, footer, nav, main > div, [data-bstudio-section]';
   function addIds(root) {
     if (!root || root.nodeType !== 1) return;
     if (!root.hasAttribute || root.hasAttribute('data-bstudio-id')) return;
@@ -565,6 +567,66 @@ const VISUAL_EDIT_SCRIPT = `
   }
   function run() {
     addIds(document.body);
+    ensureSectionIds();
+    postStructure();
+  }
+  function getKind(el) {
+    if (!el || !el.tagName) return 'generic';
+    var tag = String(el.tagName).toLowerCase();
+    if (tag === 'header' || tag === 'nav') return 'header';
+    if (tag === 'footer') return 'footer';
+    var label = ((el.getAttribute('aria-label') || '') + ' ' + (el.className || '')).toLowerCase();
+    if (/hero/.test(label)) return 'hero';
+    if (/cta|call-to-action/.test(label)) return 'cta';
+    if (/feature|benefit|pricing|testimonial|faq/.test(label)) return 'content';
+    return 'generic';
+  }
+  function getLabel(el, index) {
+    var aria = (el.getAttribute && el.getAttribute('aria-label')) || '';
+    if (aria && aria.trim()) return aria.trim();
+    var heading = el.querySelector ? el.querySelector('h1, h2, h3') : null;
+    if (heading && heading.textContent && heading.textContent.trim()) return heading.textContent.trim().slice(0, 48);
+    var kind = getKind(el);
+    if (kind === 'header') return 'Header';
+    if (kind === 'footer') return 'Footer';
+    if (kind === 'hero') return 'Hero';
+    if (kind === 'cta') return 'Call to action';
+    return 'Section ' + (index + 1);
+  }
+  function getSections() {
+    var nodes = Array.prototype.slice.call(document.querySelectorAll(SECTION_SELECTOR));
+    var filtered = nodes.filter(function(el) {
+      if (!el || !el.getBoundingClientRect) return false;
+      var r = el.getBoundingClientRect();
+      if (r.width < 120 || r.height < 40) return false;
+      if (el.closest && el.closest('[data-bstudio-section-id]') && !el.hasAttribute('data-bstudio-section-id')) return false;
+      return true;
+    });
+    return filtered;
+  }
+  function ensureSectionIds() {
+    var sections = getSections();
+    sections.forEach(function(el) {
+      if (!el.hasAttribute('data-bstudio-section-id')) {
+        el.setAttribute('data-bstudio-section-id', 'bstudio-section-' + (sectionCounter++));
+      }
+    });
+  }
+  function postStructure() {
+    ensureSectionIds();
+    var sections = getSections().map(function(el, index) {
+      return {
+        id: el.getAttribute('data-bstudio-section-id'),
+        kind: getKind(el),
+        label: getLabel(el, index),
+        index: index
+      };
+    });
+    window.parent.postMessage({ type: 'preview-structure', sections: sections }, '*');
+  }
+  function getSectionForElement(el) {
+    if (!el || !el.closest) return null;
+    return el.closest('[data-bstudio-section-id]');
   }
   if (document.body) run();
   else document.addEventListener('DOMContentLoaded', run);
@@ -577,6 +639,7 @@ const VISUAL_EDIT_SCRIPT = `
   });
   document.addEventListener('DOMContentLoaded', function() {
     obs.observe(document.body, { childList: true, subtree: true });
+    postStructure();
   });
   window.bstudio = {
     onHover: function(id, rect) {
@@ -615,6 +678,8 @@ const VISUAL_EDIT_SCRIPT = `
       var txt = (el.textContent || '').trim().slice(0, 80);
       var desc = (el.tagName || 'element') + (txt ? ' "' + txt + '"' : '');
       var id = el.getAttribute('data-bstudio-id');
+      var sectionEl = getSectionForElement(el);
+      var sectionId = sectionEl ? sectionEl.getAttribute('data-bstudio-section-id') : null;
       var content = (el.textContent || '').trim();
       var cs = window.getComputedStyle(el);
       var styles = {
@@ -651,24 +716,122 @@ const VISUAL_EDIT_SCRIPT = `
         rect: { x: r.left, y: r.top, width: r.width, height: r.height },
         viewport: { w: window.innerWidth, h: window.innerHeight },
         description: desc,
+        sectionId: sectionId,
         snapshot: { content: content, styles: styles }
       }, '*');
     }
   }, true);
   window.addEventListener('message', function(e) {
     var d = e.data;
-    if (!d || d.type !== 'bstudio-apply-design' || !d.id) return;
-    var el = document.querySelector('[data-bstudio-id="' + d.id + '"]');
-    if (!el) return;
-    if (d.payload) {
-      if (d.payload.content !== undefined) el.textContent = d.payload.content;
-      if (d.payload.styles && typeof d.payload.styles === 'object') {
-        for (var k in d.payload.styles) {
-          var v = d.payload.styles[k];
-          if (v === undefined || v === '') el.style.removeProperty(k.replace(/([A-Z])/g, '-$1').toLowerCase());
-          else el.style[k] = v;
+    if (!d) return;
+    if (d.type === 'bstudio-apply-design' && d.id) {
+      var el = document.querySelector('[data-bstudio-id="' + d.id + '"]');
+      if (!el) return;
+      if (d.payload) {
+        if (d.payload.content !== undefined) el.textContent = d.payload.content;
+        if (d.payload.styles && typeof d.payload.styles === 'object') {
+          for (var k in d.payload.styles) {
+            var v = d.payload.styles[k];
+            if (v === undefined || v === '') el.style.removeProperty(k.replace(/([A-Z])/g, '-$1').toLowerCase());
+            else el.style[k] = v;
+          }
         }
       }
+      return;
+    }
+    if (d.type !== 'bstudio-structure-command' || !d.command) return;
+    var cmd = d.command;
+    ensureSectionIds();
+    var sections = getSections();
+    var section = cmd.sectionId
+      ? document.querySelector('[data-bstudio-section-id="' + cmd.sectionId + '"]')
+      : null;
+    if (cmd.type === 'select-section' && section) {
+      var rect = section.getBoundingClientRect();
+      var sid = section.getAttribute('data-bstudio-id') || '';
+      window.parent.postMessage({
+        type: 'preview-select',
+        id: sid,
+        rect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
+        viewport: { w: window.innerWidth, h: window.innerHeight },
+        description: 'section "' + getLabel(section, 0) + '"',
+        sectionId: section.getAttribute('data-bstudio-section-id'),
+        snapshot: { content: '', styles: {} }
+      }, '*');
+      section.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    if (!section && cmd.type !== 'insert-section') return;
+    if (cmd.type === 'move-section') {
+      var parent = section.parentElement;
+      if (!parent) return;
+      if (cmd.direction === 'up' && section.previousElementSibling) {
+        parent.insertBefore(section, section.previousElementSibling);
+      } else if (cmd.direction === 'down' && section.nextElementSibling) {
+        parent.insertBefore(section.nextElementSibling, section);
+      }
+      postStructure();
+      return;
+    }
+    if (cmd.type === 'reorder-section') {
+      var owner = section.parentElement;
+      if (!owner) return;
+      var siblings = Array.prototype.slice.call(owner.children).filter(function(child) {
+        return child.hasAttribute && child.hasAttribute('data-bstudio-section-id');
+      });
+      var to = Math.max(0, Math.min(Number(cmd.toIndex) || 0, siblings.length - 1));
+      var target = siblings[to];
+      if (!target || target === section) return;
+      owner.insertBefore(section, to < siblings.indexOf(section) ? target : target.nextSibling);
+      postStructure();
+      return;
+    }
+    if (cmd.type === 'duplicate-section') {
+      var clone = section.cloneNode(true);
+      if (clone && clone.setAttribute) {
+        clone.setAttribute('data-bstudio-section-id', 'bstudio-section-' + (sectionCounter++));
+      }
+      section.parentElement.insertBefore(clone, section.nextSibling);
+      addIds(clone);
+      postStructure();
+      return;
+    }
+    if (cmd.type === 'delete-section') {
+      if (sections.length <= 1) return;
+      section.remove();
+      postStructure();
+      return;
+    }
+    if (cmd.type === 'insert-section') {
+      var after = cmd.afterSectionId ? document.querySelector('[data-bstudio-section-id="' + cmd.afterSectionId + '"]') : null;
+      var parentNode = after ? after.parentElement : document.body;
+      if (!parentNode) return;
+      var newSection = document.createElement('section');
+      newSection.setAttribute('data-bstudio-section-id', 'bstudio-section-' + (sectionCounter++));
+      newSection.style.padding = '56px 24px';
+      newSection.style.borderTop = '1px solid #e6e6e1';
+      newSection.style.borderBottom = '1px solid #e6e6e1';
+      var title = document.createElement('h2');
+      title.style.fontSize = '32px';
+      title.style.margin = '0 0 12px';
+      title.style.color = '#18181b';
+      title.textContent =
+        cmd.variant === 'hero' ? 'New hero section' :
+        cmd.variant === 'features' ? 'New features section' :
+        cmd.variant === 'cta' ? 'New call to action' :
+        'New section';
+      var body = document.createElement('p');
+      body.style.margin = '0';
+      body.style.fontSize = '16px';
+      body.style.color = '#52525b';
+      body.textContent = 'Describe what this section should communicate.';
+      newSection.appendChild(title);
+      newSection.appendChild(body);
+      if (after) parentNode.insertBefore(newSection, after.nextSibling);
+      else parentNode.insertBefore(newSection, parentNode.firstChild);
+      addIds(newSection);
+      postStructure();
+      return;
     }
   });
 })();

@@ -12,6 +12,33 @@ export interface Message {
   timestamp?: string
 }
 
+export type BlueprintItemStatus = "confirmed" | "suggested" | "unknown"
+
+export interface BlueprintItem {
+  key: string
+  label: string
+  value: string
+  status: BlueprintItemStatus
+}
+
+export interface BlueprintSection {
+  id: string
+  title: string
+  description?: string
+  items: BlueprintItem[]
+}
+
+export interface ProjectBlueprint {
+  summary: string
+  readiness: number
+  sections: BlueprintSection[]
+  openQuestions: string[]
+  assumptions: string[]
+}
+
+export type PlanningStatus = "draft" | "needs-input" | "plan-generated" | "approved" | "skipped"
+export type ProjectCreationMode = "build" | "agent"
+
 export type ProjectVisibility = "public" | "private" | "link-only"
 
 export interface WebsiteSettings {
@@ -47,6 +74,10 @@ export interface Project {
   vercelDeployUrl?: string
   vercelDeploymentId?: string
   websiteSettings?: WebsiteSettings
+  blueprint?: ProjectBlueprint
+  planningStatus?: PlanningStatus
+  creationMode?: ProjectCreationMode
+  agentSlug?: string
 }
 
 export interface FileNode {
