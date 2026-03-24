@@ -8,17 +8,17 @@ export const dynamic = "force-dynamic"
 const DEFAULT_PAID_PLANS = {
   pro: {
     name: "Pro",
-    priceCents: 2000,
+    priceCents: 9900,
     interval: "month" as const,
-    tokensPerMonth: 50000,
-    features: ["50,000 tokens/month", "All templates", "Priority queue", "Private projects", "Custom domains", "Database integrations", "API access"],
+    tokensPerMonth: 120000,
+    features: ["120,000 credits/month", "60 agent runs per period", "Premium templates + visual edit", "Priority support"],
   },
   team: {
-    name: "Team",
-    priceCents: 4900,
+    name: "Agency",
+    priceCents: 29900,
     interval: "month" as const,
     tokensPerMonth: 500000,
-    features: ["500,000 tokens/month", "Everything in Pro", "Team collaboration", "Shared library", "White-label", "Dedicated support"],
+    features: ["500,000 credits/month", "200 agent runs per period", "Client handoff + white-label", "Priority support"],
   },
 }
 
@@ -70,9 +70,9 @@ export async function GET(req: NextRequest) {
   if (!stripe) {
     return Response.json({
       plans: [
-        { id: "free", name: "Hobby", price: 0, interval: "forever", priceId: null, tokensPerMonth: 10000, features: ["10,000 tokens/month", "Basic templates", "Community support", "Public projects", "Export to GitHub"] },
-        { id: "pro", name: "Pro", price: 2000, interval: "month", priceId: null, tokensPerMonth: 50000, features: DEFAULT_PAID_PLANS.pro.features },
-        { id: "team", name: "Team", price: 4900, interval: "month", priceId: null, tokensPerMonth: 500000, features: DEFAULT_PAID_PLANS.team.features },
+        { id: "free", name: "Hobby", price: 0, interval: "forever", priceId: null, tokensPerMonth: 10000, features: ["10,000 credits/month", "Public projects", "Community support"] },
+        { id: "pro", name: "Pro", price: 9900, interval: "month", priceId: null, tokensPerMonth: 120000, features: DEFAULT_PAID_PLANS.pro.features },
+        { id: "team", name: "Agency", price: 29900, interval: "month", priceId: null, tokensPerMonth: 500000, features: DEFAULT_PAID_PLANS.team.features },
       ],
     })
   }
@@ -92,7 +92,7 @@ export async function GET(req: NextRequest) {
         interval: "forever",
         priceId: null,
         tokensPerMonth: 10000,
-        features: ["10,000 tokens/month", "Basic templates", "Community support", "Public projects", "Export to GitHub"],
+        features: ["10,000 credits/month", "Public projects", "Community support"],
       },
     ]
 
@@ -102,7 +102,7 @@ export async function GET(req: NextRequest) {
       const meta = (p as Stripe.Price & { metadata?: Record<string, string> }).metadata || {}
       const name = (product.name || p.nickname || "Plan").trim()
       const planId = meta.plan_id?.toLowerCase() || (name.toLowerCase().includes("pro") ? "pro" : name.toLowerCase().includes("team") ? "team" : "pro")
-      const tokensPerMonth = meta.tokens_per_month ? parseInt(meta.tokens_per_month, 10) : planId === "team" ? 500000 : 50000
+      const tokensPerMonth = meta.tokens_per_month ? parseInt(meta.tokens_per_month, 10) : planId === "team" ? 500000 : 120000
       const amount = p.unit_amount ?? 0
       plans.push({
         id: planId,
@@ -150,9 +150,9 @@ export async function GET(req: NextRequest) {
     console.error("[Stripe plans]", err)
     return Response.json({
       plans: [
-        { id: "free", name: "Hobby", price: 0, interval: "forever", priceId: null, tokensPerMonth: 10000, features: ["10,000 tokens/month", "Basic templates", "Community support"] },
-        { id: "pro", name: "Pro", price: 2000, interval: "month", priceId: null, tokensPerMonth: 50000, features: DEFAULT_PAID_PLANS.pro.features },
-        { id: "team", name: "Team", price: 4900, interval: "month", priceId: null, tokensPerMonth: 500000, features: DEFAULT_PAID_PLANS.team.features },
+        { id: "free", name: "Hobby", price: 0, interval: "forever", priceId: null, tokensPerMonth: 10000, features: ["10,000 credits/month", "Public projects", "Community support"] },
+        { id: "pro", name: "Pro", price: 9900, interval: "month", priceId: null, tokensPerMonth: 120000, features: DEFAULT_PAID_PLANS.pro.features },
+        { id: "team", name: "Agency", price: 29900, interval: "month", priceId: null, tokensPerMonth: 500000, features: DEFAULT_PAID_PLANS.team.features },
       ],
     })
   }

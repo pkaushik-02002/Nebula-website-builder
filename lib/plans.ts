@@ -13,34 +13,32 @@ export interface PlanDisplayConfig {
 
 export const PLAN_DISPLAY: Record<PlanId, PlanDisplayConfig> = {
   free: {
-    description: "Perfect for trying out BuildKit",
+    description: "Perfect for trying BuildKit before going live.",
     features: [
-      "Basic templates",
+      "10,000 credits/month",
+      "5 agent runs per period",
       "Community support",
       "Public projects",
       "Export to GitHub",
     ],
   },
   pro: {
-    description: "Designed for fast-moving teams building together in real time.",
+    description: "For founders shipping production sites with AI speed.",
     recommended: true,
     features: [
-      "All templates",
-      "Priority queue",
-      "Private projects",
-      "Custom domains",
-      "Database integrations",
-      "API access",
+      "120,000 credits/month",
+      "60 agent runs per period",
+      "Premium templates + visual edit",
+      "Priority support",
     ],
   },
   team: {
-    description: "Advanced controls and power features for growing teams.",
+    description: "Agency-grade scale for teams shipping many client sites.",
     features: [
-      "Everything in Pro",
-      "Team collaboration",
-      "Shared library",
-      "White-label",
-      "Dedicated support",
+      "500,000 credits/month",
+      "200 agent runs per period",
+      "Client handoff + white-label",
+      "Priority support",
     ],
   },
 }
@@ -101,16 +99,16 @@ export const DEFAULT_PLANS_FALLBACK: PlanForApi[] = [
   {
     id: "pro",
     name: "Pro",
-    price: 2000,
+    price: 9900,
     interval: "month",
     priceId: null,
-    tokensPerMonth: 50000,
+    tokensPerMonth: 120000,
     features: PLAN_DISPLAY.pro.features,
   },
   {
     id: "team",
-    name: "Team",
-    price: 4900,
+    name: "Agency",
+    price: 29900,
     interval: "month",
     priceId: null,
     tokensPerMonth: 500000,

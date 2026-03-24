@@ -102,6 +102,9 @@ import {
   updateBlueprintFromReply,
 } from "@/lib/project-blueprint"
 import { buildkitAgents } from "@/lib/buildkit-agents"
+import { hasGenerationMeta, parseGenerationMeta } from "@/lib/generation-meta"
+import { resolveTerminalAgentPhase } from "@/lib/agent-runtime"
+import { getAgentRunLimitForPlan } from "@/lib/agent-quotas"
 
 // Persists across Strict Mode remounts so only one sandbox run can update logs
 let sandboxRunIdCounter = 0
@@ -1704,6 +1707,20 @@ function ProjectContent() {
         if (response.status === 402) {
           setTokenLimitModalOpen(true)
         }
+        if (response.status === 429 && errorData?.code === "AGENT_LIMIT_REACHED") {
+          const fallbackMessage = "Agents limit reached. Switched to Builder mode. Upgrade for more agent runs or wait for reset."
+          await updateDoc(projectRef, {
+            status: "pending",
+            creationMode: "build",
+            agentSlug: deleteField(),
+          })
+          setProject((prev) => (prev ? { ...prev, status: "pending", creationMode: "build", agentSlug: undefined } : prev))
+          toast({
+            title: "Agents limit reached",
+            description: fallbackMessage,
+          })
+          return
+        }
         throw new Error(errorData.error || `Generation failed: ${response.status}`)
       }
 
@@ -1788,7 +1805,22 @@ function ProjectContent() {
         finalFiles = [...finalBlocks]
       }
       
-      const suggestsBackend = /===META:\s*suggestsBackend\s*=\s*true\s*===/i.test(fullContent)
+      const generationMeta = parseGenerationMeta(fullContent)
+      const shouldPersistGenerationMeta = hasGenerationMeta(generationMeta)
+      const shouldPersistAgentRuntime = (project.creationMode || "build") === "agent"
+      const agentRuntime = shouldPersistAgentRuntime
+        ? {
+            mode: "agent" as const,
+            phase: resolveTerminalAgentPhase({
+              suggestedPhase: generationMeta.agentPhase,
+              blockedReason: generationMeta.blockedReason,
+              setupRequirementCount: generationMeta.setupRequirements.length,
+            }),
+            setupRequirements: generationMeta.setupRequirements,
+            ...(generationMeta.blockedReason ? { blockedReason: generationMeta.blockedReason } : {}),
+            updatedAt: new Date().toISOString(),
+          }
+        : undefined
 
       if (usesNvidiaVerificationGate(model)) {
         setAgentStatus("Verifying generated app in sandbox...")
@@ -1847,7 +1879,9 @@ function ProjectContent() {
       await updateDoc(projectRef, {
         status: "complete",
         files: finalFiles,
-        ...(suggestsBackend ? { suggestsBackend: true } : {}),
+        ...(generationMeta.suggestsBackend ? { suggestsBackend: true } : {}),
+        ...(shouldPersistGenerationMeta ? { generationMeta } : {}),
+        ...(agentRuntime ? { agentRuntime } : {}),
         messages: nextMessages,
       })
       setProject((prev) =>
@@ -1856,7 +1890,9 @@ function ProjectContent() {
               ...prev,
               status: "complete",
               files: finalFiles,
-              ...(suggestsBackend ? { suggestsBackend: true } : {}),
+              ...(generationMeta.suggestsBackend ? { suggestsBackend: true } : {}),
+              ...(shouldPersistGenerationMeta ? { generationMeta } : {}),
+              ...(agentRuntime ? { agentRuntime } : {}),
               messages: nextMessages,
             }
           : prev
@@ -2747,6 +2783,16 @@ function ProjectContent() {
   // Calculate tokens limit (never negative remaining)
   const remainingDisplay = userData ? Math.max(0, userData.tokenUsage.remaining ?? 0) : 0
   const tokensLimit = userData ? userData.tokenUsage.used + remainingDisplay : 0
+  const agentRunLimit = userData ? getAgentRunLimitForPlan(userData.planId, userData.agentRunLimit) : 0
+  const agentUsed = userData ? Math.max(0, Number(userData.agentUsage?.used ?? 0)) : 0
+  const agentRemaining = userData
+    ? Math.max(
+        0,
+        Number.isFinite(Number(userData.agentUsage?.remaining))
+          ? Number(userData.agentUsage?.remaining)
+          : agentRunLimit - agentUsed
+      )
+    : 0
 
   if (authLoading || loading) {
     return (
@@ -2861,15 +2907,20 @@ function ProjectContent() {
             </div>
             <div className="flex shrink-0 items-center gap-2">
             {creationMode === "agent" ? (
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="h-9 rounded-lg border-zinc-300 bg-white px-3 text-zinc-700 hover:bg-zinc-100"
-                onClick={() => setPlanningStudioOpenManual(true)}
-              >
-                Plan mode
-              </Button>
+              <div className="flex items-center gap-2">
+                <span className="hidden rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-[11px] text-zinc-600 sm:inline-flex">
+                  Agents {agentRemaining}/{agentRunLimit}
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-9 rounded-lg border-zinc-300 bg-white px-3 text-zinc-700 hover:bg-zinc-100"
+                  onClick={() => setPlanningStudioOpenManual(true)}
+                >
+                  Plan mode
+                </Button>
+              </div>
             ) : null}
             <Button
               type="button"

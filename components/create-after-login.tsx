@@ -5,13 +5,14 @@ import { usePathname, useRouter } from "next/navigation"
 import { collection, addDoc, serverTimestamp } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { useAuth } from "@/contexts/auth-context"
+import { getAgentRunLimitForPlan } from "@/lib/agent-quotas"
 
 const PENDING_CREATE_KEY = "buildkit_pending_create"
 
 export function CreateAfterLogin() {
   const pathname = usePathname()
   const router = useRouter()
-  const { user, loading } = useAuth()
+  const { user, userData, loading } = useAuth()
   const handledRef = useRef(false)
 
   useEffect(() => {
@@ -38,13 +39,22 @@ export function CreateAfterLogin() {
 
     handledRef.current = true
     sessionStorage.removeItem(PENDING_CREATE_KEY)
+    const agentLimit = getAgentRunLimitForPlan(userData?.planId, userData?.agentRunLimit)
+    const agentRemaining = Math.max(
+      0,
+      Number.isFinite(Number(userData?.agentUsage?.remaining))
+        ? Number(userData?.agentUsage?.remaining)
+        : agentLimit - Number(userData?.agentUsage?.used ?? 0)
+    )
+    const resolvedCreationMode: "build" | "agent" =
+      data.creationMode === "agent" && agentRemaining <= 0 ? "build" : (data.creationMode || "build")
 
     addDoc(collection(db, "projects"), {
       prompt: data.prompt.trim(),
       model: data.model || "GPT-4-1 Mini",
       status: "pending",
-      creationMode: data.creationMode || "build",
-      agentSlug: data.creationMode === "agent" ? data.agentSlug || undefined : undefined,
+      creationMode: resolvedCreationMode,
+      agentSlug: resolvedCreationMode === "agent" ? data.agentSlug || undefined : undefined,
       createdAt: serverTimestamp(),
       messages: [],
       ownerId: user.uid,
@@ -57,7 +67,7 @@ export function CreateAfterLogin() {
         console.error("CreateAfterLogin: failed to create project", err)
         handledRef.current = false
       })
-  }, [pathname, user, loading, router])
+  }, [pathname, user, userData, loading, router])
 
   return null
 }

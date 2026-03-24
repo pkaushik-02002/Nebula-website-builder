@@ -20,6 +20,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { buildkitAgents } from "@/lib/buildkit-agents";
+import { getAgentRunLimitForPlan } from "@/lib/agent-quotas";
 
 interface UseAutoResizeTextareaProps {
   minHeight: number;
@@ -173,6 +174,8 @@ export function AnimatedAIInput({
   const [isCreating, setIsCreating] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
   const [creationMode, setCreationMode] = useState<"build" | "agent">("build");
+  const [agentLimitNotice, setAgentLimitNotice] = useState<string | null>(null);
+  const [mobileQuotaHint, setMobileQuotaHint] = useState<"build" | "agent" | null>(null);
   const [autoMode, setAutoMode] = useState(true);
   const [selectedModel, setSelectedModel] = useState("GPT-4-1 Mini");
   const [availableModels, setAvailableModels] = useState([
@@ -192,6 +195,21 @@ export function AnimatedAIInput({
   });
 
   const isPaidUser = userData?.planId && userData.planId !== "free";
+  const buildUsed = Math.max(0, Number(userData?.tokenUsage?.used ?? 0));
+  const buildRemaining = Math.max(0, Number(userData?.tokenUsage?.remaining ?? 0));
+  const buildTokenLimit = Math.max(0, Number(userData?.tokensLimit ?? 0), buildUsed + buildRemaining);
+  const agentRunLimit = getAgentRunLimitForPlan(userData?.planId, userData?.agentRunLimit);
+  const agentUsed = Math.max(0, Number(userData?.agentUsage?.used ?? 0));
+  const agentRemaining = Math.max(
+    0,
+    Number.isFinite(Number(userData?.agentUsage?.remaining))
+      ? Number(userData?.agentUsage?.remaining)
+      : agentRunLimit - agentUsed
+  );
+  const canUseAgents = !userData || agentRemaining > 0;
+  const agentResetLabel = userData?.agentUsage?.periodEnd
+    ? new Date(userData.agentUsage.periodEnd).toLocaleDateString()
+    : null;
   const effectiveModel = autoMode ? "GPT-4-1 Mini" : selectedModel;
   const primaryAgent = buildkitAgents[0];
   const isAgentCreateMode = mode === "create" && creationMode === "agent";
@@ -207,6 +225,14 @@ export function AnimatedAIInput({
       setCreationMode("build");
     }
   }, [mode]);
+
+  useEffect(() => {
+    if (mode !== "create" || creationMode !== "agent" || canUseAgents) return;
+    setCreationMode("build");
+    setAgentLimitNotice(
+      `Agents limit reached. Switched to Builder mode. Upgrade for more agent runs${agentResetLabel ? ` or wait until ${agentResetLabel}.` : " or wait for your limit reset."}`
+    );
+  }, [agentResetLabel, canUseAgents, creationMode, mode]);
 
   useEffect(() => {
     if (!initialModel) return;
@@ -277,12 +303,13 @@ export function AnimatedAIInput({
 
     setIsCreating(true);
     try {
+      const resolvedCreationMode: "build" | "agent" = creationMode === "agent" && !canUseAgents ? "build" : creationMode;
       const docRef = await addDoc(collection(db, "projects"), {
         prompt: value.trim(),
         model: effectiveModel,
         status: "pending",
-        creationMode,
-        agentSlug: creationMode === "agent" ? primaryAgent.slug : undefined,
+        creationMode: resolvedCreationMode,
+        agentSlug: resolvedCreationMode === "agent" ? primaryAgent.slug : undefined,
         createdAt: serverTimestamp(),
         messages: [],
         ownerId: user?.uid ?? undefined,
@@ -370,32 +397,81 @@ export function AnimatedAIInput({
           />
 
           <div className="absolute bottom-3 left-3 flex max-w-[calc(100%-4.5rem)] items-center gap-2 sm:bottom-4 sm:left-4">
+            {mode === "create" && agentLimitNotice ? (
+              <div className="absolute -top-11 left-0 right-0 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
+                {agentLimitNotice}
+              </div>
+            ) : null}
             {mode === "create" && !compact ? (
-              <div className="inline-flex shrink-0 rounded-full border border-zinc-200 bg-white/90 p-1 shadow-sm">
-                <button
-                  type="button"
-                  onClick={() => setCreationMode("build")}
-                  className={cn(
-                    "rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
-                    creationMode === "build"
-                      ? "bg-zinc-900 text-white"
-                      : "text-zinc-600 hover:text-zinc-900"
-                  )}
-                >
-                  Build
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setCreationMode("agent")}
-                  className={cn(
-                    "rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
-                    creationMode === "agent"
-                      ? "bg-[#6f6557] text-white"
-                      : "text-zinc-600 hover:text-zinc-900"
-                  )}
-                >
-                  {primaryAgent.shortLabel}
-                </button>
+              <div className="inline-flex shrink-0 items-center gap-2 rounded-full border border-zinc-200 bg-white/90 p-1 shadow-sm">
+                <div className="group/build relative">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCreationMode("build");
+                      setAgentLimitNotice(null);
+                      setMobileQuotaHint((prev) => (prev === "build" ? null : "build"));
+                    }}
+                    className={cn(
+                      "rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
+                      creationMode === "build"
+                        ? "bg-zinc-900 text-white"
+                        : "text-zinc-600 hover:text-zinc-900"
+                    )}
+                  >
+                    Build
+                  </button>
+                  {userData ? (
+                    <div className="pointer-events-none absolute bottom-[calc(100%+10px)] left-1/2 z-20 hidden max-w-[80vw] -translate-x-1/2 whitespace-normal rounded-xl bg-[#1f1f1f] px-3 py-2 text-center text-[11px] font-medium text-white shadow-lg group-hover/build:md:block">
+                      Build tokens left: {buildRemaining}/{buildTokenLimit}
+                      <span className="absolute left-1/2 top-full -translate-x-1/2 border-x-[6px] border-t-[6px] border-x-transparent border-t-[#1f1f1f]" />
+                    </div>
+                  ) : null}
+                </div>
+                <div className="group/agent relative">
+                  <button
+                    type="button"
+                    onClick={() => {
+                    if (!canUseAgents) {
+                      setCreationMode("build");
+                      setAgentLimitNotice(
+                        `Agents limit reached. Stay in Builder mode for now. ${isPaidUser ? "Your agents quota will reset next period." : "Upgrade for more agent runs or wait for reset."}`
+                      );
+                      setMobileQuotaHint((prev) => (prev === "agent" ? null : "agent"));
+                      return;
+                    }
+                    setCreationMode("agent");
+                    setAgentLimitNotice(null);
+                    setMobileQuotaHint((prev) => (prev === "agent" ? null : "agent"));
+                  }}
+                    className={cn(
+                      "rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
+                      creationMode === "agent"
+                        ? "bg-[#6f6557] text-white"
+                        : "text-zinc-600 hover:text-zinc-900",
+                      !canUseAgents && "cursor-not-allowed text-zinc-400 hover:text-zinc-400"
+                    )}
+                  >
+                    {primaryAgent.shortLabel}
+                  </button>
+                  {userData ? (
+                    <div className="pointer-events-none absolute bottom-[calc(100%+10px)] left-1/2 z-20 hidden max-w-[80vw] -translate-x-1/2 whitespace-normal rounded-xl bg-[#1f1f1f] px-3 py-2 text-center text-[11px] font-medium text-white shadow-lg group-hover/agent:md:block">
+                      {canUseAgents
+                        ? `Agents runs left: ${agentRemaining}/${agentRunLimit}`
+                        : `Agents limit reached: ${agentRemaining}/${agentRunLimit} left`}
+                      <span className="absolute left-1/2 top-full -translate-x-1/2 border-x-[6px] border-t-[6px] border-x-transparent border-t-[#1f1f1f]" />
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+            {mode === "create" && !compact && userData && mobileQuotaHint ? (
+              <div className="absolute -top-11 left-0 right-0 rounded-xl border border-zinc-700 bg-[#1f1f1f] px-3 py-2 text-center text-[11px] font-medium text-white md:hidden">
+                {mobileQuotaHint === "build"
+                  ? `Build tokens left: ${buildRemaining}/${buildTokenLimit}`
+                  : canUseAgents
+                    ? `Agents runs left: ${agentRemaining}/${agentRunLimit}`
+                    : `Agents limit reached: ${agentRemaining}/${agentRunLimit} left`}
               </div>
             ) : null}
 

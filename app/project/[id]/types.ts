@@ -1,3 +1,5 @@
+import type { AgentRuntimePhase, AgentRuntimeSnapshot, AgentSetupRequirement } from "@/lib/agent-runtime"
+
 export interface GeneratedFile {
   path: string
   content: string
@@ -41,6 +43,13 @@ export type ProjectCreationMode = "build" | "agent"
 
 export type ProjectVisibility = "public" | "private" | "link-only"
 
+export interface ProjectGenerationMeta {
+  suggestsBackend?: boolean
+  setupRequirements?: AgentSetupRequirement[]
+  agentPhase?: AgentRuntimePhase
+  blockedReason?: string
+}
+
 export interface WebsiteSettings {
   siteName?: string
   envVars?: Array<{ key: string; value: string }>
@@ -65,6 +74,8 @@ export interface Project {
   githubInstallationId?: number
   githubSyncedAt?: Date | { toDate: () => Date }
   suggestsBackend?: boolean
+  generationMeta?: ProjectGenerationMeta
+  agentRuntime?: AgentRuntimeSnapshot
   supabaseUrl?: string
   supabaseProjectRef?: string
   visibility?: ProjectVisibility

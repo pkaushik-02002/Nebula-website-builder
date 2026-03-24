@@ -26,6 +26,7 @@ import {
   XCircle,
 } from "lucide-react"
 import { ProtectedRoute } from "@/components/auth/protected-route"
+import { getAgentRunLimitForPlan } from "@/lib/agent-quotas"
 
 type ProjectStatus = "pending" | "generating" | "complete" | "error"
 
@@ -171,6 +172,14 @@ function SettingsContent() {
     periodEnd ? Math.max(0, Math.ceil((periodEnd.getTime() - Date.now()) / (1000 * 60 * 60 * 24))) : 0
   const usageState =
     tokenPercentage >= 90 ? "High" : tokenPercentage >= 60 ? "Moderate" : "Healthy"
+  const agentRunLimit = getAgentRunLimitForPlan(userData.planId, userData.agentRunLimit)
+  const agentUsed = Math.max(0, Number(userData.agentUsage?.used ?? 0))
+  const agentRemaining = Math.max(
+    0,
+    Number.isFinite(Number(userData.agentUsage?.remaining))
+      ? Number(userData.agentUsage?.remaining)
+      : agentRunLimit - agentUsed
+  )
 
   const creditsRunwayDays = dailyAverage > 0 ? Math.floor(remainingClamped / dailyAverage) : null
 
@@ -456,6 +465,20 @@ function SettingsContent() {
                       Workspace context
                     </div>
                     <p className="mt-1 text-sm text-zinc-800 truncate">{currentWorkspace?.slug || "personal"}</p>
+                  </div>
+                  <div className="rounded-xl border border-zinc-200 bg-[#f5f5f2]/50 p-3 sm:col-span-2">
+                    <div className="flex items-center gap-2 text-zinc-500 text-[11px] uppercase tracking-wider">
+                      <Sparkles className="w-3.5 h-3.5" />
+                      Agents usage
+                    </div>
+                    <p className="mt-1 text-sm text-zinc-800">
+                      {agentUsed.toLocaleString()} used · {agentRemaining.toLocaleString()} / {agentRunLimit.toLocaleString()} remaining
+                    </p>
+                    <p className="mt-1 text-xs text-zinc-500">
+                      {userData.agentUsage?.periodEnd
+                        ? `Resets ${new Date(userData.agentUsage.periodEnd).toLocaleDateString()}`
+                        : "Resets each billing period"}
+                    </p>
                   </div>
                 </div>
 

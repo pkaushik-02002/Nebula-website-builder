@@ -67,9 +67,9 @@ export function Navbar() {
 
   return (
     <header className="fixed top-0 left-0 right-0 z-40 p-4">
-      <nav className="relative max-w-5xl w-full mx-auto grid h-12 grid-cols-[1fr_auto_1fr] items-center px-4 sm:px-6 rounded-full bg-white border border-zinc-200">
+      <nav className="relative max-w-5xl w-full mx-auto flex h-12 items-center justify-between px-4 sm:px-6 rounded-full bg-white border border-zinc-200 md:grid md:grid-cols-[1fr_auto_1fr]">
         {/* Left: Logo */}
-        <Link href="/" className="justify-self-start font-display text-lg font-semibold text-zinc-900 shrink-0">
+        <Link href="/" className="font-display text-lg font-semibold text-zinc-900 shrink-0 md:justify-self-start">
           BuildKit
         </Link>
 
@@ -87,7 +87,7 @@ export function Navbar() {
         </div>
 
         {/* Right Side */}
-        <div className="flex items-center gap-2 justify-self-end">
+        <div className="ml-auto flex items-center gap-2 md:ml-0 md:justify-self-end">
           {/* User/profile + auth (all breakpoints) */}
           {!mounted || loading ? (
             <div className="w-8 h-8 rounded-full bg-zinc-100 animate-pulse" />
