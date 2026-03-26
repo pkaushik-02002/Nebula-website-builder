@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useCallback, useEffect } from "react";
-import { ArrowUp, Check, Loader2, Pause, Sparkles, X } from "lucide-react";
+import { ArrowUp, Check, Loader2, Square, Sparkles, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Textarea } from "@/components/ui/textarea";
@@ -584,7 +584,7 @@ export function AnimatedAIInput({
           <motion.button
             type="button"
             className={cn(
-              "absolute bottom-3 right-3 sm:bottom-4 sm:right-4 flex h-10 w-10 items-center justify-center rounded-full transition-all duration-200",
+              "absolute bottom-3 right-3 sm:bottom-4 sm:right-4 flex h-10 items-center justify-center gap-2 rounded-full transition-all duration-200 px-3",
               "focus-visible:ring-1 focus-visible:ring-zinc-300 focus-visible:ring-offset-0",
               canStop
                 ? "bg-zinc-900 text-white hover:bg-black active:scale-95"
@@ -594,13 +594,22 @@ export function AnimatedAIInput({
                   : "bg-zinc-900 text-white hover:bg-black active:scale-95"
                 : "bg-zinc-100 text-zinc-400 cursor-not-allowed"
             )}
-            aria-label={canStop ? "Pause generation" : submitAriaLabel}
-            title={canStop ? "Pause generation" : submitAriaLabel}
+            aria-label={canStop ? "Stop generating" : submitAriaLabel}
+            title={canStop ? "Stop generating" : submitAriaLabel}
             disabled={!canSubmit && !canStop}
             onClick={canStop ? onStop : handleSubmit}
             whileTap={canSubmit || canStop ? { scale: 0.92 } : {}}
           >
-            {canStop ? <Pause className="h-4 w-4" /> : isCreating || isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
+            {canStop ? (
+              <>
+                <Square className="h-4 w-4" />
+                <span className="text-xs font-medium">Stop</span>
+              </>
+            ) : isCreating || isLoading ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <ArrowUp className="h-4 w-4" />
+            )}
           </motion.button>
         </div>
       </div>

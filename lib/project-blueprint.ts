@@ -6,6 +6,18 @@ import type {
   ProjectBlueprint,
 } from "@/app/project/[id]/types"
 
+/** Setup requirements that may block or guide the build */
+export type SetupRequirementType = "auth" | "database" | "payments" | "supabase" | "stripe" | "custom-api" | "cms"
+
+export interface SetupRequirement {
+  type: SetupRequirementType
+  label: string
+  description: string
+  isRequired: boolean
+  isConfirmed: boolean
+  suggestedTiming: "v1" | "v2" | "optional"
+}
+
 export interface GuidedAnswerOption {
   id: string
   label: string
@@ -87,7 +99,7 @@ function buildOption(id: string, label: string, value = label): GuidedAnswerOpti
   return { id, label, value }
 }
 
-function slugify(value: string) {
+export function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
 }
 
@@ -184,7 +196,12 @@ function deriveGuidedOptions(blueprint: ProjectBlueprint, unresolvedItem: { key:
   return normalizeList([...questionChoices, ...itemChoices])
 }
 
-function detectProjectType(prompt: string) {
+/**
+ * Fallback detection functions for when AI analysis is not available.
+ * These provide reasonable defaults without calling the API.
+ */
+
+function detectProjectTypeSync(prompt: string) {
   const text = prompt.toLowerCase()
 
   if (/(dashboard|admin|portal|internal tool|workspace)/.test(text)) {
@@ -203,7 +220,7 @@ function detectProjectType(prompt: string) {
   return { value: "Website or web app needs confirmation", status: "unknown" as const }
 }
 
-function detectAudience(prompt: string) {
+function detectAudienceSync(prompt: string) {
   const text = prompt.toLowerCase()
   const match =
     text.match(/for ([a-z0-9 ,/&-]+)/i) ||
@@ -220,7 +237,7 @@ function detectAudience(prompt: string) {
   return { value: "Primary audience not defined yet", status: "unknown" as const }
 }
 
-function detectVisual(prompt: string) {
+function detectVisualSync(prompt: string) {
   const text = prompt.toLowerCase()
   const keywords = [
     "minimal",
@@ -250,7 +267,7 @@ function detectVisual(prompt: string) {
   }
 }
 
-function detectPages(prompt: string, projectType: string) {
+function detectPagesSync(prompt: string, projectType: string) {
   const text = prompt.toLowerCase()
   const explicitPages = normalizeList(
     (text.match(/\b(home|about|pricing|contact|blog|faq|dashboard|settings|checkout|login|signup)\b/g) || [])
@@ -281,7 +298,7 @@ function detectPages(prompt: string, projectType: string) {
   }
 }
 
-function detectFeatures(prompt: string) {
+function detectFeaturesSync(prompt: string) {
   const text = prompt.toLowerCase()
   const features = normalizeList([
     /(login|sign in|auth|authentication)/.test(text) ? "Authentication" : "",
@@ -303,7 +320,7 @@ function detectFeatures(prompt: string) {
   }
 }
 
-function detectContent(prompt: string) {
+function detectContentSync(prompt: string) {
   const text = prompt.toLowerCase()
   if (/(copy|content|case stud|testimonials|images|portfolio|gallery)/.test(text)) {
     return { value: "Custom content is part of the brief", status: "confirmed" as const }
@@ -315,7 +332,7 @@ function detectContent(prompt: string) {
   }
 }
 
-function detectSystems(prompt: string) {
+function detectSystemsSync(prompt: string) {
   const text = prompt.toLowerCase()
   const parts = normalizeList([
     /(auth|login|signup)/.test(text) ? "Auth may be needed" : "",
@@ -337,7 +354,7 @@ function detectSystems(prompt: string) {
   }
 }
 
-function detectScope(prompt: string) {
+function detectScopeSync(prompt: string) {
   const text = prompt.toLowerCase()
   if (/(mvp|simple|small|single page|one page)/.test(text)) {
     return { value: "Focused launch scope", status: "confirmed" as const }
@@ -352,16 +369,81 @@ function detectScope(prompt: string) {
   }
 }
 
-function buildSections(prompt: string): BlueprintSection[] {
+/**
+ * AI-driven detection using the blueprint analyze API.
+ * Intelligently extracts project attributes from user prompt with context awareness.
+ */
+async function detectWithAI(prompt: string, existingBlueprint?: ProjectBlueprint) {
+  try {
+    const response = await fetch("/api/blueprint/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt,
+        existingBlueprint: existingBlueprint ? {
+          sections: existingBlueprint.sections
+        } : undefined,
+      }),
+    })
+
+    if (!response.ok) {
+      console.warn("AI analysis failed, falling back to heuristics")
+      return null
+    }
+
+    const analysis = await response.json()
+    return analysis
+  } catch (error) {
+    console.warn("AI analysis error, falling back to heuristics:", error)
+    return null
+  }
+}
+
+/**
+ * Get detection results, preferring AI analysis with sync fallback.
+ */
+async function getDetectionResults(prompt: string, existingBlueprint?: ProjectBlueprint) {
+  const aiAnalysis = await detectWithAI(prompt, existingBlueprint)
+
+  if (aiAnalysis) {
+    return {
+      type: { value: aiAnalysis.type.value, status: aiAnalysis.type.status },
+      audience: { value: aiAnalysis.audience.value, status: aiAnalysis.audience.status },
+      pages: { value: aiAnalysis.pages.value, status: aiAnalysis.pages.status },
+      features: { value: aiAnalysis.features.value, status: aiAnalysis.features.status },
+      visual: { value: aiAnalysis.style.value, status: aiAnalysis.style.status },
+      systems: { value: aiAnalysis.systems.value, status: aiAnalysis.systems.status },
+      content: { value: aiAnalysis.content.value, status: aiAnalysis.content.status },
+      scope: { value: aiAnalysis.scope.value, status: aiAnalysis.scope.status },
+    }
+  }
+
+  // Fallback to sync detection
+  const projectType = detectProjectTypeSync(prompt)
+  return {
+    type: projectType,
+    audience: detectAudienceSync(prompt),
+    pages: detectPagesSync(prompt, projectType.value),
+    features: detectFeaturesSync(prompt),
+    visual: detectVisualSync(prompt),
+    systems: detectSystemsSync(prompt),
+    content: detectContentSync(prompt),
+    scope: detectScopeSync(prompt),
+  }
+}
+
+async function buildSections(prompt: string, existingBlueprint?: ProjectBlueprint): Promise<BlueprintSection[]> {
   const goal = tidy(prompt)
-  const product = detectProjectType(prompt)
-  const audience = detectAudience(prompt)
-  const visual = detectVisual(prompt)
-  const pages = detectPages(prompt, product.value)
-  const features = detectFeatures(prompt)
-  const content = detectContent(prompt)
-  const systems = detectSystems(prompt)
-  const scope = detectScope(prompt)
+  const detections = await getDetectionResults(prompt, existingBlueprint)
+  
+  const product = detections.type
+  const audience = detections.audience
+  const visual = detections.visual
+  const pages = detections.pages
+  const features = detections.features
+  const content = detections.content
+  const systems = detections.systems
+  const scope = detections.scope
 
   const sectionMap: Record<SectionId, BlueprintSection> = {
     goal: {
@@ -446,26 +528,118 @@ function buildOpenQuestions(sections: BlueprintSection[]) {
 
   const prompts = [
     itemMap.get("audience")?.status === "unknown"
-      ? "Who is the primary audience, and what should they do first on the site?"
+      ? "Who is the primary audience? What should they do first?"
       : "",
     itemMap.get("type")?.status === "unknown"
-      ? "Should this be a marketing website, a product app, or a hybrid experience?"
+      ? "What type of experience: marketing site, product app, or SaaS?"
       : "",
     itemMap.get("pages")?.status !== "confirmed"
-      ? "What are the must-have pages or screens for version one?"
+      ? "What are the must-have pages or screens for the first version?"
       : "",
     itemMap.get("style")?.status === "unknown"
-      ? "What visual direction should the build follow: minimal, bold, editorial, luxury, or something else?"
+      ? "What's the visual direction? (minimal, bold, luxury, editorial, modern...)"
       : "",
     itemMap.get("systems")?.status === "unknown"
-      ? "Do you need auth, payments, a CMS, or any persistent backend data?"
+      ? "Do you need user authentication, payments, a CMS, or a backend?"
       : "",
     itemMap.get("content")?.status === "unknown"
-      ? "Will you provide content and brand assets, or should the first pass use placeholder copy?"
+      ? "Will you provide content and brand assets, or use placeholder copy?"
       : "",
   ]
 
   return normalizeList(prompts).slice(0, 3)
+}
+
+/** Detect which backend systems are explicitly mentioned and required */
+function detectSetupRequirements(prompt: string): SetupRequirement[] {
+  const text = prompt.toLowerCase()
+  const requirements: SetupRequirement[] = []
+
+  // Authentication
+  if (/(auth|login|sign[- ]?in|signup|account|user accounts)/.test(text)) {
+    requirements.push({
+      type: "auth",
+      label: "User authentication",
+      description: "Users need to sign in or create accounts",
+      isRequired: true,
+      isConfirmed: true,
+      suggestedTiming: "v1",
+    })
+  }
+
+  // Payments / Stripe
+  if (/(payment|stripe|checkout|subscription|billing|charge|credit card)/.test(text)) {
+    requirements.push({
+      type: "payments",
+      label: "Payment processing",
+      description: "Collect payments from users (Stripe, etc)",
+      isRequired: true,
+      isConfirmed: true,
+      suggestedTiming: "v1",
+    })
+  }
+
+  // Database
+  if (/(database|backend|persist|save|data storage|user data|records)/.test(text)) {
+    requirements.push({
+      type: "database",
+      label: "Database",
+      description: "Persistent data storage for users or content",
+      isRequired: true,
+      isConfirmed: true,
+      suggestedTiming: "v1",
+    })
+  }
+
+  // Supabase
+  if (/supabase/.test(text)) {
+    requirements.push({
+      type: "supabase",
+      label: "Supabase integration",
+      description: "Use Supabase for auth and database",
+      isRequired: true,
+      isConfirmed: true,
+      suggestedTiming: "v1",
+    })
+  }
+
+  // Stripe specifically
+  if (/stripe/.test(text)) {
+    requirements.push({
+      type: "stripe",
+      label: "Stripe",
+      description: "Process payments with Stripe",
+      isRequired: true,
+      isConfirmed: true,
+      suggestedTiming: "v1",
+    })
+  }
+
+  // CMS
+  if (/(cms|content management|blog|editorial|manage content)/i.test(text)) {
+    requirements.push({
+      type: "cms",
+      label: "CMS or content management",
+      description: "Platform to manage content and blog posts",
+      isRequired: true,
+      isConfirmed: true,
+      suggestedTiming: "v1",
+    })
+  }
+
+  // Custom API
+  if (/(api|third[- ]?party|external|integration|webhook)/.test(text)) {
+    requirements.push({
+      type: "custom-api",
+      label: "Custom API or integrations",
+      description: "Connect to external APIs or services",
+      isRequired: true,
+      isConfirmed: true,
+      suggestedTiming: "v2",
+    })
+  }
+
+  return requirements
 }
 
 function buildAssumptions(sections: BlueprintSection[]) {
@@ -556,12 +730,18 @@ function answerFromReply(blueprint: ProjectBlueprint, reply: string) {
     text.match(/(?:for|targeting|aimed at)\s+(.+)/i) ||
     text.match(/audience(?: is| should be)?\s+(.+)/i)
   if (audienceMatch?.[1]) {
-    sections = updateItem(sections, "audience", audienceMatch[1], "confirmed")
+    const candidate = tidy(audienceMatch[1])
+    // Reject if it looks like generic instructions (long, contains verbs, punctuation)
+    const isProperAudience = candidate.length <= 120 && !/[.!?]$/.test(candidate) && !/\b(build|create|make|design|add|include|have|need)\b/i.test(candidate)
+    if (isProperAudience) {
+      sections = updateItem(sections, "audience", candidate, "confirmed")
+    }
   } else {
     const audienceItem = sections
       .flatMap((section) => section.items)
       .find((item) => item.key === "audience")
-    if (audienceItem?.status !== "confirmed" && text.length <= 80 && !/[.?!]/.test(text)) {
+    // Only treat short, simple text as audience (not complex instructions)
+    if (audienceItem?.status !== "confirmed" && text.length <= 80 && !/[.?!]/.test(text) && !/\b(build|when|if|should|need|can|want)\b/i.test(text)) {
       sections = updateItem(sections, "audience", text, "confirmed")
     }
   }
@@ -604,53 +784,63 @@ function answerFromReply(blueprint: ProjectBlueprint, reply: string) {
     )
   }
 
-  if (/(auth|login|sign in|signup)/.test(lower)) {
+  if (/(auth|login|sign[- ]?in|signup|accounts?)/.test(lower) && /(yes|need|required|require|implement|add)/.test(lower)) {
     sections = appendOrPromoteFeature(sections, "Authentication")
     sections = updateItem(
       sections,
       "systems",
-      "Authentication is required for version one",
+      "Yes, users need to sign in",
       "confirmed"
     )
   }
-  if (/(payment|stripe|checkout|subscription|billing)/.test(lower)) {
+  if (/(payment|stripe|checkout|subscription|billing|charge)/.test(lower)) {
     sections = appendOrPromoteFeature(sections, "Payments")
     sections = updateItem(
       sections,
       "systems",
-      "Payments or billing are required for version one",
+      "Yes, payments are needed",
       "confirmed"
     )
   }
-  if (/(cms|blog|editorial workflow|manage content)/.test(lower)) {
+  if (/(cms|blog|editorial|content management|manage content)/.test(lower)) {
     sections = updateItem(
       sections,
       "systems",
-      "CMS or content editing workflow is required",
+      "Yes, a CMS or content editing is needed",
       "confirmed"
     )
   }
-  if (/(database|backend|supabase|firebase|saved data|persistent)/.test(lower)) {
+  if (/(database|backend|persist|save|data storage|recur)/.test(lower)) {
     sections = updateItem(
       sections,
       "systems",
-      "A backend or persistent data layer is needed",
+      "Yes, a backend / data storage is needed",
       "confirmed"
     )
   }
-  if (/(none of these for version one|none for version one|no backend yet|no auth|no payments)/.test(lower)) {
+  if (/(use supabase|supabase for)?/.test(lower)) {
     sections = updateItem(
       sections,
       "systems",
-      "No backend, auth, payments, or CMS are needed for version one",
+      "Use Supabase for auth and database",
       "confirmed"
     )
   }
-  if (/(placeholder copy|i('?|’)ll provide(?: the)? copy|provide content|brand assets)/.test(lower)) {
+  // Explicitly handle "no backend stuff" or "later" responses
+  if (/(no|nope|don't|dont|skip|later|post-launch|v2|version 2|after launch|none of these).*?(auth|backend|payment|database|cms)/.test(lower) ||
+      /(auth|backend|payment|database|cms).*?(no|nope|don't|dont|skip|later|post-launch|v2|version 2|after launch|none)/.test(lower)) {
+    sections = updateItem(
+      sections,
+      "systems",
+      "Build frontend first, add backend after launch",
+      "confirmed"
+    )
+  }
+  if (/(placeholder|will provide|i'll provide|you can write|use placeholder|fake content)/.test(lower)) {
     sections = updateItem(
       sections,
       "content",
-      "Content expectations have been clarified",
+      "Use placeholder copy, we'll update it later",
       "confirmed"
     )
   }
@@ -661,11 +851,12 @@ function answerFromReply(blueprint: ProjectBlueprint, reply: string) {
   return refreshBlueprint({ ...blueprint, sections })
 }
 
-export function createInitialBlueprint(prompt: string): ProjectBlueprint {
+export async function createInitialBlueprint(prompt: string): Promise<ProjectBlueprint> {
+  const sections = await buildSections(prompt)
   return refreshBlueprint({
     summary: tidy(prompt),
     readiness: 0,
-    sections: buildSections(prompt),
+    sections,
     openQuestions: [],
     assumptions: [],
   })
@@ -712,25 +903,12 @@ export function getGuidedAnswerSet(blueprint: ProjectBlueprint): GuidedAnswerSet
 
   if (!unresolvedItem) return null
   const derivedOptions = deriveGuidedOptions(blueprint, unresolvedItem)
-  const fallbackOptions: Record<string, string[]> = {
-    audience: [
-      "Early-stage B2B founders; first action: book a demo",
-      "Startup operators and growth leads; first action: start a free trial",
-      "SMB owners; first action: request pricing",
-      "Technical teams and product managers; first action: explore features",
-    ],
-    pages: ["Home", "Features", "Pricing", "FAQ", "Contact"],
-    systems: ["Authentication", "Payments", "CMS", "Persistent backend data", "None of these for version one"],
-    features: ["Lead capture forms", "Testimonials", "Pricing comparison", "FAQ accordion", "Analytics"],
-    scope: ["Focused version one (fast launch)", "Balanced scope (core + polish)", "Larger scope (more depth before launch)"],
-  }
-  const options = derivedOptions.length >= 2
-    ? derivedOptions
-    : fallbackOptions[unresolvedItem.key] || []
-  if (options.length < 2) return null
+  
+  // Only return guided options if we have derived options
+  if (derivedOptions.length < 2) return null
 
   const questionText = (blueprint.openQuestions[0] || unresolvedItem.label || "").toLowerCase()
-  const optionCount = options.length
+  const optionCount = derivedOptions.length
   const mentionsMultipleIntent =
     /\b(select all|all that apply|which of these|any of these|what pages|which pages|what features|which features|integrations|systems)\b/i.test(
       questionText
@@ -753,7 +931,7 @@ export function getGuidedAnswerSet(blueprint: ProjectBlueprint): GuidedAnswerSet
     question: blueprint.openQuestions[0] || unresolvedItem.label,
     helper,
     selectionMode,
-    options: options.map((option) => buildOption(slugify(option), option)),
+    options: derivedOptions.map((option) => buildOption(slugify(option), option)),
     allowsCustomAnswer: true,
   }
 }
@@ -790,10 +968,10 @@ export function getPlanningStudioStage(
   const blueprintVisible = planningStatus === "plan-generated" || planningStatus === "approved"
   const questionsRemaining = blueprint.openQuestions.length
   const stepIndex = blueprintVisible ? 2 : 1
-  const stepItems = [
-    { key: "define" as const, label: "Define", state: blueprintVisible ? "upcoming" : "current" },
-    { key: "plan" as const, label: "Plan", state: blueprintVisible ? "current" : "upcoming" },
-    { key: "build" as const, label: "Build", state: "upcoming" as const },
+  const stepItems: Array<{ key: "define" | "plan" | "build"; label: string; state: "current" | "upcoming" }> = [
+    { key: "define", label: "Define", state: blueprintVisible ? "upcoming" : "current" },
+    { key: "plan", label: "Plan", state: blueprintVisible ? "current" : "upcoming" },
+    { key: "build", label: "Build", state: "upcoming" },
   ]
 
   return {
@@ -838,10 +1016,10 @@ export function getPlanningProgressLabel(readiness: number) {
   return "Exploring"
 }
 
-export function createPlanningMessages(prompt: string, existingMessages: Message[] = [], blueprint?: ProjectBlueprint) {
+export async function createPlanningMessages(prompt: string, existingMessages: Message[] = [], blueprint?: ProjectBlueprint) {
   if (existingMessages.length > 0) return existingMessages
 
-  const resolvedBlueprint = blueprint ?? createInitialBlueprint(prompt)
+  const resolvedBlueprint = blueprint ?? await createInitialBlueprint(prompt)
   return [
     {
       role: "assistant" as const,

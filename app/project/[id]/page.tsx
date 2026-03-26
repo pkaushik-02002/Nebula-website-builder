@@ -93,6 +93,9 @@ import { extractAgentMessage } from "./utils"
 import { ProjectErrorBoundary, ChatMessage, ResponsivePreview, BrowserNavigator, ProjectCreationStudio, AgentTimelinePanel } from "@/components/project"
 import type { AgentTimelineItem } from "@/components/project/agent-timeline-panel"
 import { WebsiteSettingsPanel } from "@/components/project/website-settings-panel"
+import { SupabaseSetupModal } from "@/components/project/SupabaseSetupModal"
+import { SupabaseProjectSelector } from "@/components/project/SupabaseProjectSelector"
+import { SupabaseCreateProjectModal } from "@/components/project/SupabaseCreateProjectModal"
 import { VisualEditDesignPanel, type DesignSnapshot } from "@/components/project/visual-edit-design-panel"
 import type { VisualEditSectionItem, VisualEditStructureCommand } from "@/components/project/visual-edit-structure"
 import {
@@ -118,6 +121,7 @@ function ProjectContent() {
   const { user, userData, hasTokens, remainingTokens, updateTokensUsed, getOptionalAuthHeader, workspaces, switchWorkspace, loading: authLoading } = useAuth()
 
   const [project, setProject] = useState<Project | null>(null)
+  const [resolvedBlueprint, setResolvedBlueprint] = useState<ProjectBlueprint | null>(null)
   const [loading, setLoading] = useState(true)
   const [isPlanningReplyPending, setIsPlanningReplyPending] = useState(false)
   const [creationStudioExited, setCreationStudioExited] = useState(false)
@@ -236,6 +240,12 @@ function ProjectContent() {
   const [supabaseCreateOpen, setSupabaseCreateOpen] = useState(false)
   const [supabaseInjecting, setSupabaseInjecting] = useState(false)
   const [suggestBackendDismissed, setSuggestBackendDismissed] = useState(false)
+  const [supabaseSetupModalOpen, setSupabaseSetupModalOpen] = useState(false)
+  const [supabaseProjectSelectorOpen, setSupabaseProjectSelectorOpen] = useState(false)
+  const [supabaseCreateProjectOpen, setSupabaseCreateProjectOpen] = useState(false)
+  const [supabaseAccountConnected, setSupabaseAccountConnected] = useState(false)
+  const [supabaseSetupError, setSupabaseSetupError] = useState("")
+  const [supabaseCreatingProject, setSupabaseCreatingProject] = useState(false)
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameValue, setRenameValue] = useState("")
   const [shareOpen, setShareOpen] = useState(false)
@@ -271,6 +281,225 @@ function ProjectContent() {
       setIsTimelineCollapsed(false)
     }
   }, [isSandboxLoading])
+
+  // Load and resolve blueprint asynchronously
+  useEffect(() => {
+    if (!project) {
+      setResolvedBlueprint(null)
+      return
+    }
+
+    if (project.blueprint) {
+      setResolvedBlueprint(project.blueprint)
+      return
+    }
+
+    // Need to create blueprint asynchronously
+    const initBlueprint = async () => {
+      try {
+        const bp = await createInitialBlueprint(project.prompt)
+        setResolvedBlueprint(bp)
+      } catch (error) {
+        console.error("Failed to create blueprint:", error)
+        // Use a minimal fallback blueprint
+        setResolvedBlueprint({
+          summary: project.prompt,
+          readiness: 0,
+          sections: [],
+          openQuestions: [],
+          assumptions: [],
+        })
+      }
+    }
+
+    initBlueprint()
+  }, [project])
+
+  // Check if user has Supabase OAuth connection when setup modal is opened
+  useEffect(() => {
+    if (!supabaseSetupModalOpen) return
+    
+    const checkSupabaseConnection = async () => {
+      try {
+        setSupabaseOauthLoading(true)
+        setSupabaseSetupError("")
+        const authHeader = await getOptionalAuthHeader()
+        const res = await fetch("/api/supabase/check-connection", { headers: authHeader })
+        const json = await res.json().catch(() => ({}))
+        
+        if (res.ok && json?.connected) {
+          setSupabaseAccountConnected(true)
+          // Auto-fetch projects if already connected
+          await fetchSupabaseProjects()
+          // Auto-show project selector after a short delay for UX
+          setSupabaseProjectSelectorOpen(true)
+        } else {
+          setSupabaseAccountConnected(false)
+        }
+      } catch (e) {
+        console.error("Error checking Supabase connection:", e)
+        setSupabaseAccountConnected(false)
+      } finally {
+        setSupabaseOauthLoading(false)
+      }
+    }
+
+    checkSupabaseConnection()
+  }, [supabaseSetupModalOpen])
+
+  const fetchSupabaseProjects = async () => {
+    try {
+      setSupabaseProjectsLoading(true)
+      setSupabaseProjectsError("")
+      const authHeader = await getOptionalAuthHeader()
+      const res = await fetch("/api/supabase/projects", { headers: authHeader })
+      const json = await res.json().catch(() => ({}))
+      
+      if (!res.ok) throw new Error(json?.error || "Failed to fetch projects")
+      
+      const projects = Array.isArray(json?.projects)
+        ? json.projects.map((p: any) => ({
+            id: p.id,
+            name: p.name,
+            ref: p.ref,
+            region: p.region || "Unknown",
+            organizationId: p.organizationId,
+          }))
+        : []
+      
+      setSupabaseProjects(projects)
+      
+      // If no projects exist, show create project modal
+      if (projects.length === 0) {
+        setSupabaseProjectSelectorOpen(false)
+        setSupabaseCreateProjectOpen(true)
+      } else {
+        setSupabaseCreateProjectOpen(false)
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to fetch projects"
+      setSupabaseProjectsError(msg)
+      setSupabaseSetupError(msg)
+    } finally {
+      setSupabaseProjectsLoading(false)
+    }
+  }
+
+  const handleSupabaseSetupConnect = async () => {
+    try {
+      setSupabaseOauthLoading(true)
+      setSupabaseSetupError("")
+      const authHeader = await getOptionalAuthHeader()
+      const res = await fetch(`/api/integrations/supabase/authorize?builderProjectId=${encodeURIComponent(projectId)}`, {
+        headers: authHeader,
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json?.url) throw new Error(json?.error || "Failed to start Supabase connection.")
+      window.open(json.url, "supabase-oauth", "width=560,height=760,menubar=no,toolbar=no")
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to connect Supabase."
+      setSupabaseSetupError(msg)
+    } finally {
+      setSupabaseOauthLoading(false)
+    }
+  }
+
+  const handleSupabaseCreateProject = async (name: string, region: string, password: string) => {
+    if (!project) return
+    try {
+      setSupabaseCreatingProject(true)
+      setSupabaseSetupError("")
+      const authHeader = await getOptionalAuthHeader()
+      const res = await fetch("/api/integrations/supabase/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeader },
+        body: JSON.stringify({
+          builderProjectId: projectId,
+          projectName: name,
+          region,
+          databasePassword: password,
+        }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json?.error || "Failed to create Supabase project.")
+      
+      // Success - close create modal and refresh projects
+      setSupabaseCreateProjectOpen(false)
+      
+      // If project was returned, auto-link it
+      if (json?.projectRef) {
+        setSelectedSupabaseRef(json.projectRef)
+        
+        // Link the newly created project
+        const linkRes = await fetch("/api/integrations/supabase/link-project", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeader },
+          body: JSON.stringify({ builderProjectId: projectId, supabaseProjectRef: json.projectRef }),
+        })
+        const linkJson = await linkRes.json().catch(() => ({}))
+        if (!linkRes.ok) throw new Error(linkJson?.error || "Failed to link project.")
+        
+        // Close all modals on success
+        setSupabaseSetupModalOpen(false)
+        setSupabaseProjectSelectorOpen(false)
+        
+        // Update project state
+        const linkedProject = { ...project, supabaseProjectRef: json.projectRef }
+        setProject(linkedProject)
+        
+        toast({ title: "Success", description: "Supabase project created and linked successfully!" })
+      } else {
+        // No project ref returned, refresh the list
+        await fetchSupabaseProjects()
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to create Supabase project."
+      setSupabaseSetupError(msg)
+    } finally {
+      setSupabaseCreatingProject(false)
+    }
+  }
+
+  const handleSupabaseSetupModalClose = () => {
+    setSupabaseSetupModalOpen(false)
+    setSuggestBackendDismissed(true)
+    setSupabaseProjectSelectorOpen(false)
+    setSupabaseCreateProjectOpen(false)
+    setSupabaseAccountConnected(false)
+    setSelectedSupabaseRef("")
+    setSupabaseSetupError("")
+  }
+
+  const handleSupabaseProjectLink = async () => {
+    if (!selectedSupabaseRef || !project) return
+    try {
+      setSupabaseOauthLoading(true)
+      setSupabaseSetupError("")
+      const authHeader = await getOptionalAuthHeader()
+      const res = await fetch("/api/integrations/supabase/link-project", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeader },
+        body: JSON.stringify({ builderProjectId: projectId, supabaseProjectRef: selectedSupabaseRef }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json?.error || "Failed to link Supabase project.")
+      
+      // Success - close modals and update project state
+      setSupabaseSetupModalOpen(false)
+      setSupabaseProjectSelectorOpen(false)
+      
+      // Update project with linked Supabase
+      const linkedProject = { ...project, supabaseProjectRef: selectedSupabaseRef }
+      setProject(linkedProject)
+      
+      toast({ title: "Success", description: "Supabase project linked. You can now inject the code in the next phase." })
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to link Supabase project."
+      setSupabaseSetupError(msg)
+    } finally {
+      setSupabaseOauthLoading(false)
+    }
+  }
 
   const hasSuccessfulPreview =
     project?.status === "complete" && !!ensuredPreviewUrl && !buildError
@@ -723,9 +952,6 @@ function ProjectContent() {
     ? buildkitAgents.find((agent) => agent.slug === project?.agentSlug) || buildkitAgents[0]
     : null
   const planningStatus: PlanningStatus = project?.planningStatus || "draft"
-  const resolvedBlueprint: ProjectBlueprint | null = project
-    ? project.blueprint || createInitialBlueprint(project.prompt)
-    : null
   const planningMessages = project && resolvedBlueprint
     ? createPlanningMessages(project.prompt, project.messages || [], resolvedBlueprint)
     : []
@@ -1466,27 +1692,31 @@ function ProjectContent() {
     const needsPlanningMessage = !project.messages || project.messages.length === 0
     if (!needsBlueprint && !needsPlanningMessage && project.planningStatus) return
 
-    const nextBlueprint = project.blueprint || createInitialBlueprint(project.prompt)
-    const nextMessages = createPlanningMessages(project.prompt, project.messages || [], nextBlueprint)
-    const inferredStatus = buildPlanningAssistantReply(nextBlueprint).planningStatus
-    const projectRef = doc(db, "projects", projectId)
+    const initBlueprint = async () => {
+      const nextBlueprint = project.blueprint || await createInitialBlueprint(project.prompt)
+      const nextMessages = await createPlanningMessages(project.prompt, project.messages || [], nextBlueprint)
+      const inferredStatus = buildPlanningAssistantReply(nextBlueprint).planningStatus
+      const projectRef = doc(db, "projects", projectId)
 
-    updateDoc(projectRef, {
-      blueprint: nextBlueprint,
-      messages: nextMessages,
-      planningStatus: project.planningStatus || inferredStatus,
-    }).catch(() => {})
+      updateDoc(projectRef, {
+        blueprint: nextBlueprint,
+        messages: nextMessages,
+        planningStatus: project.planningStatus || inferredStatus,
+      }).catch(() => {})
 
-    setProject((prev) =>
-      prev
-        ? {
-            ...prev,
-            blueprint: nextBlueprint,
-            messages: nextMessages,
-            planningStatus: prev.planningStatus || inferredStatus,
-          }
-        : prev
-    )
+      setProject((prev) =>
+        prev
+          ? {
+              ...prev,
+              blueprint: nextBlueprint,
+              messages: nextMessages,
+              planningStatus: prev.planningStatus || inferredStatus,
+            }
+          : prev
+      )
+    }
+
+    initBlueprint()
   }, [project, canEdit, projectId])
 
   // Start generation on mount:
@@ -1901,6 +2131,12 @@ function ProjectContent() {
 
       if (finalFiles.length > 0) {
         setSelectedFile(finalFiles[0])
+      }
+
+      // Show Supabase setup modal if backend is needed and not yet dismissed
+      if (generationMeta.suggestsBackend && !suggestBackendDismissed) {
+        setSupabaseSetupModalOpen(true)
+        setSelectedSupabaseRef("")
       }
 
       // Create E2B sandbox (auto-start) — uses finalFiles; project state already updated above
@@ -4094,6 +4330,40 @@ function ProjectContent() {
           </div>
         </SheetContent>
       </Sheet>
+
+      <SupabaseSetupModal
+        open={supabaseSetupModalOpen}
+        loading={supabaseOauthLoading}
+        hasOAuthConnection={supabaseAccountConnected}
+        error={supabaseSetupError}
+        onClose={handleSupabaseSetupModalClose}
+        onConnect={handleSupabaseSetupConnect}
+      />
+
+      <SupabaseProjectSelector
+        open={supabaseProjectSelectorOpen}
+        projects={supabaseProjects.map(p => ({ id: p.id, name: p.name, region: p.region }))}
+        selectedId={selectedSupabaseRef}
+        loading={supabaseOauthLoading || supabaseProjectsLoading}
+        onClose={() => {
+          setSupabaseProjectSelectorOpen(false)
+          setSupabaseSetupModalOpen(true)
+        }}
+        onChange={setSelectedSupabaseRef}
+        onConfirm={handleSupabaseProjectLink}
+      />
+
+      <SupabaseCreateProjectModal
+        open={supabaseCreateProjectOpen}
+        loading={supabaseCreatingProject}
+        error={supabaseSetupError}
+        regions={SUPABASE_REGIONS as Array<{ value: string; label: string }>}
+        onClose={() => {
+          setSupabaseCreateProjectOpen(false)
+          setSupabaseProjectSelectorOpen(true)
+        }}
+        onCreate={handleSupabaseCreateProject}
+      />
     </div>
   )
 

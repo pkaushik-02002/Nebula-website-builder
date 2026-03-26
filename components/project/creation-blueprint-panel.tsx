@@ -46,7 +46,21 @@ export function CreationBlueprintPanel(props: {
   const pages = getBlueprintItem(blueprint, "pages")
   const features = getBlueprintItem(blueprint, "features")
   const style = getBlueprintItem(blueprint, "style")
+  const systems = getBlueprintItem(blueprint, "systems")
   const primaryNeed = blueprint.openQuestions[0] || blueprint.assumptions[0]
+  
+  // Determine the "Needs your input" message more intelligently
+  let blockingMessage = primaryNeed
+  if (!blockingMessage && systems?.value && systems.status === "confirmed") {
+    // If systems are confirmed as needed or setup, show that as a next step
+    if (/(yes|need|required|backend|supabase|auth|payment)/i.test(systems.value)) {
+      blockingMessage = `Set up: ${systems.value}`
+    }
+  }
+  if (!blockingMessage && (audience?.status !== "confirmed" || pages?.status !== "confirmed" || style?.status !== "confirmed")) {
+    blockingMessage = "Confirm a few more details before we build"
+  }
+  
   const introCopy =
     planningStatus === "approved"
       ? "This is the reviewed plan the build will follow."
@@ -82,10 +96,17 @@ export function CreationBlueprintPanel(props: {
           value={style?.value}
           muted={style?.status !== "confirmed"}
         />
+        {systems?.status === "confirmed" && (
+          <SummaryRow
+            label="Backend / system setup"
+            value={systems.value}
+            muted={false}
+          />
+        )}
         <SummaryRow
           label="Needs your input"
-          value={primaryNeed || "Nothing major is blocking the first build."}
-          muted={!primaryNeed}
+          value={blockingMessage || "Good to go — we can start building."}
+          muted={!blockingMessage}
           multiline
         />
       </div>

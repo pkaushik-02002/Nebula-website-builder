@@ -9,7 +9,7 @@ import { CreationStudioActions } from "@/components/project/creation-studio-acti
 import { TextShimmer } from "@/components/prompt-kit/text-shimmer"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import { buildGuidedAnswerDraft, getGuidedAnswerSet, getPlanningStudioStage } from "@/lib/project-blueprint"
+import { buildGuidedAnswerDraft, getGuidedAnswerSet, getPlanningStudioStage, slugify } from "@/lib/project-blueprint"
 import { cn } from "@/lib/utils"
 
 function StudioMessage({ message }: { message: Message }) {
@@ -128,6 +128,7 @@ function PlanningResponseCard(props: {
   placeholder: string
   canEdit: boolean
   isSubmitting: boolean
+  isLoadingOptions?: boolean
   textareaRef: React.RefObject<HTMLTextAreaElement | null>
   onSubmit: () => Promise<void>
   submitLabel: string
@@ -145,6 +146,7 @@ function PlanningResponseCard(props: {
     placeholder,
     canEdit,
     isSubmitting,
+    isLoadingOptions = false,
     textareaRef,
     onSubmit,
     submitLabel,
@@ -184,35 +186,41 @@ function PlanningResponseCard(props: {
 
         {!useCustomAnswer && guidedAnswerSet ? (
           <div className="mb-5 space-y-2">
-            {guidedAnswerSet.options.map((option) => {
-              const selected = selectedGuidedOptions.includes(option.label)
-              return (
-                <button
-                  key={option.id}
-                  type="button"
-                  onClick={() => onToggleGuidedOption(option.label)}
-                  className={cn(
-                    "flex w-full items-start gap-3 rounded-xl border px-3.5 py-3 text-left text-sm transition-colors",
-                    selected
-                      ? "border-zinc-900 bg-zinc-900 text-white"
-                      : "border-[#e8e1d6] bg-[#faf8f2] text-zinc-700 hover:bg-white hover:text-zinc-900"
-                  )}
-                >
-                  <span
+            {isLoadingOptions ? (
+              <div className="flex items-center justify-center py-8">
+                <TextShimmer className="text-sm">Generating options...</TextShimmer>
+              </div>
+            ) : (
+              guidedAnswerSet.options.map((option) => {
+                const selected = selectedGuidedOptions.includes(option.label)
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    onClick={() => onToggleGuidedOption(option.label)}
                     className={cn(
-                      "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border text-[10px]",
+                      "flex w-full items-start gap-3 rounded-xl border px-3.5 py-3 text-left text-sm transition-colors",
                       selected
-                        ? "border-white/80 bg-white text-zinc-900"
-                        : "border-zinc-300 bg-white text-transparent"
+                        ? "border-zinc-900 bg-zinc-900 text-white"
+                        : "border-[#e8e1d6] bg-[#faf8f2] text-zinc-700 hover:bg-white hover:text-zinc-900"
                     )}
-                    aria-hidden="true"
                   >
-                    •
-                  </span>
-                  <span className="leading-6">{option.label}</span>
-                </button>
-              )
-            })}
+                    <span
+                      className={cn(
+                        "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border text-[10px]",
+                        selected
+                          ? "border-white/80 bg-white text-zinc-900"
+                          : "border-zinc-300 bg-white text-transparent"
+                      )}
+                      aria-hidden="true"
+                    >
+                      •
+                    </span>
+                    <span className="leading-6">{option.label}</span>
+                  </button>
+                )
+              })
+            )}
           </div>
         ) : null}
 
@@ -318,13 +326,14 @@ export function ProjectCreationStudio(props: {
   const [isDraftingPlan, setIsDraftingPlan] = useState(false)
   const [selectedGuidedOptions, setSelectedGuidedOptions] = useState<string[]>([])
   const [useCustomAnswer, setUseCustomAnswer] = useState(false)
+  const [guidedAnswerSet, setGuidedAnswerSet] = useState<ReturnType<typeof getGuidedAnswerSet>>(null)
+  const [isLoadingOptions, setIsLoadingOptions] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const draftPlanTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
 
   const isAgentMode = creationMode === "agent"
   const projectLabel = projectName.length > 44 ? `${projectName.slice(0, 41).trimEnd()}...` : projectName
-  const guidedAnswerSet = getGuidedAnswerSet(blueprint)
   const studioStage = getPlanningStudioStage(blueprint, planningStatus)
 
   const {
@@ -337,7 +346,6 @@ export function ProjectCreationStudio(props: {
     reassurance,
     nextStepLabel,
     questionsRemaining,
-    step,
   } = studioStage
 
   const showPlanSection = blueprintVisible || isDraftingPlan
@@ -348,6 +356,8 @@ export function ProjectCreationStudio(props: {
     }
     return heading
   }, [blueprintVisible, heading, isAgentMode])
+
+
 
   const resolvedDescription = useMemo(() => {
     if (blueprintVisible) return description
@@ -388,6 +398,93 @@ export function ProjectCreationStudio(props: {
       if (draftPlanTimerRef.current) clearTimeout(draftPlanTimerRef.current)
     }
   }, [])
+
+  // Fetch guided answer set dynamically
+  useEffect(() => {
+    const fetchGuidedAnswerSet = async () => {
+      const unresolvedItem = blueprint.sections
+        .flatMap((section) => section.items)
+        .find((item) => item.status === "unknown" || item.status === "suggested")
+
+      if (!unresolvedItem) {
+        setGuidedAnswerSet(null)
+        return
+      }
+
+      // Always try to fetch dynamic options from AI
+      setIsLoadingOptions(true)
+      try {
+        const authHeader = await getOptionalAuthHeader?.()
+        if (!authHeader) {
+          // Fallback to derived options
+          const staticSet = getGuidedAnswerSet(blueprint)
+          setGuidedAnswerSet(staticSet)
+          return
+        }
+
+        const res = await fetch("/api/generate-options", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeader },
+          body: JSON.stringify({
+            itemKey: unresolvedItem.key,
+            blueprint,
+            prompt,
+          }),
+        })
+
+        if (res.ok) {
+          const data = await res.json()
+          const dynamicOptions = data.options.map((option: string) => ({
+            id: slugify(option),
+            label: option,
+            value: option,
+          }))
+
+          // Determine selection mode based on item key and options
+          const questionText = (blueprint.openQuestions[0] || unresolvedItem.label || "").toLowerCase()
+          const optionCount = dynamicOptions.length
+          const mentionsMultipleIntent =
+            /\b(select all|all that apply|which of these|any of these|what pages|which pages|what features|which features|integrations|systems)\b/i.test(
+              questionText
+            )
+          const keyDefaultsToMultiple =
+            unresolvedItem.key === "pages" || unresolvedItem.key === "systems" || unresolvedItem.key === "features"
+
+          const selectionMode: "single" | "multiple" =
+            keyDefaultsToMultiple || mentionsMultipleIntent || optionCount >= 5
+              ? "multiple"
+              : "single"
+
+          const helper =
+            selectionMode === "multiple"
+              ? "Select all that apply, then adjust anything in chat if needed."
+              : "Choose the closest option, then adjust it in chat if needed."
+
+          setGuidedAnswerSet({
+            key: unresolvedItem.key,
+            question: blueprint.openQuestions[0] || unresolvedItem.label,
+            helper,
+            selectionMode,
+            options: dynamicOptions,
+            allowsCustomAnswer: true,
+          })
+        } else {
+          // Fallback to derived options
+          const staticSet = getGuidedAnswerSet(blueprint)
+          setGuidedAnswerSet(staticSet)
+        }
+      } catch (error) {
+        console.error("Failed to fetch dynamic options:", error)
+        // Fallback to derived options
+        const staticSet = getGuidedAnswerSet(blueprint)
+        setGuidedAnswerSet(staticSet)
+      } finally {
+        setIsLoadingOptions(false)
+      }
+    }
+
+    fetchGuidedAnswerSet()
+  }, [blueprint, prompt, getOptionalAuthHeader])
 
   const handleSubmit = async () => {
     if (isSubmitting || !canEdit) return
@@ -499,6 +596,7 @@ export function ProjectCreationStudio(props: {
             placeholder={placeholder}
             canEdit={canEdit}
             isSubmitting={isSubmitting}
+            isLoadingOptions={isLoadingOptions}
             textareaRef={textareaRef}
             onSubmit={handleSubmit}
             submitLabel={blueprintVisible ? composerSubmitLabel : "Next"}
