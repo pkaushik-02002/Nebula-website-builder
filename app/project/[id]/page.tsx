@@ -3991,7 +3991,7 @@ function ProjectContent() {
       </AlertDialog>
 
       <Dialog open={deployOpen} onOpenChange={setDeployOpen}>
-        <DialogContent className="max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] max-w-[64rem] overflow-hidden border-zinc-200 bg-[#f8f8f5] p-0 sm:max-h-[90vh] sm:w-[calc(100vw-2rem)]">
+        <DialogContent className="grid-rows-[auto,minmax(0,1fr)] max-h-[calc(100dvh-1.5rem)] w-[calc(100vw-1rem)] max-w-[72rem] overflow-hidden border-zinc-200 bg-[#f8f8f5] p-0 sm:max-h-[calc(100dvh-3rem)] sm:w-[min(92vw,72rem)]">
           <DialogHeader>
             <div className="border-b border-zinc-200 bg-[radial-gradient(circle_at_top_left,_rgba(244,244,245,0.95),_rgba(255,255,255,0.98)_58%)] px-5 py-5 sm:px-7 sm:py-6">
               <div className="inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-white px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-zinc-500">
@@ -4004,7 +4004,7 @@ function ProjectContent() {
               </DialogDescription>
             </div>
           </DialogHeader>
-          <div className="space-y-4 overflow-y-auto px-4 py-4 sm:px-6 sm:py-6">
+          <div className="min-h-0 space-y-4 overflow-y-auto px-4 py-4 sm:px-6 sm:py-6">
             <div className="flex justify-center sm:justify-start">
               <div className="grid w-full max-w-md grid-cols-2 rounded-xl border border-zinc-200 bg-white p-1 sm:inline-flex sm:w-auto">
                 <button
@@ -4375,7 +4375,6 @@ export default function ProjectPage() {
     </ProjectErrorBoundary>
   )
 }
-
 
 
 
