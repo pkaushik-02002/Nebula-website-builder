@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { doc, updateDoc } from "firebase/firestore"
 import { CheckCircle2, ChevronDown, ExternalLink, Globe, Loader2, Save } from "lucide-react"
 import { db } from "@/lib/firebase"
@@ -136,7 +136,7 @@ export function WebsiteSettingsPanel({ projectId, initialSettings, projectName, 
     return { Authorization: `Bearer ${token}` }
   }
 
-  const refreshGitHubState = async () => {
+  const refreshGitHubState = useCallback(async () => {
     try {
       setGithubLoading(true)
       setGithubError("")
@@ -150,7 +150,7 @@ export function WebsiteSettingsPanel({ projectId, initialSettings, projectName, 
     } finally {
       setGithubLoading(false)
     }
-  }
+  }, [user])
 
   const handleConnectGitHub = async () => {
     try {
@@ -213,7 +213,7 @@ export function WebsiteSettingsPanel({ projectId, initialSettings, projectName, 
     await handleSyncToGitHub()
   }
 
-  const refreshSupabaseState = async () => {
+  const refreshSupabaseState = useCallback(async () => {
     try {
       setSupabaseChecking(true)
       setSupabaseError("")
@@ -239,7 +239,7 @@ export function WebsiteSettingsPanel({ projectId, initialSettings, projectName, 
     } finally {
       setSupabaseChecking(false)
     }
-  }
+  }, [selectedSupabaseRef, user])
 
   const handleConnectSupabase = async () => {
     try {
@@ -326,9 +326,9 @@ export function WebsiteSettingsPanel({ projectId, initialSettings, projectName, 
   }
 
   useEffect(() => {
-    refreshSupabaseState()
-    refreshGitHubState()
-  }, [])
+    void refreshSupabaseState()
+    void refreshGitHubState()
+  }, [refreshGitHubState, refreshSupabaseState])
 
   useEffect(() => {
     if (!settings.siteName?.trim() && projectName?.trim()) {
@@ -339,19 +339,21 @@ export function WebsiteSettingsPanel({ projectId, initialSettings, projectName, 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       if (event.origin !== window.location.origin) return
-      const data = event.data as { type?: string; ok?: boolean; message?: string }
+      const data = event.data as { type?: string; ok?: boolean; message?: string; builderProjectId?: string | null }
       if (data?.type !== "supabase-oauth") return
+      if (data?.builderProjectId && data.builderProjectId !== projectId) return
       if (!data.ok) {
         setSupabaseError(data?.message || "Supabase connection failed.")
         return
       }
       setSupabaseConnectModalOpen(false)
-      refreshSupabaseState()
-      setSupabaseProjectModalOpen(true)
+      void refreshSupabaseState().finally(() => {
+        setSupabaseProjectModalOpen(true)
+      })
     }
     window.addEventListener("message", onMessage)
     return () => window.removeEventListener("message", onMessage)
-  }, [])
+  }, [projectId, refreshSupabaseState])
 
   const saveSettings = async () => {
     setSaving(true)
