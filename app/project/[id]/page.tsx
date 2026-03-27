@@ -3991,7 +3991,7 @@ function ProjectContent() {
       </AlertDialog>
 
       <Dialog open={deployOpen} onOpenChange={setDeployOpen}>
-        <DialogContent className="max-h-[90vh] w-[calc(100vw-1.5rem)] overflow-hidden border-zinc-200 bg-[#f8f8f5] p-0 sm:max-w-4xl">
+        <DialogContent className="left-1/2 top-1/2 max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] max-w-[64rem] -translate-x-1/2 -translate-y-1/2 overflow-hidden border-zinc-200 bg-[#f8f8f5] p-0 sm:max-h-[90vh] sm:w-[calc(100vw-2rem)]">
           <DialogHeader>
             <div className="border-b border-zinc-200 bg-[radial-gradient(circle_at_top_left,_rgba(244,244,245,0.95),_rgba(255,255,255,0.98)_58%)] px-5 py-5 sm:px-7 sm:py-6">
               <div className="inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-white px-3 py-1 text-[11px] font-medium uppercase tracking-[0.16em] text-zinc-500">
