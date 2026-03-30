@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
-import { SupabaseConnectModal } from "@/components/project/SupabaseConnectModal"
+import { SupabaseSetupModal } from "@/components/project/SupabaseSetupModal"
 import { SupabaseProjectSelector } from "@/components/project/SupabaseProjectSelector"
 import { SupabaseCreateProjectModal } from "@/components/project/SupabaseCreateProjectModal"
 import { SchemaPreviewModal } from "@/components/project/SchemaPreviewModal"
@@ -642,9 +642,10 @@ export function WebsiteSettingsPanel({ projectId, initialSettings, projectName, 
         </Button>
       </div>
 
-      <SupabaseConnectModal
+      <SupabaseSetupModal
         open={supabaseConnectModalOpen}
         loading={supabaseConnectLoading}
+        hasOAuthConnection={supabaseAccountConnected}
         error={supabaseError}
         onClose={() => setSupabaseConnectModalOpen(false)}
         onConnect={handleConnectSupabase}
