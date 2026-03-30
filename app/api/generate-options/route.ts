@@ -3,6 +3,16 @@ import { adminAuth } from "@/lib/firebase-admin"
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
+const ITEM_GUIDANCE: Record<string, string> = {
+  audience: "Suggest realistic audience segments or buyer types only if the brief implies a few plausible directions.",
+  pages: "Suggest likely pages or screens only when page structure is still open and choices would help the user move faster.",
+  systems: "Suggest likely backend, auth, CMS, data, or payment needs only if the planning context would benefit from a quick checklist.",
+  features: "Suggest core product capabilities only when there are a few coherent directions the user could pick from.",
+  style: "Suggest a few visual directions only when style can reasonably be narrowed through quick choices.",
+  content: "Suggest content direction choices only when the content question can be simplified into a few clear options.",
+  scope: "Suggest scope directions only when the product could clearly be narrowed by choosing between a few levels of ambition.",
+}
+
 export async function POST(req: Request) {
   const body = await req.json() as {
     itemKey: string
@@ -29,21 +39,6 @@ export async function POST(req: Request) {
     const blueprint = body.blueprint
     const prompt = body.prompt
 
-    let specificInstructions = ""
-    if (itemKey === "audience") {
-      specificInstructions = "Generate 3-4 specific audience segments that would realistically use this product. Each should be a complete phrase like 'Small business owners looking to scale' or 'Tech-savvy millennials in urban areas'."
-    } else if (itemKey === "pages") {
-      specificInstructions = "Generate 4-5 essential page names for this website/app. Focus on the core user journey and must-have sections."
-    } else if (itemKey === "systems") {
-      specificInstructions = "Generate 3-4 common backend/integrations that might be needed. Include options like 'User authentication', 'Payment processing', 'CMS for content', 'Database for user data'."
-    } else if (itemKey === "features") {
-      specificInstructions = "Generate 4-5 key features that would make this product valuable. Focus on the main value propositions."
-    } else if (itemKey === "style") {
-      specificInstructions = "Generate 3-4 visual style directions like 'Minimal and clean', 'Bold and modern', 'Warm and professional', 'Playful and energetic'."
-    } else {
-      specificInstructions = "Generate 3-5 realistic options for this aspect of the project."
-    }
-
     const systemPrompt = `You are helping generate clarification options for a website/app planning process.
 
 The user is building: ${prompt}
@@ -51,15 +46,33 @@ The user is building: ${prompt}
 Current blueprint context:
 ${JSON.stringify(blueprint, null, 2)}
 
-${specificInstructions}
+Current item under discussion: ${itemKey}
 
-Return only a JSON array of strings, no other text. Each option should be concise but descriptive.`
+${ITEM_GUIDANCE[itemKey] || "Offer quick choices only if they genuinely help."}
+
+Decide whether quick choices should be shown at all.
+- If the user would be better served by open chat, set "show": false.
+- If quick choices would help, set "show": true and generate concise but helpful options.
+- Prefer 3-5 options.
+- Avoid generic filler.
+- Make helper copy feel conversational, not survey-like.
+- Pick "single" or "multiple" based on the planning context, not by item key alone.
+
+Return only valid JSON matching this shape:
+{
+  "show": true,
+  "question": "string",
+  "helper": "string",
+  "selectionMode": "single" | "multiple",
+  "allowsCustomAnswer": true,
+  "options": ["option 1", "option 2"]
+}`
 
     const completion = await openai.chat.completions.create({
       model: "gpt-4.1-mini",
       messages: [
         { role: "system", content: systemPrompt },
-        { role: "user", content: `Generate options for: ${itemKey}` }
+        { role: "user", content: `Decide whether quick choices would help for ${itemKey}, and if so generate them.` }
       ],
       max_tokens: 300,
     })
@@ -69,12 +82,19 @@ Return only a JSON array of strings, no other text. Each option should be concis
       throw new Error("No content generated")
     }
 
-    const options = JSON.parse(content)
-    if (!Array.isArray(options)) {
+    const payload = JSON.parse(content)
+    if (!payload || typeof payload !== "object") {
       throw new Error("Invalid response format")
     }
 
-    return Response.json({ options })
+    return Response.json({
+      show: payload.show === true,
+      question: typeof payload.question === "string" ? payload.question : null,
+      helper: typeof payload.helper === "string" ? payload.helper : null,
+      selectionMode: payload.selectionMode === "multiple" ? "multiple" : "single",
+      allowsCustomAnswer: payload.allowsCustomAnswer !== false,
+      options: Array.isArray(payload.options) ? payload.options : [],
+    })
   } catch (error) {
     console.error("Generate options error:", error)
     return new Response(JSON.stringify({ error: 'Failed to generate options' }), { status: 500 })

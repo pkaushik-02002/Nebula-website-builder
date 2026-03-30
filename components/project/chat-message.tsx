@@ -57,31 +57,45 @@ export function ChatMessage({
     if (e.key === "Escape" && onCancelEdit) onCancelEdit()
   }
 
+  const timestamp = (message as Message & { timestamp?: string }).timestamp
+  const senderLabel = isUser ? "You" : "BuildKit"
+  const senderSubLabel = isUser ? "Your request" : "AI reply"
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className={cn("group flex gap-3.5", isUser ? "flex-row-reverse" : "")}
+      className={cn("group flex gap-3.5 px-1", isUser ? "flex-row-reverse" : "")}
     >
       <div
         className={cn(
-          "h-10 w-10 shrink-0 rounded-xl border border-zinc-700/60 bg-zinc-900/80 flex items-center justify-center",
-          isUser ? "bg-zinc-800" : ""
+          "flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border shadow-[0_16px_30px_-22px_rgba(24,24,27,0.75)]",
+          isUser
+            ? "border-zinc-700/70 bg-zinc-800"
+            : "border-zinc-600/60 bg-zinc-900/88"
         )}
       >
         {isUser ? (
           <User className="w-5 h-5 text-zinc-300" />
         ) : (
-          <div className="h-10 w-10 rounded-xl border border-zinc-700/50 bg-zinc-800 flex items-center justify-center">
-            <Bot className="w-5 h-5 text-zinc-300" />
-          </div>
+          <Bot className="w-5 h-5 text-zinc-300" />
         )}
       </div>
       <div className={cn("flex-1 min-w-0", isUser ? "text-right" : "")}>
+        <div className={cn("mb-2 flex items-center gap-2 px-1", isUser ? "justify-end" : "justify-start")}>
+          <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-300">{senderLabel}</span>
+          <span className="rounded-full border border-zinc-700/60 bg-zinc-900/50 px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-zinc-500">
+            {senderSubLabel}
+          </span>
+          {timestamp ? (
+            <span className="text-[11px] text-zinc-500">{formatMessageTime(timestamp)}</span>
+          ) : null}
+        </div>
+
         {isUser && (
           <div className="inline-block max-w-[85%] sm:max-w-[75%] ml-auto group">
             {isEditing ? (
-              <div className="rounded-2xl rounded-tr-sm border border-zinc-700/70 bg-zinc-800 p-2.5 sm:p-3">
+              <div className="rounded-[1.65rem] rounded-tr-md border border-zinc-700/70 bg-zinc-800 px-3 py-3 shadow-[0_18px_36px_-28px_rgba(0,0,0,0.9)] sm:px-4">
                 <textarea
                   value={editContent}
                   onChange={(e) => setEditContent(e.target.value)}
@@ -109,8 +123,9 @@ export function ChatMessage({
               </div>
             ) : (
               <div>
-                <div className="rounded-2xl rounded-tr-sm border border-zinc-700/70 bg-zinc-800 px-3 py-2 sm:px-4 sm:py-2.5 text-zinc-100 shadow-[0_8px_20px_-12px_rgba(0,0,0,0.9)]">
-                  <p className="text-xs sm:text-sm whitespace-pre-wrap">{message.content}</p>
+                <div className="rounded-[1.65rem] rounded-tr-md border border-zinc-700/70 bg-zinc-800 px-3 py-2.5 text-zinc-100 shadow-[0_18px_36px_-26px_rgba(0,0,0,0.9)] sm:px-4 sm:py-3">
+                  <p className="mb-2 text-[11px] font-medium uppercase tracking-[0.14em] text-zinc-400">Sent</p>
+                  <p className="text-xs sm:text-sm whitespace-pre-wrap leading-6">{message.content}</p>
                 </div>
                 {(onEdit || message.content) && (
                   <div className="mt-1 flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
@@ -154,26 +169,28 @@ export function ChatMessage({
         )}
 
         {!isUser && message.content && (
-          <div className="mb-3 rounded-2xl rounded-tl-sm border border-zinc-700/60 bg-zinc-900/65 p-3 shadow-[0_16px_30px_-20px_rgba(0,0,0,0.95)] sm:p-4">
-            {(message as Message & { timestamp?: string }).timestamp && (
-              <p className="text-[11px] sm:text-xs text-zinc-500 mb-2">
-                {formatMessageTime((message as Message & { timestamp?: string }).timestamp!)}
-              </p>
-            )}
-            <div className="flex items-center gap-2 mb-2 sm:mb-3">
-              <div className="w-5 h-5 sm:w-6 sm:h-6 rounded-lg bg-zinc-700 flex items-center justify-center">
-                <Lightbulb className="w-2.5 h-2.5 sm:w-3 sm:h-3 text-zinc-300" />
+          <div className="mb-3 overflow-hidden rounded-[1.7rem] rounded-tl-md border border-zinc-700/55 bg-[linear-gradient(180deg,rgba(27,27,30,0.96),rgba(18,18,20,0.92))] shadow-[0_22px_44px_-28px_rgba(0,0,0,0.95)]">
+            <div className="border-b border-zinc-800/90 bg-zinc-900/45 px-4 py-3">
+              <div className="flex items-center gap-2">
+                <div className="w-5 h-5 sm:w-6 sm:h-6 rounded-lg bg-zinc-700 flex items-center justify-center">
+                  <Lightbulb className="w-2.5 h-2.5 sm:w-3 sm:h-3 text-zinc-300" />
+                </div>
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-300">AI response</p>
+                  <p className="text-[11px] text-zinc-500">Generated by BuildKit</p>
+                </div>
               </div>
-              <span className="text-xs font-medium text-zinc-400">AI Response</span>
             </div>
-            <div className="space-y-2">
-              {message.isStreaming ? (
-                <TextShimmer className="text-xs sm:text-sm text-zinc-300">{message.content}</TextShimmer>
-              ) : (
-                <p className="text-xs sm:text-sm whitespace-pre-wrap text-zinc-300">{message.content}</p>
-              )}
+            <div className="p-4 sm:p-5">
+              <div className="space-y-2">
+                {message.isStreaming ? (
+                  <TextShimmer className="text-xs sm:text-sm text-zinc-200 leading-6">{message.content}</TextShimmer>
+                ) : (
+                  <p className="text-xs sm:text-sm whitespace-pre-wrap text-zinc-200 leading-6">{message.content}</p>
+                )}
+              </div>
               {message.files && message.files.length > 0 && (
-                <div className="mt-3 p-2 sm:p-3 rounded-lg bg-zinc-900/50 border border-zinc-700/30">
+                <div className="mt-4 rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-2 sm:p-3">
                   <div className="flex items-center gap-2 mb-2 sm:mb-3">
                     <FileCode className="w-3 h-3 sm:w-4 sm:h-4 text-zinc-400" />
                     <span className="text-xs font-medium text-zinc-400">Generated Files</span>
@@ -207,7 +224,7 @@ export function ChatMessage({
                           className="group"
                         >
                           <div
-                            className="flex items-center gap-1.5 sm:gap-2 p-1.5 sm:p-2 rounded-lg bg-zinc-800/50 border border-zinc-700/30 hover:border-zinc-600/50 hover:bg-zinc-800/70 transition-all duration-200 cursor-pointer hover:shadow-sm"
+                            className="flex items-center gap-1.5 rounded-xl border border-zinc-800/80 bg-zinc-950/35 p-1.5 transition-all duration-200 cursor-pointer hover:border-zinc-600/50 hover:bg-zinc-800/60 hover:shadow-sm sm:gap-2 sm:p-2"
                             onClick={handleFileClick}
                           >
                             {isDirectory && directory && (

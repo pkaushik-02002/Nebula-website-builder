@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import { ArrowLeft, Bot, CheckCircle2 } from "lucide-react"
+import { ArrowLeft, Bot, CheckCircle2, LayoutPanelTop, Sparkles } from "lucide-react"
 
 import type { Message, PlanningStatus, ProjectBlueprint, ProjectCreationMode } from "@/app/project/[id]/types"
 import { CreationBlueprintPanel } from "@/components/project/creation-blueprint-panel"
@@ -12,280 +12,323 @@ import { Textarea } from "@/components/ui/textarea"
 import { buildGuidedAnswerDraft, getGuidedAnswerSet, getPlanningStudioStage, slugify } from "@/lib/project-blueprint"
 import { cn } from "@/lib/utils"
 
-function StudioMessage({ message }: { message: Message }) {
-  const isUser = message.role === "user"
+type GuidedAnswerSet = NonNullable<ReturnType<typeof getGuidedAnswerSet>>
 
-  return (
-    <article className="grid grid-cols-[40px_minmax(0,1fr)] gap-4 sm:grid-cols-[44px_minmax(0,1fr)] sm:gap-5">
-      <div className="flex justify-center pt-1">
-        <div
-          className={cn(
-            "flex h-10 w-10 items-center justify-center rounded-2xl border",
-            isUser ? "border-zinc-900 bg-zinc-900 text-white" : "border-zinc-200 bg-white text-zinc-700"
-          )}
-        >
-          {isUser ? <CheckCircle2 className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
-        </div>
-      </div>
-
-      <div className="pb-7">
-        <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-zinc-400">
-          {isUser ? "You" : "BuildKit"}
-        </p>
-
-        {isUser ? (
-          <div className="mt-3 inline-flex max-w-[760px] rounded-[1.5rem] bg-zinc-900 px-4 py-3 text-[15px] leading-7 text-white shadow-sm">
-            <p className="whitespace-pre-wrap">{message.content}</p>
-          </div>
-        ) : (
-          <p className="mt-3 max-w-[820px] whitespace-pre-wrap text-[15px] leading-8 text-zinc-800">
-            {message.content}
-          </p>
-        )}
-      </div>
-    </article>
-  )
+type RemoteGuidedAnswerPayload = {
+  show?: boolean
+  question?: string | null
+  helper?: string | null
+  selectionMode?: "single" | "multiple"
+  allowsCustomAnswer?: boolean
+  options?: string[]
 }
 
-function PlanningHeader(props: { projectLabel: string; onBack?: () => void }) {
-  const { projectLabel, onBack } = props
+function PlanningHeader(props: {
+  projectLabel: string
+  statusLabel: string
+  planVisible: boolean
+  helperLabel: string
+  onBack?: () => void
+  onTogglePlan: () => void
+}) {
+  const { projectLabel, statusLabel, planVisible, helperLabel, onBack, onTogglePlan } = props
 
   return (
-    <header className="flex items-center justify-between gap-4 border-b border-zinc-200/80 pb-4">
-      <div className="flex min-w-0 items-center gap-3">
-        {onBack ? (
-          <button
-            type="button"
-            onClick={onBack}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-zinc-200 bg-white text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900"
-            aria-label="Back"
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </button>
-        ) : null}
+    <header className="relative z-20 px-4 pb-3 pt-4 sm:px-6 sm:pb-4 sm:pt-6">
+      <div className="rounded-[1.75rem] border border-[#e6dfd3] bg-white/80 px-4 py-3 shadow-[0_22px_60px_-48px_rgba(24,24,27,0.35)] backdrop-blur-sm sm:px-5">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex min-w-0 items-start gap-3">
+            {onBack ? (
+              <button
+                type="button"
+                onClick={onBack}
+                className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-[#e6dfd3] bg-[#fcfaf6] text-zinc-500 transition-colors hover:text-zinc-900"
+                aria-label="Back"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
+            <div className="min-w-0">
+              <div className="inline-flex rounded-full border border-[#e7dfd4] bg-[#faf7f2] px-3 py-1 text-[10px] font-medium uppercase tracking-[0.16em] text-zinc-500">
+                Plan mode
+              </div>
+              <p className="mt-3 truncate text-lg font-semibold tracking-tight text-zinc-900">{projectLabel}</p>
+              <p className="mt-1 max-w-xl text-sm leading-6 text-zinc-500">{helperLabel}</p>
+            </div>
+          </div>
 
-        <div className="min-w-0">
-          <p className="text-xs uppercase tracking-[0.16em] text-zinc-500">Planning</p>
-          <p className="truncate text-sm font-medium text-zinc-900">{projectLabel}</p>
+          <div className="flex shrink-0 items-center gap-2">
+            <div className="hidden rounded-full border border-[#e7dfd4] bg-[#faf7f2] px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.16em] text-zinc-500 sm:inline-flex">
+              {statusLabel}
+            </div>
+            <button
+              type="button"
+              onClick={onTogglePlan}
+              className={cn(
+                "inline-flex h-10 items-center gap-1.5 rounded-2xl px-4 text-[11px] font-semibold uppercase tracking-[0.14em] transition-colors",
+                planVisible ? "bg-zinc-900 text-white" : "border border-[#e6dfd3] bg-[#fcfaf6] text-zinc-600"
+              )}
+            >
+              <LayoutPanelTop className="h-3.5 w-3.5" />
+              Plan
+            </button>
+          </div>
         </div>
-      </div>
-
-      <div className="hidden rounded-full bg-white px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.16em] text-zinc-500 ring-1 ring-zinc-200 sm:inline-flex">
-        Define → Plan → Build
       </div>
     </header>
   )
 }
 
-function PlanningIntro(props: {
-  heading: string
-  description: string
-  statusLabel: string
-  nextStepLabel: string
-  questionsRemaining: number
-}) {
-  const { heading, description, statusLabel, nextStepLabel, questionsRemaining } = props
+function IntroMessage(props: { description: string; prompt: string }) {
+  const { description, prompt } = props
 
   return (
-    <section className="pt-8 sm:pt-10">
-      <div className="flex flex-col gap-5 sm:gap-6">
-        <div>
-          <div className="inline-flex rounded-full bg-white px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.16em] text-zinc-500 ring-1 ring-zinc-200">
-            Step {questionsRemaining > 0 ? "1" : "2"} of 3
-          </div>
-          <h1 className="mt-4 max-w-3xl text-balance text-[2rem] font-semibold leading-[1.02] tracking-tight text-zinc-900 sm:text-[2.8rem]">
-            {heading}
-          </h1>
-          <p className="mt-4 max-w-2xl text-[15px] leading-7 text-zinc-600 sm:text-base">
-            {description}
-          </p>
-        </div>
-
-        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
-          <div className="rounded-[1.4rem] bg-white px-4 py-3 ring-1 ring-zinc-200/80 sm:px-5">
-            <p className="text-sm font-medium text-zinc-900">What happens next</p>
-            <p className="mt-1 text-sm leading-6 text-zinc-600">{nextStepLabel}</p>
-          </div>
-
-          <div className="inline-flex w-fit rounded-full bg-[#f7f4ee] px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.16em] text-zinc-500 ring-1 ring-[#e8e1d6]">
-            {statusLabel}
-          </div>
+    <article className="flex gap-3">
+      <div className="mt-0.5 hidden h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-amber-300 sm:flex">
+        <Sparkles className="h-3.5 w-3.5" />
+      </div>
+      <div className="max-w-[min(100%,48rem)]">
+        <div className="mb-2 px-1 text-[11px] font-medium uppercase tracking-[0.16em] text-zinc-400">BuildKit</div>
+        <div className="rounded-[1.75rem] border border-[#e9e1d6] bg-white/85 px-5 py-5 text-zinc-800 shadow-[0_18px_50px_-40px_rgba(24,24,27,0.28)]">
+          <p className="text-[15px] leading-8">{description}</p>
+          <p className="mt-3 text-sm leading-6 text-zinc-500">{prompt}</p>
         </div>
       </div>
-    </section>
+    </article>
   )
 }
 
-function PlanningResponseCard(props: {
+function ChatMessage({ message }: { message: Message }) {
+  const isUser = message.role === "user"
+
+  return (
+    <article className={cn("flex gap-3", isUser ? "justify-end" : "justify-start")}>
+      {!isUser ? (
+        <div className="mt-0.5 hidden h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-zinc-700 ring-1 ring-[#e7dfd4] sm:flex">
+          <Bot className="h-3.5 w-3.5" />
+        </div>
+      ) : null}
+
+      <div className="max-w-[min(100%,48rem)]">
+        <div className="mb-2 flex items-center gap-2 px-1 text-[11px] font-medium uppercase tracking-[0.16em] text-zinc-400">
+          {isUser ? <CheckCircle2 className="h-3.5 w-3.5" /> : null}
+          <span>{isUser ? "You" : "BuildKit"}</span>
+        </div>
+        <div
+          className={cn(
+            "px-5 py-4 text-[15px] leading-8 shadow-[0_18px_40px_-34px_rgba(24,24,27,0.24)]",
+            isUser
+              ? "rounded-[1.6rem] bg-zinc-900 text-white"
+              : "rounded-[1.6rem] border border-[#e9e1d6] bg-white/82 text-zinc-800"
+          )}
+        >
+          <p className="whitespace-pre-wrap">{message.content}</p>
+        </div>
+      </div>
+    </article>
+  )
+}
+
+function SuggestedReplies(props: {
   question?: string
-  useCustomAnswer: boolean
-  onEnableCustomAnswer: () => void
-  guidedAnswerSet: ReturnType<typeof getGuidedAnswerSet>
+  helper?: string
+  guidedAnswerSet: GuidedAnswerSet
   selectedGuidedOptions: string[]
   onToggleGuidedOption: (label: string) => void
+  onEnableCustomAnswer: () => void
+  isLoadingOptions: boolean
+}) {
+  const { question, helper, guidedAnswerSet, selectedGuidedOptions, onToggleGuidedOption, onEnableCustomAnswer, isLoadingOptions } = props
+
+  return (
+    <div className="pl-0 sm:pl-11">
+      <div className="max-w-[min(100%,48rem)] rounded-[1.6rem] border border-[#e7dfd4] bg-white/82 px-5 py-5 shadow-[0_18px_40px_-34px_rgba(24,24,27,0.22)]">
+        <p className="mb-3 text-sm leading-6 text-zinc-600">{question || guidedAnswerSet.question}</p>
+        {helper ? <p className="mb-3 text-xs leading-5 text-zinc-500">{helper}</p> : null}
+        {isLoadingOptions ? (
+          <div className="py-2 text-sm text-zinc-500">
+            <TextShimmer>Thinking through some useful choices...</TextShimmer>
+          </div>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {guidedAnswerSet.options.map((option) => {
+              const selected = selectedGuidedOptions.includes(option.label)
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() => onToggleGuidedOption(option.label)}
+                  className={cn(
+                    "rounded-full px-4 py-2 text-sm transition-colors",
+                    selected ? "bg-zinc-900 text-white" : "bg-white text-zinc-700 ring-1 ring-[#e7dfd4]"
+                  )}
+                >
+                  {option.label}
+                </button>
+              )
+            })}
+            {guidedAnswerSet.allowsCustomAnswer ? (
+              <button
+                type="button"
+                onClick={onEnableCustomAnswer}
+                className="rounded-full bg-[#f1ece2] px-4 py-2 text-sm text-zinc-600"
+              >
+                Answer in chat instead
+              </button>
+            ) : null}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ChatComposer(props: {
+  helper?: string
   draft: string
   setDraft: (value: string) => void
   placeholder: string
   canEdit: boolean
   isSubmitting: boolean
-  isLoadingOptions?: boolean
   textareaRef: React.RefObject<HTMLTextAreaElement | null>
   onSubmit: () => Promise<void>
   submitLabel: string
   canSubmit: boolean
 }) {
-  const {
-    question,
-    useCustomAnswer,
-    onEnableCustomAnswer,
-    guidedAnswerSet,
-    selectedGuidedOptions,
-    onToggleGuidedOption,
-    draft,
-    setDraft,
-    placeholder,
-    canEdit,
-    isSubmitting,
-    isLoadingOptions = false,
-    textareaRef,
-    onSubmit,
-    submitLabel,
-    canSubmit,
-  } = props
+  const { helper, draft, setDraft, placeholder, canEdit, isSubmitting, textareaRef, onSubmit, submitLabel, canSubmit } = props
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && canSubmit && canEdit && !isSubmitting) {
+      e.preventDefault()
+      onSubmit()
+    }
+  }
 
   return (
-    <section className="rounded-[2rem] bg-white shadow-[0_30px_80px_-52px_rgba(24,24,27,0.22)] ring-1 ring-zinc-200/80">
-      <div className="border-b border-zinc-100 px-5 py-5 sm:px-6 sm:py-6">
-        <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-zinc-500">Current question</p>
-        <p className="mt-3 max-w-3xl text-[20px] leading-8 text-zinc-900 sm:text-[22px] sm:leading-9">
-          {question || "Add anything important before we move to the plan."}
-        </p>
-      </div>
-
-      <div className="px-5 py-5 sm:px-6 sm:py-6">
-        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-sm font-medium text-zinc-900">Choose your answer</p>
-            <p className="mt-1 text-xs leading-5 text-zinc-500">
-              {useCustomAnswer
-                ? "Write your own answer if none of the options fit."
-                : guidedAnswerSet?.helper || "Choose the closest option, then continue."}
-            </p>
-          </div>
-
-          {guidedAnswerSet?.allowsCustomAnswer ? (
-            <button
+    <div className="mx-auto max-w-[52rem]">
+      <div className="overflow-hidden rounded-2xl border border-[#e4ddd0] bg-white shadow-[0_8px_30px_-12px_rgba(24,24,27,0.18),0_2px_8px_-4px_rgba(24,24,27,0.08)]">
+        <Textarea
+          ref={textareaRef}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder={placeholder}
+          className="min-h-[72px] resize-none border-0 bg-transparent px-4 py-3.5 text-[14px] leading-[1.7] text-zinc-900 placeholder:text-zinc-400 shadow-none focus-visible:ring-0"
+          disabled={!canEdit || isSubmitting}
+        />
+        <div className="flex items-center justify-between gap-3 border-t border-zinc-100/80 bg-zinc-50/50 px-4 py-2.5">
+          <span className="text-[11px] text-zinc-400">{helper || "Chat with BuildKit about your project"}</span>
+          <div className="flex items-center gap-2">
+            <span className="hidden text-[10px] text-zinc-300 sm:block">Ctrl/Cmd + Enter</span>
+            <Button
               type="button"
-              onClick={onEnableCustomAnswer}
-              className="rounded-full bg-[#f7f4ee] px-3 py-2 text-xs font-medium text-zinc-600 ring-1 ring-[#e7e0d4] transition-colors hover:bg-white hover:text-zinc-900"
+              onClick={onSubmit}
+              disabled={!canSubmit || !canEdit || isSubmitting}
+              className="h-8 rounded-xl bg-zinc-900 px-4 text-[12px] font-semibold text-white disabled:opacity-40"
             >
-              Other / write my own
-            </button>
-          ) : null}
-        </div>
-
-        {!useCustomAnswer && guidedAnswerSet ? (
-          <div className="mb-5 space-y-2">
-            {isLoadingOptions ? (
-              <div className="flex items-center justify-center py-8">
-                <TextShimmer className="text-sm">Generating options...</TextShimmer>
-              </div>
-            ) : (
-              guidedAnswerSet.options.map((option) => {
-                const selected = selectedGuidedOptions.includes(option.label)
-                return (
-                  <button
-                    key={option.id}
-                    type="button"
-                    onClick={() => onToggleGuidedOption(option.label)}
-                    className={cn(
-                      "flex w-full items-start gap-3 rounded-xl border px-3.5 py-3 text-left text-sm transition-colors",
-                      selected
-                        ? "border-zinc-900 bg-zinc-900 text-white"
-                        : "border-[#e8e1d6] bg-[#faf8f2] text-zinc-700 hover:bg-white hover:text-zinc-900"
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border text-[10px]",
-                        selected
-                          ? "border-white/80 bg-white text-zinc-900"
-                          : "border-zinc-300 bg-white text-transparent"
-                      )}
-                      aria-hidden="true"
-                    >
-                      •
-                    </span>
-                    <span className="leading-6">{option.label}</span>
-                  </button>
-                )
-              })
-            )}
+              {isSubmitting ? "Updating" : submitLabel}
+            </Button>
           </div>
-        ) : null}
-
-        {useCustomAnswer || !guidedAnswerSet ? (
-          <Textarea
-            ref={textareaRef}
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            placeholder={placeholder}
-            className="min-h-[144px] resize-none rounded-[1.5rem] border-0 bg-[#fcfbf7] px-4 py-4 text-[15px] leading-7 text-zinc-900 shadow-none ring-1 ring-[#ece5da] focus-visible:ring-2 focus-visible:ring-zinc-300"
-            disabled={!canEdit || isSubmitting}
-          />
-        ) : (
-          <div className="rounded-[1.5rem] bg-[#fcfbf7] px-4 py-4 text-[15px] leading-7 text-zinc-600 ring-1 ring-[#ece5da]">
-            Pick the closest answer above, then continue. If none fit, choose <span className="font-medium text-zinc-900">Other / write my own</span>.
-          </div>
-        )}
-
-        <div className="mt-4 flex flex-col gap-3 border-t border-zinc-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-xs leading-5 text-zinc-500">
-            Move quickly with the options, or write your own only when you need to.
-          </p>
-          <Button
-            type="button"
-            onClick={onSubmit}
-            disabled={!canSubmit || !canEdit || isSubmitting}
-            className="h-10 self-start rounded-full bg-zinc-900 px-5 text-white hover:bg-black sm:self-auto"
-          >
-            {isSubmitting ? "Updating..." : submitLabel}
-          </Button>
         </div>
       </div>
-    </section>
+    </div>
   )
 }
 
-function PlanningPlanSection(props: {
+function ConversationThread(props: {
+  prompt: string
+  introDescription: string
+  messages: Message[]
+  guidedAnswerSet: GuidedAnswerSet | null
+  guidedQuestion?: string
+  guidedHelper?: string
+  selectedGuidedOptions: string[]
+  onToggleGuidedOption: (label: string) => void
+  onEnableCustomAnswer: () => void
+  useCustomAnswer: boolean
+  isLoadingOptions: boolean
+  composer: React.ReactNode
+  scrollRef: React.RefObject<HTMLDivElement | null>
+}) {
+  const { prompt, introDescription, messages, guidedAnswerSet, guidedQuestion, guidedHelper, selectedGuidedOptions, onToggleGuidedOption, onEnableCustomAnswer, useCustomAnswer, isLoadingOptions, composer, scrollRef } = props
+
+  return (
+    <div ref={scrollRef} className="relative z-0 min-h-0 flex-1 overflow-y-auto">
+      <div className="relative mx-auto flex max-w-[52rem] flex-col gap-5 px-4 py-6 pb-10 sm:px-6">
+        <IntroMessage description={introDescription} prompt={prompt} />
+
+        {messages.length > 0 ? (
+          <div className="my-1 flex items-center gap-3">
+            <div className="h-px flex-1 bg-gradient-to-r from-transparent to-[#ece5da]/70" />
+            <span className="text-[10px] font-medium uppercase tracking-[0.16em] text-zinc-400/60">Conversation</span>
+            <div className="h-px flex-1 bg-gradient-to-l from-transparent to-[#ece5da]/70" />
+          </div>
+        ) : null}
+
+        {messages.map((message, index) => (
+          <ChatMessage key={`${message.role}-${index}-${message.content.slice(0, 24)}`} message={message} />
+        ))}
+
+        {guidedAnswerSet && !useCustomAnswer ? (
+          <SuggestedReplies
+            question={guidedQuestion}
+            helper={guidedHelper}
+            guidedAnswerSet={guidedAnswerSet}
+            selectedGuidedOptions={selectedGuidedOptions}
+            onToggleGuidedOption={onToggleGuidedOption}
+            onEnableCustomAnswer={onEnableCustomAnswer}
+            isLoadingOptions={isLoadingOptions}
+          />
+        ) : null}
+
+        <div className="pt-2">{composer}</div>
+      </div>
+    </div>
+  )
+}
+
+function PlanPanel(props: {
+  isVisible: boolean
   isDraftingPlan: boolean
   blueprint: ProjectBlueprint
   planningStatus: PlanningStatus
 }) {
-  const { isDraftingPlan, blueprint, planningStatus } = props
+  const { isVisible, isDraftingPlan, blueprint, planningStatus } = props
+  if (!isVisible) return null
 
   return (
-    <section className="rounded-[2rem] bg-white shadow-[0_30px_80px_-52px_rgba(24,24,27,0.22)] ring-1 ring-zinc-200/80">
-      <div className="border-b border-zinc-100 px-5 py-5 sm:px-6 sm:py-6">
-        <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-zinc-500">Plan</p>
-        <p className="mt-3 text-[15px] leading-7 text-zinc-600">
-          Review the plan carefully. You can still refine it before the build starts.
-        </p>
-      </div>
-
-      <div className="px-5 py-5 sm:px-6 sm:py-6">
+    <section className="rounded-[2rem] border border-[#e6ddd0] bg-[linear-gradient(180deg,rgba(251,248,242,0.96),rgba(244,239,230,0.94))] p-4 shadow-[0_30px_80px_-58px_rgba(24,24,27,0.38)] sm:p-5">
         {isDraftingPlan ? (
-          <section className="rounded-[1.75rem] bg-[#fcfbf7] p-6 ring-1 ring-[#ece5da]">
-            <TextShimmer className="text-lg font-semibold">Drafting your plan</TextShimmer>
-            <p className="mt-3 text-sm leading-6 text-zinc-500">
-              Pulling together the conversation into a clear blueprint you can review before building.
-            </p>
+          <section className="overflow-hidden rounded-[1.75rem] border border-[#ebe4d8] bg-white shadow-[0_18px_40px_-34px_rgba(24,24,27,0.22)]">
+            <div className="px-5 py-5">
+              <TextShimmer className="text-base font-semibold text-zinc-800">Drafting your plan</TextShimmer>
+              <p className="mt-2 text-[13px] leading-[1.65] text-zinc-500">
+                Synthesising the conversation into a reviewable plan before the build starts.
+              </p>
+            </div>
           </section>
         ) : (
           <CreationBlueprintPanel blueprint={blueprint} planningStatus={planningStatus} />
         )}
-      </div>
     </section>
+  )
+}
+
+function BottomActions(props: {
+  onGeneratePlan: () => void
+  onBuildFromPlan: () => void
+  onRefine: () => void
+  onSkip: () => void
+  disabled: boolean
+  stage: "define" | "plan"
+  planReady: boolean
+  questionsRemaining: number
+  isDraftingPlan: boolean
+}) {
+  return (
+    <div className="relative z-10">
+      <CreationStudioActions {...props} />
+    </div>
   )
 }
 
@@ -299,91 +342,61 @@ export function ProjectCreationStudio(props: {
   agentName?: string | null
   canEdit: boolean
   isSubmitting: boolean
+  getOptionalAuthHeader?: () => Promise<Record<string, string>>
   onSubmit: (value: string) => Promise<void> | void
   onGeneratePlan: () => Promise<void> | void
   onBuildFromPlan: () => Promise<void> | void
   onSkip: () => Promise<void> | void
   onBack?: () => void
 }) {
-  const {
-    projectName,
-    prompt,
-    messages,
-    blueprint,
-    planningStatus,
-    creationMode = "build",
-    agentName,
-    canEdit,
-    isSubmitting,
-    onSubmit,
-    onGeneratePlan,
-    onBuildFromPlan,
-    onSkip,
-    onBack,
-  } = props
+  const { projectName, prompt, messages, blueprint, planningStatus, creationMode = "build", agentName, canEdit, isSubmitting, getOptionalAuthHeader, onSubmit, onGeneratePlan, onBuildFromPlan, onSkip, onBack } = props
 
   const [draft, setDraft] = useState("")
   const [isDraftingPlan, setIsDraftingPlan] = useState(false)
   const [selectedGuidedOptions, setSelectedGuidedOptions] = useState<string[]>([])
   const [useCustomAnswer, setUseCustomAnswer] = useState(false)
-  const [guidedAnswerSet, setGuidedAnswerSet] = useState<ReturnType<typeof getGuidedAnswerSet>>(null)
+  const [guidedAnswerSet, setGuidedAnswerSet] = useState<GuidedAnswerSet | null>(null)
+  const [guidedHelper, setGuidedHelper] = useState<string | undefined>(undefined)
+  const [guidedQuestion, setGuidedQuestion] = useState<string | undefined>(undefined)
   const [isLoadingOptions, setIsLoadingOptions] = useState(false)
+  const [planSheetOpen, setPlanSheetOpen] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const draftPlanTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const conversationMessages = Array.isArray(messages) ? messages : []
 
   const isAgentMode = creationMode === "agent"
   const projectLabel = projectName.length > 44 ? `${projectName.slice(0, 41).trimEnd()}...` : projectName
   const studioStage = getPlanningStudioStage(blueprint, planningStatus)
+  const { step, planReady, blueprintVisible, composerSubmitLabel, statusLabel, description, reassurance, nextStepLabel } = studioStage
+  const planPanelVisible = planSheetOpen && (blueprintVisible || isDraftingPlan)
 
-  const {
-    planReady,
-    blueprintVisible,
-    composerSubmitLabel,
-    statusLabel,
-    heading,
-    description,
-    reassurance,
-    nextStepLabel,
-    questionsRemaining,
-  } = studioStage
-
-  const showPlanSection = blueprintVisible || isDraftingPlan
-
-  const resolvedHeading = useMemo(() => {
-    if (isAgentMode && !blueprintVisible) {
-      return "Let’s shape your site with AI before we build it"
-    }
-    return heading
-  }, [blueprintVisible, heading, isAgentMode])
-
-
-
-  const resolvedDescription = useMemo(() => {
+  const introDescription = useMemo(() => {
     if (blueprintVisible) return description
-    if (isAgentMode) {
-      return `${agentName || "Your BuildKit copilot"} will help shape the direction before anything gets built.`
-    }
+    if (isAgentMode) return `${agentName || "Your BuildKit copilot"} will guide the conversation, surface quick choices only when useful, and turn the chat into a plan you can review.`
     return description
   }, [agentName, blueprintVisible, description, isAgentMode])
 
+  const helperLabel = useMemo(() => {
+    if (blueprintVisible) return "Review the plan, refine anything that feels off, and build when it feels right."
+    return "Answer a few focused questions first so the first build lands much closer to what you want."
+  }, [blueprintVisible])
+
   const placeholder = useMemo(() => {
-    if (isAgentMode) {
-      return "Share the missing detail, adjustment, or decision you want me to account for."
-    }
-    if (blueprintVisible) {
-      return "Tell me what to change in the plan before we build."
-    }
-    return "Add the missing detail or answer the question above."
-  }, [blueprintVisible, isAgentMode])
+    if (blueprintVisible) return "Tell me what you want changed before we build."
+    return "Describe your audience, pages, features, design preferences, or anything that matters..."
+  }, [blueprintVisible])
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" })
-  }, [messages])
+    const node = scrollRef.current
+    if (!node) return
+    node.scrollTo({ top: node.scrollHeight, behavior: "smooth" })
+  }, [conversationMessages, guidedQuestion, guidedAnswerSet])
 
   useEffect(() => {
     if (planningStatus === "plan-generated" || planningStatus === "approved") {
       setIsDraftingPlan(false)
+      setPlanSheetOpen(true)
     }
   }, [planningStatus])
 
@@ -391,7 +404,7 @@ export function ProjectCreationStudio(props: {
     setSelectedGuidedOptions([])
     setUseCustomAnswer(false)
     setDraft("")
-  }, [guidedAnswerSet?.question])
+  }, [guidedQuestion])
 
   useEffect(() => {
     return () => {
@@ -399,103 +412,81 @@ export function ProjectCreationStudio(props: {
     }
   }, [])
 
-  // Fetch guided answer set dynamically
   useEffect(() => {
-    const fetchGuidedAnswerSet = async () => {
-      const unresolvedItem = blueprint.sections
-        .flatMap((section) => section.items)
-        .find((item) => item.status === "unknown" || item.status === "suggested")
+    const applyFallback = () => {
+      const fallback = getGuidedAnswerSet(blueprint)
+      setGuidedAnswerSet(fallback)
+      setGuidedQuestion(fallback?.question)
+      setGuidedHelper(fallback?.helper)
+    }
 
-      if (!unresolvedItem) {
+    const fetchGuidedAnswerSet = async () => {
+      if (blueprintVisible) {
         setGuidedAnswerSet(null)
+        setGuidedQuestion(undefined)
+        setGuidedHelper(undefined)
         return
       }
 
-      // Always try to fetch dynamic options from AI
       setIsLoadingOptions(true)
       try {
+        const unresolvedItem = blueprint.sections.flatMap((section) => section.items).find((item) => item.status === "unknown" || item.status === "suggested")
+        if (!unresolvedItem) {
+          setGuidedAnswerSet(null)
+          setGuidedQuestion(undefined)
+          setGuidedHelper(undefined)
+          return
+        }
+
         const authHeader = await getOptionalAuthHeader?.()
         if (!authHeader) {
-          // Fallback to derived options
-          const staticSet = getGuidedAnswerSet(blueprint)
-          setGuidedAnswerSet(staticSet)
+          applyFallback()
           return
         }
 
         const res = await fetch("/api/generate-options", {
           method: "POST",
           headers: { "Content-Type": "application/json", ...authHeader },
-          body: JSON.stringify({
-            itemKey: unresolvedItem.key,
-            blueprint,
-            prompt,
-          }),
+          body: JSON.stringify({ itemKey: unresolvedItem.key, blueprint, prompt }),
         })
 
-        if (res.ok) {
-          const data = await res.json()
-          const dynamicOptions = data.options.map((option: string) => ({
-            id: slugify(option),
-            label: option,
-            value: option,
-          }))
-
-          // Determine selection mode based on item key and options
-          const questionText = (blueprint.openQuestions[0] || unresolvedItem.label || "").toLowerCase()
-          const optionCount = dynamicOptions.length
-          const mentionsMultipleIntent =
-            /\b(select all|all that apply|which of these|any of these|what pages|which pages|what features|which features|integrations|systems)\b/i.test(
-              questionText
-            )
-          const keyDefaultsToMultiple =
-            unresolvedItem.key === "pages" || unresolvedItem.key === "systems" || unresolvedItem.key === "features"
-
-          const selectionMode: "single" | "multiple" =
-            keyDefaultsToMultiple || mentionsMultipleIntent || optionCount >= 5
-              ? "multiple"
-              : "single"
-
-          const helper =
-            selectionMode === "multiple"
-              ? "Select all that apply, then adjust anything in chat if needed."
-              : "Choose the closest option, then adjust it in chat if needed."
-
-          setGuidedAnswerSet({
-            key: unresolvedItem.key,
-            question: blueprint.openQuestions[0] || unresolvedItem.label,
-            helper,
-            selectionMode,
-            options: dynamicOptions,
-            allowsCustomAnswer: true,
-          })
-        } else {
-          // Fallback to derived options
-          const staticSet = getGuidedAnswerSet(blueprint)
-          setGuidedAnswerSet(staticSet)
+        if (!res.ok) {
+          applyFallback()
+          return
         }
+
+        const data = await res.json() as RemoteGuidedAnswerPayload
+        if (data.show !== true || !Array.isArray(data.options) || data.options.length < 2) {
+          setGuidedAnswerSet(null)
+          setGuidedQuestion(typeof data.question === "string" ? data.question : blueprint.openQuestions[0])
+          setGuidedHelper(typeof data.helper === "string" ? data.helper : undefined)
+          return
+        }
+
+        setGuidedAnswerSet({
+          key: unresolvedItem.key,
+          question: typeof data.question === "string" ? data.question : blueprint.openQuestions[0] || unresolvedItem.label,
+          helper: typeof data.helper === "string" ? data.helper : "Pick the closest option or answer in chat instead.",
+          selectionMode: data.selectionMode === "multiple" ? "multiple" : "single",
+          allowsCustomAnswer: data.allowsCustomAnswer !== false,
+          options: data.options.map((option) => String(option).trim()).filter(Boolean).map((option) => ({ id: slugify(option), label: option, value: option })),
+        })
+        setGuidedQuestion(typeof data.question === "string" ? data.question : blueprint.openQuestions[0] || unresolvedItem.label)
+        setGuidedHelper(typeof data.helper === "string" ? data.helper : undefined)
       } catch (error) {
         console.error("Failed to fetch dynamic options:", error)
-        // Fallback to derived options
-        const staticSet = getGuidedAnswerSet(blueprint)
-        setGuidedAnswerSet(staticSet)
+        applyFallback()
       } finally {
         setIsLoadingOptions(false)
       }
     }
 
     fetchGuidedAnswerSet()
-  }, [blueprint, prompt, getOptionalAuthHeader])
+  }, [blueprint, blueprintVisible, getOptionalAuthHeader, prompt])
 
   const handleSubmit = async () => {
     if (isSubmitting || !canEdit) return
-    const value = blueprintVisible
-      ? draft.trim()
-      : !guidedAnswerSet
-        ? draft.trim()
-      : useCustomAnswer
-        ? draft.trim()
-        : buildGuidedAnswerDraft(guidedAnswerSet, selectedGuidedOptions)
-
+    const value = blueprintVisible ? draft.trim() : !guidedAnswerSet ? draft.trim() : useCustomAnswer ? draft.trim() : buildGuidedAnswerDraft(guidedAnswerSet, selectedGuidedOptions)
     if (!value) return
     setDraft("")
     setSelectedGuidedOptions([])
@@ -506,127 +497,108 @@ export function ProjectCreationStudio(props: {
   const handleDraftPlan = () => {
     if (!planReady || blueprintVisible) return
     setIsDraftingPlan(true)
+    setPlanSheetOpen(true)
     if (draftPlanTimerRef.current) clearTimeout(draftPlanTimerRef.current)
     draftPlanTimerRef.current = setTimeout(() => {
-      Promise.resolve(onGeneratePlan()).finally(() => {
-        setIsDraftingPlan(false)
-      })
+      Promise.resolve(onGeneratePlan()).finally(() => setIsDraftingPlan(false))
     }, 1200)
   }
 
   const toggleGuidedOption = (optionLabel: string) => {
     if (!guidedAnswerSet) return
-
     const nextSelection =
       guidedAnswerSet.selectionMode === "single"
         ? [optionLabel]
         : selectedGuidedOptions.includes(optionLabel)
-          ? selectedGuidedOptions.filter((value) => value !== optionLabel)
+          ? selectedGuidedOptions.filter((v) => v !== optionLabel)
           : optionLabel === "None of these for version one"
             ? [optionLabel]
-            : [...selectedGuidedOptions.filter((value) => value !== "None of these for version one"), optionLabel]
-
+            : [...selectedGuidedOptions.filter((v) => v !== "None of these for version one"), optionLabel]
     setSelectedGuidedOptions(nextSelection)
   }
 
-  const handleEnableCustomAnswer = () => {
-    setUseCustomAnswer(true)
-    setDraft("")
-    setSelectedGuidedOptions([])
-    setTimeout(() => textareaRef.current?.focus(), 0)
-  }
-
-  const canSubmitCurrentAnswer = blueprintVisible
-    ? !!draft.trim()
-    : !guidedAnswerSet
-      ? !!draft.trim()
-    : useCustomAnswer
-      ? !!draft.trim()
-      : !!buildGuidedAnswerDraft(guidedAnswerSet, selectedGuidedOptions)
+  const canSubmitCurrentAnswer = blueprintVisible ? !!draft.trim() : !guidedAnswerSet ? !!draft.trim() : useCustomAnswer ? !!draft.trim() : !!buildGuidedAnswerDraft(guidedAnswerSet, selectedGuidedOptions)
 
   return (
-    <div className="min-h-screen bg-[#f5f5f2] text-[#1f1f1f]">
-      <div className="mx-auto max-w-[1080px] px-4 py-4 sm:px-6 sm:py-5 lg:px-8 lg:py-7">
-        <PlanningHeader projectLabel={projectLabel} onBack={onBack} />
+    <div className="min-h-screen bg-[#f1ece3] text-[#1f1f1f]">
+      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(ellipse_85%_55%_at_50%_-8%,rgba(212,198,178,0.34),transparent)]" />
+      <div className="pointer-events-none fixed inset-x-0 bottom-0 h-48 bg-[linear-gradient(180deg,transparent,rgba(238,232,223,0.38))]" />
 
-        <PlanningIntro
-          heading={resolvedHeading}
-          description={resolvedDescription}
-          statusLabel={statusLabel}
-          nextStepLabel={blueprintVisible ? reassurance : nextStepLabel}
-          questionsRemaining={questionsRemaining}
-        />
+      <div className="relative mx-auto flex min-h-screen max-w-[1320px] flex-col px-0 sm:px-4 lg:px-6">
+        <div className="flex min-h-screen flex-col sm:py-4 lg:py-6">
+          <PlanningHeader
+            projectLabel={projectLabel}
+            statusLabel={statusLabel}
+            planVisible={planSheetOpen}
+            helperLabel={helperLabel}
+            onBack={onBack}
+            onTogglePlan={() => setPlanSheetOpen((v) => !v)}
+          />
 
-        <section className="mt-8 rounded-[2rem] bg-white shadow-[0_30px_80px_-52px_rgba(24,24,27,0.22)] ring-1 ring-zinc-200/80">
-          <div className="border-b border-zinc-100 px-5 py-5 sm:px-6 sm:py-6">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-              <div>
-                <p className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">What we’re building</p>
-                <p className="mt-3 max-w-3xl text-[15px] leading-7 text-zinc-700">{prompt}</p>
-              </div>
-              <div className="text-sm text-zinc-500">
-                {blueprintVisible
-                  ? "Build is still a separate step."
-                  : planReady
-                    ? "You have enough detail for a plan."
-                    : questionsRemaining === 1
-                      ? "One more decision should do it."
-                      : `${questionsRemaining} important details left.`}
-              </div>
+          <div className="flex-1 px-4 pb-4 sm:px-6 sm:pb-6">
+            <div className="grid h-full min-h-0 gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
+              <section className="flex min-h-[72vh] flex-col overflow-hidden rounded-[2rem] border border-[#e6ddd0] bg-[linear-gradient(180deg,rgba(249,245,238,0.98),rgba(244,239,230,0.96))] shadow-[0_28px_90px_-60px_rgba(24,24,27,0.4)]">
+                <ConversationThread
+                  prompt={prompt}
+                  introDescription={introDescription}
+                  messages={conversationMessages}
+                  guidedAnswerSet={blueprintVisible ? null : guidedAnswerSet}
+                  guidedQuestion={guidedQuestion}
+                  guidedHelper={guidedHelper}
+                  selectedGuidedOptions={selectedGuidedOptions}
+                  onToggleGuidedOption={toggleGuidedOption}
+                  onEnableCustomAnswer={() => {
+                    setUseCustomAnswer(true)
+                    setDraft("")
+                    setSelectedGuidedOptions([])
+                    setTimeout(() => textareaRef.current?.focus(), 0)
+                  }}
+                  useCustomAnswer={useCustomAnswer}
+                  isLoadingOptions={isLoadingOptions}
+                  composer={
+                    <ChatComposer
+                      helper={guidedHelper || (blueprintVisible ? reassurance : nextStepLabel)}
+                      draft={draft}
+                      setDraft={setDraft}
+                      placeholder={placeholder}
+                      canEdit={canEdit}
+                      isSubmitting={isSubmitting}
+                      textareaRef={textareaRef}
+                      onSubmit={handleSubmit}
+                      submitLabel={blueprintVisible ? composerSubmitLabel : "Send"}
+                      canSubmit={canSubmitCurrentAnswer}
+                    />
+                  }
+                  scrollRef={scrollRef}
+                />
+              </section>
+
+              <aside className="flex min-h-0 flex-col gap-4 lg:sticky lg:top-6 lg:max-h-[calc(100vh-5rem)]">
+                <BottomActions
+                  onGeneratePlan={handleDraftPlan}
+                  onBuildFromPlan={onBuildFromPlan}
+                  onRefine={() => {
+                    setPlanSheetOpen(true)
+                    textareaRef.current?.focus()
+                  }}
+                  onSkip={onSkip}
+                  disabled={!canEdit || isSubmitting}
+                  stage={step}
+                  planReady={planReady}
+                  questionsRemaining={blueprint.openQuestions.length}
+                  isDraftingPlan={isDraftingPlan}
+                />
+
+                <PlanPanel
+                  isVisible={planPanelVisible}
+                  isDraftingPlan={isDraftingPlan}
+                  blueprint={blueprint}
+                  planningStatus={planningStatus}
+                />
+              </aside>
             </div>
           </div>
-
-          <div ref={scrollRef} className="space-y-1 px-5 py-7 sm:px-6 sm:py-8">
-            {messages.map((message, index) => (
-              <StudioMessage key={`${message.role}-${index}-${message.content.slice(0, 24)}`} message={message} />
-            ))}
-          </div>
-        </section>
-
-        <div className="mt-6">
-          <PlanningResponseCard
-            question={blueprintVisible ? "What should we change before we build?" : blueprint.openQuestions[0]}
-            useCustomAnswer={blueprintVisible || useCustomAnswer || !guidedAnswerSet}
-            onEnableCustomAnswer={handleEnableCustomAnswer}
-            guidedAnswerSet={blueprintVisible ? null : guidedAnswerSet}
-            selectedGuidedOptions={selectedGuidedOptions}
-            onToggleGuidedOption={toggleGuidedOption}
-            draft={draft}
-            setDraft={setDraft}
-            placeholder={placeholder}
-            canEdit={canEdit}
-            isSubmitting={isSubmitting}
-            isLoadingOptions={isLoadingOptions}
-            textareaRef={textareaRef}
-            onSubmit={handleSubmit}
-            submitLabel={blueprintVisible ? composerSubmitLabel : "Next"}
-            canSubmit={canSubmitCurrentAnswer}
-          />
         </div>
-
-        <div className="mt-6">
-          <CreationStudioActions
-            onGeneratePlan={handleDraftPlan}
-            onBuildFromPlan={onBuildFromPlan}
-            onRefine={() => textareaRef.current?.focus()}
-            onSkip={onSkip}
-            disabled={!canEdit || isSubmitting}
-            stage={step}
-            planReady={planReady}
-            questionsRemaining={questionsRemaining}
-            isDraftingPlan={isDraftingPlan}
-          />
-        </div>
-
-        {showPlanSection ? (
-          <div className="mt-6 sm:mt-8">
-            <PlanningPlanSection
-              isDraftingPlan={isDraftingPlan}
-              blueprint={blueprint}
-              planningStatus={planningStatus}
-            />
-          </div>
-        ) : null}
       </div>
     </div>
   )

@@ -1,7 +1,6 @@
 "use client"
 
 import type { PlanningStatus, ProjectBlueprint } from "@/app/project/[id]/types"
-import { getBlueprintItem } from "@/lib/project-blueprint"
 import { cn } from "@/lib/utils"
 
 function shorten(value?: string) {
@@ -11,12 +10,7 @@ function shorten(value?: string) {
   return sentence.length <= 140 ? sentence : `${sentence.slice(0, 137).trimEnd()}...`
 }
 
-function SummaryRow(props: {
-  label: string
-  value?: string
-  muted?: boolean
-  multiline?: boolean
-}) {
+function SummaryRow(props: { label: string; value?: string; muted?: boolean; multiline?: boolean }) {
   const { label, value, muted = false, multiline = false } = props
 
   return (
@@ -41,71 +35,44 @@ export function CreationBlueprintPanel(props: {
 }) {
   const { blueprint, planningStatus } = props
 
-  const goal = shorten(getBlueprintItem(blueprint, "goal")?.value)
-  const audience = getBlueprintItem(blueprint, "audience")
-  const pages = getBlueprintItem(blueprint, "pages")
-  const features = getBlueprintItem(blueprint, "features")
-  const style = getBlueprintItem(blueprint, "style")
-  const systems = getBlueprintItem(blueprint, "systems")
-  const primaryNeed = blueprint.openQuestions[0] || blueprint.assumptions[0]
-  
-  // Determine the "Needs your input" message more intelligently
-  let blockingMessage = primaryNeed
-  if (!blockingMessage && systems?.value && systems.status === "confirmed") {
-    // If systems are confirmed as needed or setup, show that as a next step
-    if (/(yes|need|required|backend|supabase|auth|payment)/i.test(systems.value)) {
-      blockingMessage = `Set up: ${systems.value}`
-    }
-  }
-  if (!blockingMessage && (audience?.status !== "confirmed" || pages?.status !== "confirmed" || style?.status !== "confirmed")) {
-    blockingMessage = "Confirm a few more details before we build"
-  }
-  
+  const visibleItems = blueprint.sections
+    .flatMap((section) =>
+      section.items.map((item) => ({
+        label: item.label,
+        value: item.key === "goal" ? shorten(item.value) : item.value,
+        muted: item.status !== "confirmed",
+      }))
+    )
+    .filter((item) => item.value)
+    .slice(0, 6)
+
+  const blockingMessage =
+    blueprint.openQuestions[0] ||
+    blueprint.assumptions[0] ||
+    (blueprint.openQuestions.length > 0 ? "Confirm a few more details before we build" : "")
+
   const introCopy =
     planningStatus === "approved"
       ? "This is the reviewed plan the build will follow."
-      : "A simple version-one plan you can review before building."
+      : "A living version-one plan shaped by the conversation."
 
   return (
-    <section className="rounded-[2rem] bg-white/88 p-6 ring-1 ring-[#e6dfd3] shadow-[0_24px_50px_-40px_rgba(24,24,27,0.3)]">
-      <div className="border-b border-[#ece6db] pb-4">
-        <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-zinc-500">Blueprint</p>
-        <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-900">Before I build</h2>
+    <section className="overflow-hidden rounded-[2rem] border border-[#e7dfd3] bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(249,245,238,0.92))] shadow-[0_28px_70px_-48px_rgba(24,24,27,0.38)]">
+      <div className="border-b border-[#ece6db] px-6 pb-5 pt-6">
+        <div className="inline-flex rounded-full border border-[#e6ddcf] bg-white/80 px-3 py-1 text-[10px] font-medium uppercase tracking-[0.18em] text-zinc-500">
+          Live plan
+        </div>
+        <h2 className="mt-4 text-[1.4rem] font-semibold tracking-tight text-zinc-900">Before I build</h2>
         <p className="mt-2 text-sm leading-6 text-zinc-600">{introCopy}</p>
       </div>
 
-      <div className="divide-y divide-[#eee8de]">
-        <SummaryRow label="Goal" value={goal} />
-        <SummaryRow
-          label="Audience"
-          value={audience?.value}
-          muted={audience?.status !== "confirmed"}
-        />
-        <SummaryRow
-          label="Pages included"
-          value={pages?.value}
-          muted={pages?.status !== "confirmed"}
-        />
-        <SummaryRow
-          label="Core features"
-          value={features?.value}
-          muted={features?.status === "unknown"}
-        />
-        <SummaryRow
-          label="Style direction"
-          value={style?.value}
-          muted={style?.status !== "confirmed"}
-        />
-        {systems?.status === "confirmed" && (
-          <SummaryRow
-            label="Backend / system setup"
-            value={systems.value}
-            muted={false}
-          />
-        )}
+      <div className="divide-y divide-[#eee8de] px-6 py-2">
+        {visibleItems.map((item) => (
+          <SummaryRow key={`${item.label}-${item.value}`} label={item.label} value={item.value} muted={item.muted} />
+        ))}
         <SummaryRow
           label="Needs your input"
-          value={blockingMessage || "Good to go — we can start building."}
+          value={blockingMessage || "Good to go - we can start building."}
           muted={!blockingMessage}
           multiline
         />

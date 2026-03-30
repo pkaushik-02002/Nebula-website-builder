@@ -61,7 +61,7 @@ export function SupabaseCreateProjectModal({ open, loading, error, regions = [],
           </div>
           <DialogTitle className="text-center text-xl">Create Supabase Project</DialogTitle>
           <DialogDescription className="text-center">
-            No projects found. Create a new Supabase project to continue.
+            Create a Supabase project here, then we will link it and continue setup for this website automatically.
           </DialogDescription>
         </DialogHeader>
 
@@ -85,6 +85,15 @@ export function SupabaseCreateProjectModal({ open, loading, error, regions = [],
               disabled={isCreating}
               className="border-zinc-200 text-sm"
             />
+          </div>
+
+          <div className="rounded-2xl border border-[#e8e1d6] bg-[#faf7f2] px-4 py-4">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">What happens next</p>
+            <ol className="mt-3 space-y-2 text-sm leading-6 text-zinc-700">
+              <li>1. We create the Supabase project in your account.</li>
+              <li>2. We link it to this website.</li>
+              <li>3. If the app needs backend setup, we continue automatically.</li>
+            </ol>
           </div>
 
           <div className="space-y-1.5">

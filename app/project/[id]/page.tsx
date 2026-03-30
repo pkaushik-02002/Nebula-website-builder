@@ -185,7 +185,6 @@ function ProjectContent() {
   const [visualEditConfirmAction, setVisualEditConfirmAction] = useState<null | "exit" | "clear">(null)
   const [deployOpen, setDeployOpen] = useState(false)
   const [websiteSettingsOpen, setWebsiteSettingsOpen] = useState(false)
-  const visualEditAutoEnteredRef = useRef(false)
 
   useEffect(() => {
     setPreviewPathDraft(previewPath)
@@ -367,6 +366,9 @@ function ProjectContent() {
         : []
       
       setSupabaseProjects(projects)
+      if (!selectedSupabaseRef && projects[0]?.ref) {
+        setSelectedSupabaseRef(projects[0].ref)
+      }
       
       // If no projects exist, show create project modal
       if (projects.length === 0) {
@@ -402,6 +404,18 @@ function ProjectContent() {
       setSupabaseOauthLoading(false)
     }
   }
+
+  const runSupabaseProvisioning = useCallback(async (targetProjectId: string) => {
+    const authHeader = await getOptionalAuthHeader()
+    const res = await fetch("/api/integrations/supabase/provision", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeader },
+      body: JSON.stringify({ projectId: targetProjectId }),
+    })
+    const json = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(json?.error || "Failed to provision Supabase for this project.")
+    return json
+  }, [getOptionalAuthHeader])
 
   const handleSupabaseCreateProject = async (name: string, region: string, password: string) => {
     if (!project) return
@@ -445,8 +459,14 @@ function ProjectContent() {
         // Update project state
         const linkedProject = { ...project, supabaseProjectRef: json.projectRef }
         setProject(linkedProject)
-        
-        toast({ title: "Success", description: "Supabase project created and linked successfully!" })
+
+        const provision = await runSupabaseProvisioning(projectId)
+        toast({
+          title: "Success",
+          description: provision?.provisioned
+            ? "Supabase project created, linked, and provisioned for this app."
+            : "Supabase project created and linked successfully.",
+        })
       } else {
         // No project ref returned, refresh the list
         await fetchSupabaseProjects()
@@ -490,8 +510,14 @@ function ProjectContent() {
       // Update project with linked Supabase
       const linkedProject = { ...project, supabaseProjectRef: selectedSupabaseRef }
       setProject(linkedProject)
-      
-      toast({ title: "Success", description: "Supabase project linked. You can now inject the code in the next phase." })
+
+      const provision = await runSupabaseProvisioning(projectId)
+      toast({
+        title: "Success",
+        description: provision?.provisioned
+          ? "Supabase linked and backend setup was applied to your project."
+          : "Supabase project linked successfully.",
+      })
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to link Supabase project."
       setSupabaseSetupError(msg)
@@ -951,9 +977,7 @@ function ProjectContent() {
     ? buildkitAgents.find((agent) => agent.slug === project?.agentSlug) || buildkitAgents[0]
     : null
   const planningStatus: PlanningStatus = project?.planningStatus || "draft"
-  const planningMessages = project && resolvedBlueprint
-    ? createPlanningMessages(project.prompt, project.messages || [], resolvedBlueprint)
-    : []
+  const planningMessages = Array.isArray(project?.messages) ? project.messages : []
   const shouldShowCreationStudio =
     !!project &&
     creationMode === "agent" &&
@@ -2133,9 +2157,18 @@ function ProjectContent() {
       }
 
       // Show Supabase setup modal if backend is needed and not yet dismissed
-      if (generationMeta.suggestsBackend && !suggestBackendDismissed) {
-        setSupabaseSetupModalOpen(true)
-        setSelectedSupabaseRef("")
+      if (generationMeta.suggestsBackend) {
+        if (project?.supabaseProjectRef) {
+          try {
+            await runSupabaseProvisioning(projectId)
+            toast({ title: "Supabase updated", description: "The connected Supabase backend was synced with your latest build." })
+          } catch (provisionError) {
+            console.error("Supabase provisioning error:", provisionError)
+          }
+        } else if (!suggestBackendDismissed) {
+          setSupabaseSetupModalOpen(true)
+          setSelectedSupabaseRef("")
+        }
       }
 
       // Create E2B sandbox (auto-start) — uses finalFiles; project state already updated above
@@ -2685,16 +2718,6 @@ function ProjectContent() {
     return requestVisualEditExit()
   }, [requestVisualEditExit])
 
-  useEffect(() => {
-    if (visualEditAutoEnteredRef.current) return
-    if (!canEdit) return
-    if (project?.status !== "complete") return
-    if (!ensuredPreviewUrl) return
-
-    setVisualEditActive(true)
-    visualEditAutoEnteredRef.current = true
-  }, [canEdit, project?.status, ensuredPreviewUrl])
-
   const copyCode = async () => {
     if (selectedFile) {
       await navigator.clipboard.writeText(selectedFile.content)
@@ -3102,6 +3125,7 @@ function ProjectContent() {
         agentName={activeAgent?.name || null}
         canEdit={canEdit}
         isSubmitting={isPlanningReplyPending}
+        getOptionalAuthHeader={getOptionalAuthHeader}
         onSubmit={handlePlanningSubmit}
         onGeneratePlan={handleGeneratePlan}
         onBuildFromPlan={handleBuildFromPlan}
@@ -3118,10 +3142,12 @@ function ProjectContent() {
   }
 
   return (
-    <div className="min-h-screen bg-[#f5f5f2] text-[#1f1f1f]">
-      <div className="mx-auto flex min-h-screen max-w-[1800px] flex-col px-3 py-3 sm:px-5 sm:py-4 lg:h-screen lg:px-6">
-        <header className="mb-3 border-b border-zinc-200 bg-[#f5f5f2] px-1 pb-3 sm:mb-4 sm:pb-4 lg:h-14 lg:pb-0">
-          <div className="flex items-start justify-between gap-3 sm:items-center">
+    <div className="min-h-screen bg-[#f1eee8] text-[#1f1f1f]">
+      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(ellipse_82%_54%_at_50%_-10%,rgba(214,203,186,0.3),transparent)]" />
+      <div className="mx-auto flex min-h-screen max-w-[1880px] flex-col px-3 py-3 sm:px-5 sm:py-4 lg:h-screen lg:px-6">
+        <header className="mb-3 sm:mb-4">
+          <div className="rounded-[1.75rem] border border-[#e2ddd3] bg-[rgba(251,249,244,0.9)] px-4 py-3 shadow-[0_24px_70px_-54px_rgba(24,24,27,0.35)] backdrop-blur-sm sm:px-5 sm:py-4">
+            <div className="flex items-start justify-between gap-3 sm:items-center">
             <div className="flex min-w-0 items-center gap-4">
               <Link href="/projects" className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500 transition-colors hover:text-zinc-800">
                 Studio
@@ -3182,6 +3208,7 @@ function ProjectContent() {
             <Button type="button" size="sm" className="h-9 rounded-lg bg-[#1f1f1f] px-3 text-white hover:bg-black" onClick={() => setDeployOpen(true)}>
               Go Live
             </Button>
+            </div>
           </div>
           </div>
         </header>
@@ -3219,7 +3246,7 @@ function ProjectContent() {
           visualEditActive ? "lg:grid-cols-12" : "lg:grid-cols-10"
         )}>
           <section className={cn(
-            "flex min-h-[52vh] flex-col overflow-hidden border border-zinc-200 bg-white lg:min-h-0",
+            "flex min-h-[52vh] flex-col overflow-hidden rounded-[1.9rem] border border-[#e2ddd3] bg-[rgba(255,255,255,0.92)] shadow-[0_24px_80px_-62px_rgba(24,24,27,0.38)] lg:min-h-0",
             visualEditActive ? "lg:col-span-4" : "lg:col-span-3",
             mobileTab !== "chat" && "hidden lg:flex"
           )}>
@@ -3642,84 +3669,113 @@ function ProjectContent() {
                   </>
                 )}
               </div>
-              {project.messages?.map((msg, i) => (
-                <div key={i} className={cn("group", msg.role === "user" ? "ml-auto max-w-[90%]" : "mr-auto max-w-[90%]")}>
-                  {msg.role === "user" && editingTarget?.kind === "message" && editingTarget.index === i ? (
-                    <div className="rounded-2xl border border-zinc-200 bg-white px-3 py-3 text-zinc-900">
-                      <textarea
-                        value={editingDraft}
-                        onChange={(e) => setEditingDraft(e.target.value)}
-                        className="w-full resize-none bg-transparent text-sm text-zinc-900 outline-none"
-                        rows={3}
-                        autoFocus
-                      />
-                      <div className="mt-2 flex justify-end gap-2">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          className="h-8 border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
-                          onClick={handleCancelEdit}
-                        >
-                          Cancel
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          className="h-8 bg-zinc-900 text-white hover:bg-black"
-                          onClick={() => handleEditSubmit(editingDraft)}
-                          disabled={!editingDraft.trim()}
-                        >
-                          Save
-                        </Button>
+              {project.messages?.map((msg, i) => {
+                const isUserMessage = msg.role === "user"
+                const isEditingMessage = isUserMessage && editingTarget?.kind === "message" && editingTarget.index === i
+
+                return (
+                  <div
+                    key={i}
+                    className={cn("group flex gap-3", isUserMessage ? "justify-end" : "justify-start")}
+                  >
+                    {!isUserMessage ? (
+                      <div className="mt-1 hidden h-9 w-9 shrink-0 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-700 sm:flex">
+                        <Bot className="h-4 w-4" />
                       </div>
-                    </div>
-                  ) : (
-                    <div
-                      className={cn(
-                        "relative rounded-2xl px-4 py-3 text-sm leading-relaxed transition-colors",
-                        msg.role === "user"
-                          ? "bg-[#1f1f1f] text-white"
-                          : "bg-zinc-100 text-zinc-800"
-                      )}
-                    >
-                      {msg.content}
-                      {msg.role === "user" && canEdit && (
-                        <div className="absolute right-2 top-2 flex items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              try {
-                                await navigator.clipboard.writeText(msg.content || "")
-                                toast({ title: "Copied", description: "Message copied to clipboard." })
-                              } catch {
-                                toast({ title: "Copy failed", description: "Could not copy message.", variant: "destructive" })
-                              }
-                            }}
-                            className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-white/20 bg-white/10 text-white/80 transition-colors hover:bg-white/20 hover:text-white"
-                            aria-label="Copy message"
-                            title="Copy"
-                          >
-                            <Copy className="h-3 w-3" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditingTarget({ kind: "message", index: i })
-                              setEditingDraft(msg.content)
-                            }}
-                            className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-white/20 bg-white/10 text-white/80 transition-colors hover:bg-white/20 hover:text-white"
-                            aria-label="Edit message"
-                            title="Edit"
-                          >
-                            <Edit2 className="h-3 w-3" />
-                          </button>
+                    ) : null}
+
+                    <div className="max-w-[92%] sm:max-w-[82%]">
+                      <div className={cn("mb-1.5 flex items-center gap-2 px-1", isUserMessage ? "justify-end" : "justify-start")}>
+                        <span className="text-[11px] font-medium text-zinc-500">
+                          {isUserMessage ? "You" : "BuildKit"}
+                        </span>
+                      </div>
+
+                      {isEditingMessage ? (
+                        <div className="rounded-3xl border border-zinc-200 bg-white px-3 py-3 text-zinc-900">
+                          <textarea
+                            value={editingDraft}
+                            onChange={(e) => setEditingDraft(e.target.value)}
+                            className="w-full resize-none bg-transparent text-sm text-zinc-900 outline-none"
+                            rows={3}
+                            autoFocus
+                          />
+                          <div className="mt-2 flex justify-end gap-2">
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="h-8 border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
+                              onClick={handleCancelEdit}
+                            >
+                              Cancel
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              className="h-8 bg-zinc-900 text-white hover:bg-black"
+                              onClick={() => handleEditSubmit(editingDraft)}
+                              disabled={!editingDraft.trim()}
+                            >
+                              Save
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div
+                          className={cn(
+                            "relative px-4 py-3 text-sm leading-7 transition-colors sm:px-5 sm:py-4",
+                            isUserMessage
+                              ? "rounded-[2rem] bg-[#1f1f1f] text-white"
+                              : "rounded-[2rem] border border-[#ebe3d7] bg-[#f5f1ea] text-zinc-800"
+                          )}
+                        >
+                          <p className="whitespace-pre-wrap">{msg.content}</p>
+
+                          {isUserMessage && canEdit && (
+                            <div className="absolute right-3 top-3 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  try {
+                                    await navigator.clipboard.writeText(msg.content || "")
+                                    toast({ title: "Copied", description: "Message copied to clipboard." })
+                                  } catch {
+                                    toast({ title: "Copy failed", description: "Could not copy message.", variant: "destructive" })
+                                  }
+                                }}
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/15 bg-white/10 text-white/80 transition-colors hover:bg-white/20 hover:text-white"
+                                aria-label="Copy message"
+                                title="Copy"
+                              >
+                                <Copy className="h-3 w-3" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingTarget({ kind: "message", index: i })
+                                  setEditingDraft(msg.content)
+                                }}
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/15 bg-white/10 text-white/80 transition-colors hover:bg-white/20 hover:text-white"
+                                aria-label="Edit message"
+                                title="Edit"
+                              >
+                                <Edit2 className="h-3 w-3" />
+                              </button>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
-                  )}
-                </div>
-              ))}
+
+                    {isUserMessage ? (
+                      <div className="mt-1 hidden h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#1f1f1f] text-white sm:flex">
+                        <User className="h-4 w-4" />
+                      </div>
+                    ) : null}
+                  </div>
+                )
+              })}
                 {isGenerating && (
                   <div className="overflow-hidden rounded-[1.5rem] border border-zinc-200 bg-white shadow-[0_20px_70px_-36px_rgba(24,24,27,0.42)]">
                     <div className="border-b border-zinc-100 bg-[radial-gradient(circle_at_top_left,_rgba(244,244,245,0.95),_rgba(255,255,255,0.98)_58%)] px-4 py-4">
@@ -4350,6 +4406,10 @@ function ProjectContent() {
         }}
         onChange={setSelectedSupabaseRef}
         onConfirm={handleSupabaseProjectLink}
+        onCreateNew={() => {
+          setSupabaseProjectSelectorOpen(false)
+          setSupabaseCreateProjectOpen(true)
+        }}
       />
 
       <SupabaseCreateProjectModal

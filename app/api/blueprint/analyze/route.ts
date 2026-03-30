@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server"
-import Anthropic from "@anthropic-ai/sdk"
 
 interface AnalyzeRequest {
   prompt: string
@@ -33,8 +32,6 @@ interface AnalyzeResponse {
   content: DetectionResult
   scope: DetectionResult
 }
-
-const client = new Anthropic()
 
 const ANALYSIS_PROMPT = `You are an expert product strategist analyzing a project brief to extract key product insights.
 
@@ -94,34 +91,12 @@ ${existingBlueprint.sections
         : ""
 
     const fullPrompt = ANALYSIS_PROMPT + prompt + contextAddendum
+    void fullPrompt
 
-    const message = await client.messages.create({
-      model: "claude-3-5-sonnet-20241022",
-      max_tokens: 1024,
-      messages: [
-        {
-          role: "user",
-          content: fullPrompt,
-        },
-      ],
-    })
-
-    const responseText =
-      message.content[0].type === "text" ? message.content[0].text : ""
-
-    // Parse JSON from response
-    const jsonMatch = responseText.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) {
-      console.error("Failed to extract JSON from Claude response:", responseText)
-      return NextResponse.json(
-        { error: "Failed to parse AI analysis" },
-        { status: 500 }
-      )
-    }
-
-    const analysis: AnalyzeResponse = JSON.parse(jsonMatch[0])
-
-    return NextResponse.json(analysis)
+    return NextResponse.json(
+      { error: "Blueprint AI analysis unavailable" },
+      { status: 503 }
+    )
   } catch (error) {
     console.error("Blueprint analysis error:", error)
     return NextResponse.json(

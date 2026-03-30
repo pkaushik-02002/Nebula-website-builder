@@ -8,9 +8,9 @@ export async function POST(req: Request) {
   try {
     const uid = await requireUserUid(req)
     const body = await req.json().catch(() => ({}))
-    const name = (body?.name ?? "").toString().trim()
+    const name = (body?.name ?? body?.projectName ?? "").toString().trim()
     const region = (body?.region ?? "").toString().trim()
-    const dbPassword = (body?.dbPassword ?? "").toString().trim()
+    const dbPassword = (body?.dbPassword ?? body?.databasePassword ?? "").toString().trim()
     const organizationIdFromBody = (body?.organizationId ?? "").toString().trim()
 
     if (!name || !region || !dbPassword) {
@@ -46,7 +46,15 @@ export async function POST(req: Request) {
       }),
     })
 
-    return NextResponse.json({ project: created })
+    const createdRecord = created as { id?: string; ref?: string; name?: string; region?: string }
+    const projectRef = (createdRecord?.ref ?? createdRecord?.id ?? "").toString()
+
+    return NextResponse.json({
+      project: created,
+      projectRef,
+      projectName: (createdRecord?.name ?? name).toString(),
+      region,
+    })
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Failed to create Supabase project"
     return NextResponse.json({ error: message }, { status: 500 })
