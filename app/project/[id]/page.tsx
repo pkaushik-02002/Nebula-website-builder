@@ -1712,7 +1712,7 @@ function ProjectContent() {
     const initBlueprint = async () => {
       const nextBlueprint = project.blueprint || await createInitialBlueprint(project.prompt)
       const nextMessages = await createPlanningMessages(project.prompt, project.messages || [], nextBlueprint)
-      const inferredStatus = buildPlanningAssistantReply(nextBlueprint).planningStatus
+      const inferredStatus = buildPlanningAssistantReply(nextBlueprint, undefined, project.messages || []).planningStatus
       const projectRef = doc(db, "projects", projectId)
 
       updateDoc(projectRef, {
@@ -2952,7 +2952,7 @@ function ProjectContent() {
 
     setIsPlanningReplyPending(true)
     const nextBlueprint = updateBlueprintFromReply(resolvedBlueprint, value)
-    const assistant = buildPlanningAssistantReply(nextBlueprint, value)
+    const assistant = buildPlanningAssistantReply(nextBlueprint, value, project.messages || [])
     const nextMessages = [
       ...(project.messages || []),
       { role: "user" as const, content: value, timestamp: new Date().toISOString() },
@@ -4588,6 +4588,5 @@ export default function ProjectPage() {
     </ProjectErrorBoundary>
   )
 }
-
 
 

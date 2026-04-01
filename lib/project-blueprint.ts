@@ -91,6 +91,116 @@ function normalizeList(items: string[]) {
   return Array.from(new Set(items.map((item) => tidy(item)).filter(Boolean)))
 }
 
+const QUESTION_TOKEN_STOPWORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "before",
+  "for",
+  "from",
+  "how",
+  "i",
+  "in",
+  "is",
+  "it",
+  "of",
+  "on",
+  "or",
+  "so",
+  "that",
+  "the",
+  "this",
+  "to",
+  "we",
+  "what",
+  "which",
+  "who",
+  "will",
+  "with",
+  "would",
+  "you",
+  "your",
+])
+
+function stemQuestionToken(value: string) {
+  return value
+    .replace(/ing$/i, "")
+    .replace(/ed$/i, "")
+    .replace(/es$/i, "")
+    .replace(/s$/i, "")
+}
+
+function tokenizeQuestion(value: string) {
+  return normalizeList(
+    tidy(value)
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .map(stemQuestionToken)
+      .filter((token) => token.length > 1 && !QUESTION_TOKEN_STOPWORDS.has(token))
+  )
+}
+
+function questionSimilarity(a: string, b: string) {
+  const left = tokenizeQuestion(a)
+  const right = tokenizeQuestion(b)
+  if (left.length === 0 || right.length === 0) return 0
+
+  const leftSet = new Set(left)
+  const rightSet = new Set(right)
+  let overlap = 0
+  leftSet.forEach((token) => {
+    if (rightSet.has(token)) overlap += 1
+  })
+
+  const union = new Set([...leftSet, ...rightSet]).size
+  return union > 0 ? overlap / union : 0
+}
+
+function extractAssistantQuestions(messageContent: string) {
+  return normalizeList(
+    tidy(messageContent)
+      .split(/(?<=[?.!])\s+/)
+      .map((part) => part.trim())
+      .filter((part) => part.includes("?"))
+      .map((part) => part.replace(/[.!?]+$/g, "").trim())
+  )
+}
+
+function getAskedQuestionHistory(messages: Message[]) {
+  return normalizeList(
+    messages
+      .filter((message) => message.role === "assistant")
+      .flatMap((message) => extractAssistantQuestions(message.content))
+      .slice(-8)
+  )
+}
+
+function prioritizeOpenQuestions(openQuestions: string[], messages: Message[]) {
+  if (openQuestions.length <= 1) return openQuestions
+  const askedHistory = getAskedQuestionHistory(messages)
+  if (askedHistory.length === 0) return openQuestions
+
+  const scored = openQuestions.map((question, index) => {
+    const closestMatch = askedHistory.reduce((max, askedQuestion) => {
+      return Math.max(max, questionSimilarity(question, askedQuestion))
+    }, 0)
+
+    return { question, index, closestMatch }
+  })
+
+  scored.sort((a, b) => {
+    if (a.closestMatch !== b.closestMatch) return a.closestMatch - b.closestMatch
+    return a.index - b.index
+  })
+
+  return scored.map((entry) => entry.question)
+}
+
 export function getBlueprintItem(blueprint: ProjectBlueprint, key: string) {
   return blueprint.sections.flatMap((section) => section.items).find((item) => item.key === key)
 }
@@ -920,9 +1030,10 @@ export function updateBlueprintFromReply(blueprint: ProjectBlueprint, reply: str
 
 export function buildPlanningAssistantReply(
   blueprint: ProjectBlueprint,
-  userReply?: string
+  userReply?: string,
+  messages: Message[] = []
 ): { content: string; planningStatus: PlanningStatus } {
-  const openQuestions = blueprint.openQuestions
+  const openQuestions = prioritizeOpenQuestions(blueprint.openQuestions, messages)
   const sectionsWithUnknowns = blueprint.sections
     .flatMap((section) =>
       section.items
@@ -942,8 +1053,12 @@ export function buildPlanningAssistantReply(
     }
   }
 
+  const questionLead = sectionsWithUnknowns.length > 0
+    ? sectionsWithUnknowns.join(" and ")
+    : "the remaining product details"
+
   return {
-    content: `${intro} The main things to clarify are ${sectionsWithUnknowns.join(" and ")}. ${openQuestions[0]}${openQuestions[1] ? ` After that, I’d also like to confirm: ${openQuestions[1]}` : ""}`,
+    content: `${intro} The main things to clarify are ${questionLead}. ${openQuestions[0]}${openQuestions[1] ? ` After that, I’d also like to confirm: ${openQuestions[1]}` : ""}`,
     planningStatus: "needs-input",
   }
 }
@@ -1075,7 +1190,7 @@ export async function createPlanningMessages(prompt: string, existingMessages: M
   return [
     {
       role: "assistant" as const,
-      content: buildPlanningAssistantReply(resolvedBlueprint).content,
+      content: buildPlanningAssistantReply(resolvedBlueprint, undefined, existingMessages).content,
       timestamp: new Date().toISOString(),
     },
   ]
