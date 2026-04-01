@@ -27,8 +27,8 @@ export function CreationStudioActions(props: {
 
   return (
     <div className="space-y-4">
-      <div className="rounded-[1.75rem] border border-[#e7dfd3] bg-white/90 p-4 shadow-[0_18px_50px_-42px_rgba(24,24,27,0.3)]">
-        <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-zinc-500">
+      <div className="rounded-lg border border-zinc-200 bg-white p-4">
+        <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">
           {stage === "plan" ? "Ready to build" : planReady ? "Ready for plan" : "Next step"}
         </p>
         <p className="mt-2 text-sm leading-6 text-zinc-600">
@@ -41,46 +41,46 @@ export function CreationStudioActions(props: {
                 : "Keep answering the prompts and the plan will appear once the brief is complete."}
         </p>
 
-        <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-        {stage === "plan" ? (
-          <>
+        <div className="mt-4 flex flex-col gap-2">
+          {stage === "plan" ? (
+            <>
+              <Button
+                type="button"
+                onClick={onBuildFromPlan}
+                disabled={disabled}
+                className="w-full rounded-lg bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-black disabled:opacity-50"
+              >
+                Build from plan
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={onRefine}
+                disabled={disabled}
+                className="w-full rounded-lg border-zinc-300 bg-white px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100"
+              >
+                Refine plan
+              </Button>
+            </>
+          ) : planReady ? (
             <Button
               type="button"
-              onClick={onBuildFromPlan}
-              disabled={disabled}
-              className="h-11 rounded-full bg-zinc-900 px-5 text-white hover:bg-black"
+              onClick={onGeneratePlan}
+              disabled={disabled || isDraftingPlan}
+              className="w-full rounded-lg bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-black disabled:opacity-50"
             >
-              Build from plan
+              {isDraftingPlan ? "Generating plan..." : "Generate plan"}
             </Button>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={onRefine}
-              disabled={disabled}
-              className="h-11 rounded-full border-zinc-300 bg-white px-5 text-zinc-700 hover:bg-zinc-100"
-            >
-              Refine plan
-            </Button>
-          </>
-        ) : planReady ? (
-          <Button
-            type="button"
-            onClick={onGeneratePlan}
-            disabled={disabled || isDraftingPlan}
-            className="h-11 rounded-full bg-zinc-900 px-5 text-white hover:bg-black"
-          >
-            {isDraftingPlan ? "Generating plan..." : "Approve answers and generate plan"}
-          </Button>
-        ) : null}
+          ) : null}
         </div>
       </div>
 
-      <div className="rounded-[1.75rem] border border-[#e8e1d6] bg-[#fcfbf7] px-4 py-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-4">
+        <div className="space-y-3">
           <div>
-            <p className="text-sm font-medium text-zinc-900">Need speed over review?</p>
+            <p className="text-sm font-medium text-zinc-900">Skip plan?</p>
             <p className="mt-1 text-xs leading-5 text-zinc-600">
-              Use the fast path to build immediately without generating a plan first.
+              Build immediately without generating a plan first.
             </p>
           </div>
           <Button
@@ -88,21 +88,21 @@ export function CreationStudioActions(props: {
             variant="outline"
             onClick={onSkip}
             disabled={disabled}
-            className="h-10 rounded-full border-zinc-300 bg-white px-4 text-zinc-800 hover:bg-zinc-100"
+            className="w-full rounded-lg border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-100"
           >
-            Skip plan and build now
+            Skip and build now
           </Button>
         </div>
       </div>
 
-      <p className="px-1 text-xs leading-5 text-zinc-500">
+      <p className="text-xs leading-5 text-zinc-500">
         {stage === "plan"
           ? "Make any last changes you want, then build from the approved plan."
           : planReady
             ? "When the answers look right, generate the plan and review it before building."
             : questionsRemaining === 1
               ? "One more answer should be enough to move into the plan step."
-              : "Reply in the composer above to keep shaping the brief, or skip ahead if speed matters more."}
+              : "Reply in the chat to keep shaping the brief, or skip ahead if speed matters more."}
       </p>
     </div>
   )

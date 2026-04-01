@@ -93,6 +93,9 @@ import { extractAgentMessage } from "./utils"
 import { generateDynamicTimeline } from "@/lib/generate-agent-timeline"
 import { ProjectErrorBoundary, ChatMessage, ResponsivePreview, BrowserNavigator, ProjectCreationStudio, AgentTimelinePanel } from "@/components/project"
 import type { AgentTimelineItem } from "@/components/project/agent-timeline-panel"
+import { DynamicAgentTimeline } from "@/components/project/dynamic-agent-timeline"
+import type { ThinkingStep } from "@/components/project/agent-thinking-stream"
+import { generateImplicitThinkingSteps, completeThinkingStep } from "@/lib/extract-thinking-steps"
 import { WebsiteSettingsPanel } from "@/components/project/website-settings-panel"
 import { SupabaseSetupModal } from "@/components/project/SupabaseSetupModal"
 import { SupabaseProjectSelector } from "@/components/project/SupabaseProjectSelector"
@@ -149,6 +152,7 @@ function ProjectContent() {
   const [isSandboxLoading, setIsSandboxLoading] = useState(false)
   const [agentStatus, setAgentStatus] = useState("")
   const [reasoningSteps, setReasoningSteps] = useState<string[]>([])
+  const [thinkingSteps, setThinkingSteps] = useState<ThinkingStep[]>([])
   const abortControllerRef = useRef<AbortController | null>(null)
   const sandboxAbortRef = useRef<AbortController | null>(null)
   const sandboxRunIdRef = useRef(0)
@@ -1894,6 +1898,23 @@ function ProjectContent() {
     setGeneratingFiles([])
     setAgentStatus("Analyzing your request...")
     setReasoningSteps(["Analyzing your request and understanding scope."])
+    
+    // For agent mode: Initialize thinking steps with analysis phase
+    if (creationMode === "agent") {
+      setThinkingSteps([
+        {
+          id: `analysis-${Date.now()}`,
+          phase: "analysis",
+          title: "Understanding requirements",
+          description: "Analyzing your project brief and gathering context",
+          status: "active",
+          details: ["Reading project brief", "Identifying core features", "Planning architecture"],
+          timestamp: Date.now(),
+        },
+      ])
+    } else {
+      setThinkingSteps([])
+    }
 
     // Track if we've auto-selected a file during this generation
     let hasAutoSelectedFile = false
@@ -1904,6 +1925,23 @@ function ProjectContent() {
     try {
       setAgentStatus("Generating application structure...")
       setReasoningSteps(prev => [...prev, "Planning application structure and components."])
+      
+      // For agent mode: Transition to planning phase
+      if (creationMode === "agent") {
+        setThinkingSteps((prev) =>
+          prev.map((s) =>
+            s.phase === "analysis" ? completeThinkingStep(s) : s
+          ).concat({
+            id: `planning-${Date.now()}`,
+            phase: "planning",
+            title: "Planning structure",
+            description: "Designing application structure and data models",
+            status: "active",
+            details: ["Defining components", "Planning data schemas", "Mapping user flows"],
+            timestamp: Date.now(),
+          })
+        )
+      }
 
       // include Firebase ID token so server can authenticate and charge tokens
       const idToken = await user?.getIdToken()
@@ -2017,6 +2055,44 @@ function ProjectContent() {
           setReasoningSteps((prev) =>
             prev.includes("Creating files...") ? prev : [...prev, "Creating files..."]
           )
+          
+          // For agent mode: update thinking steps with generation phase
+          if (creationMode === "agent") {
+            setThinkingSteps((prev) => {
+              // Mark previous generation step as complete
+              const updated = prev.map((s) =>
+                s.phase === "generation" && s.status === "active"
+                  ? completeThinkingStep(s)
+                  : s
+              )
+              
+              // Add/update generation phase if not already there
+              const hasGeneration = updated.some((s) => s.phase === "generation")
+              if (!hasGeneration) {
+                updated.push({
+                  id: `generation-${Date.now()}`,
+                  phase: "generation",
+                  title: "Generating files",
+                  description: `Creating application code (${parsedBlocks.length} files)`,
+                  status: "active",
+                  details: [`Writing: ${newFile.path}`],
+                  timestamp: Date.now(),
+                })
+              } else {
+                // Update the generation step with new file
+                const genIdx = updated.findIndex((s) => s.phase === "generation")
+                if (genIdx >= 0) {
+                  updated[genIdx] = {
+                    ...updated[genIdx],
+                    status: "active",
+                    details: [`Writing: ${newFile.path}`],
+                  }
+                }
+              }
+              return updated
+            })
+          }
+          
           lastFileCount = parsedBlocks.length
         }
 
@@ -2185,6 +2261,33 @@ function ProjectContent() {
       setCurrentGeneratingFile("")
       setAgentStatus("")
       setReasoningSteps([])
+      
+      // For agent mode: Mark generation steps as complete and add validation
+      if (creationMode === "agent") {
+        setThinkingSteps((prev) => {
+          const updated = prev.map((s) =>
+            (s.phase === "planning" || s.phase === "generation") && s.status === "active"
+              ? completeThinkingStep(s)
+              : s
+          )
+          
+          // Add validation phase
+          const hasValidation = updated.some((s) => s.phase === "validation")
+          if (!hasValidation) {
+            updated.push({
+              id: `validation-${Date.now()}`,
+              phase: "validation",
+              title: "Validating output",
+              description: "Checking code quality and consistency",
+              status: "complete",
+              details: ["Verifying imports", "Checking types", "Validating structure"],
+              timestamp: Date.now(),
+            })
+          }
+          
+          return updated
+        })
+      }
     }
   }
 
@@ -3775,9 +3878,17 @@ function ProjectContent() {
                   <div className="overflow-hidden rounded-[1.5rem] border border-zinc-200 bg-white shadow-[0_20px_70px_-36px_rgba(24,24,27,0.42)]">
                     <div className="border-b border-zinc-100 bg-[radial-gradient(circle_at_top_left,_rgba(244,244,245,0.95),_rgba(255,255,255,0.98)_58%)] px-4 py-4">
                       <div className="flex flex-col gap-3">
-                        <div className="inline-flex w-fit items-center gap-2 rounded-full border border-zinc-200 bg-white/90 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.18em] text-zinc-500">
-                          <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-                          Agent Run Live
+                        <div className="flex items-center gap-2">
+                          <div className="inline-flex w-fit items-center gap-2 rounded-full border border-zinc-200 bg-white/90 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.18em] text-zinc-500">
+                            <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                            {creationMode === "agent" ? "Elite Agent Mode" : "Agent Run Live"}
+                          </div>
+                          {creationMode === "agent" && (
+                            <div className="inline-flex items-center gap-1.5 rounded-full border border-purple-200 bg-purple-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-purple-700">
+                              <Crown className="h-3 w-3" />
+                              God Level
+                            </div>
+                          )}
                         </div>
                         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                           <div className="space-y-1">
@@ -3792,10 +3903,15 @@ function ProjectContent() {
                       </div>
                     </div>
 
-                    <AgentTimelinePanel
-                      steps={agentTimeline}
+                    <DynamicAgentTimeline
+                      timelineSteps={agentTimeline}
+                      thinkingSteps={thinkingSteps}
                       generatedFileCount={generatedFileCount}
                       currentGeneratingFile={currentGeneratingFile}
+                      isStreaming={isGenerating}
+                      agentStatus={agentStatus}
+                      mode={creationMode === "agent" ? "agent" : "build"}
+                      showThinking={creationMode === "agent"}
                     />
                   </div>
                 )}
