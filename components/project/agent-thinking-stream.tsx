@@ -29,22 +29,22 @@ const phaseConfig: Record<ThinkingPhase, { label: string; icon: React.ReactNode;
   analysis: {
     label: "Analyzing",
     icon: <Brain className="h-4 w-4" />,
-    color: "bg-blue-50 border-blue-100 text-blue-700",
+    color: "bg-[#f5f3ef] border-[#e7dfd2] text-zinc-700",
   },
   planning: {
     label: "Planning",
     icon: <Zap className="h-4 w-4" />,
-    color: "bg-purple-50 border-purple-100 text-purple-700",
+    color: "bg-[#f5f3ef] border-[#e7dfd2] text-zinc-700",
   },
   generation: {
     label: "Generating",
     icon: <Zap className="h-4 w-4" />,
-    color: "bg-amber-50 border-amber-100 text-amber-700",
+    color: "bg-[#f5f3ef] border-[#e7dfd2] text-zinc-700",
   },
   validation: {
     label: "Validating",
     icon: <CheckCircle className="h-4 w-4" />,
-    color: "bg-green-50 border-green-100 text-green-700",
+    color: "bg-[#f5f3ef] border-[#e7dfd2] text-zinc-700",
   },
 }
 
@@ -62,7 +62,7 @@ function ThinkingStepCard({ step, isLast }: { step: ThinkingStep; isLast: boolea
         <div
           className={cn(
             "absolute left-[19px] top-[45px] w-0.5 h-6",
-            isComplete ? "bg-green-200" : isError ? "bg-red-200" : "bg-zinc-200"
+            isComplete ? "bg-zinc-300" : isError ? "bg-red-200" : "bg-zinc-200"
           )}
         />
       )}
@@ -70,8 +70,8 @@ function ThinkingStepCard({ step, isLast }: { step: ThinkingStep; isLast: boolea
       <div
         className={cn(
           "relative flex gap-3 p-3 rounded-lg border transition-all duration-200",
-          isActive && "border-blue-300 bg-blue-50 shadow-md shadow-blue-100/50",
-          isComplete && "border-green-200 bg-green-50/50",
+          isActive && "border-zinc-300 bg-[#f7f4ee] shadow-md shadow-zinc-200/50",
+          isComplete && "border-zinc-200 bg-[#f5f3ef]",
           isPending && "border-zinc-100 bg-zinc-50/50 opacity-60",
           isError && "border-red-200 bg-red-50/50"
         )}
@@ -80,8 +80,8 @@ function ThinkingStepCard({ step, isLast }: { step: ThinkingStep; isLast: boolea
         <div
           className={cn(
             "flex shrink-0 h-8 w-8 items-center justify-center rounded-full border",
-            isActive && "border-blue-300 bg-blue-100 text-blue-600 animate-pulse",
-            isComplete && "border-green-300 bg-green-100 text-green-600",
+            isActive && "border-zinc-300 bg-zinc-100 text-zinc-700 animate-pulse",
+            isComplete && "border-zinc-300 bg-zinc-100 text-zinc-700",
             isPending && "border-zinc-200 bg-zinc-100 text-zinc-400",
             isError && "border-red-300 bg-red-100 text-red-600"
           )}
@@ -93,14 +93,14 @@ function ThinkingStepCard({ step, isLast }: { step: ThinkingStep; isLast: boolea
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1">
             {isActive ? (
-              <TextShimmer className="bg-gradient-to-r from-blue-900 via-blue-500 to-blue-900 text-sm font-semibold">
+              <TextShimmer className="bg-gradient-to-r from-zinc-900 via-zinc-500 to-zinc-900 text-sm font-semibold">
                 {step.title}
               </TextShimmer>
             ) : (
               <h4
                 className={cn(
                   "text-sm font-semibold",
-                  isComplete ? "text-green-700" : isError ? "text-red-700" : "text-zinc-600"
+                  isComplete ? "text-zinc-800" : isError ? "text-red-700" : "text-zinc-600"
                 )}
               >
                 {step.title}
@@ -108,15 +108,15 @@ function ThinkingStepCard({ step, isLast }: { step: ThinkingStep; isLast: boolea
             )}
 
             {isActive && (
-              <span className="inline-flex items-center gap-1 ml-auto px-2 py-1 rounded text-xs font-medium bg-blue-100 text-blue-700 animate-pulse">
-                <span className="h-1.5 w-1.5 rounded-full bg-blue-600" />
+              <span className="ml-auto inline-flex items-center gap-1 rounded bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-700 animate-pulse">
+                <span className="h-1.5 w-1.5 rounded-full bg-zinc-600" />
                 thinking
               </span>
             )}
 
             {isComplete && (
-              <span className="inline-flex items-center gap-1 ml-auto px-2 py-1 rounded text-xs font-medium bg-green-100 text-green-700">
-                <span className="h-1.5 w-1.5 rounded-full bg-green-600" />
+              <span className="ml-auto inline-flex items-center gap-1 rounded bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-700">
+                <span className="h-1.5 w-1.5 rounded-full bg-zinc-600" />
                 done
               </span>
             )}
@@ -173,22 +173,22 @@ export function AgentThinkingStream({
   return (
     <div
       className={cn(
-        "border border-zinc-200 rounded-xl bg-white overflow-hidden",
+        "overflow-hidden rounded-xl border border-[#e7dfd2] bg-white",
         className
       )}
     >
       {/* Header */}
-      <div className="px-4 py-3 border-b border-zinc-100 bg-gradient-to-r from-zinc-50 to-blue-50/30">
+      <div className="border-b border-[#eee6da] bg-[#f8f5ef] px-4 py-3">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
-            <Brain className="h-4 w-4 text-blue-600" />
-            <span className="text-sm font-semibold text-zinc-900">Agent Reasoning</span>
+            <Brain className="h-4 w-4 text-zinc-700" />
+            <span className="text-sm font-semibold text-zinc-900">Reasoning</span>
           </div>
 
           {isStreaming && (
-            <div className="flex items-center gap-1.5 px-2 py-1 rounded-full border border-blue-200 bg-blue-50">
-              <span className="h-1.5 w-1.5 rounded-full bg-blue-600 animate-pulse" />
-              <span className="text-xs font-medium text-blue-700">Thinking</span>
+            <div className="flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-2 py-1">
+              <span className="h-1.5 w-1.5 rounded-full bg-zinc-700 animate-pulse" />
+              <span className="text-xs font-medium text-zinc-700">Thinking</span>
             </div>
           )}
         </div>
@@ -203,7 +203,7 @@ export function AgentThinkingStream({
           </div>
           <div className="h-1.5 w-full bg-zinc-200 rounded-full overflow-hidden">
             <div
-              className="h-full bg-gradient-to-r from-blue-500 to-blue-600 transition-all duration-500"
+              className="h-full bg-zinc-900 transition-all duration-500"
               style={{ width: `${progress}%` }}
             />
           </div>
@@ -228,9 +228,9 @@ export function AgentThinkingStream({
 
       {/* Footer - current phase info */}
       {activeStep && (
-        <div className="px-4 py-2.5 border-t border-zinc-100 bg-zinc-50/50 text-xs text-zinc-500">
+        <div className="border-t border-[#eee6da] bg-[#faf8f4] px-4 py-2.5 text-xs text-zinc-500">
           <div className="flex items-center gap-2">
-            <span className="inline-flex h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse" />
+            <span className="inline-flex h-1.5 w-1.5 rounded-full bg-zinc-700 animate-pulse" />
             <span>
               <strong className="text-zinc-700">{activeStep.title}</strong> — {activeStep.description}
             </span>
@@ -262,7 +262,7 @@ export function AgentThinkingStreamCompact({
       {isStreaming && (
         <>
           <div className="flex items-center gap-1">
-            <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse" />
+            <span className="h-1.5 w-1.5 rounded-full bg-zinc-700 animate-pulse" />
             <span className="text-zinc-600">
               Agent thinking: <strong>{activeStep?.title || "analyzing"}</strong>
             </span>

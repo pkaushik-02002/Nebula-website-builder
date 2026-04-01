@@ -4,6 +4,10 @@ interface TimelineGenerationOptions {
   currentGeneratingFile?: string
   agentStatus: string
   reasoningSteps: string[]
+  thinkingSteps?: Array<{
+    phase: "analysis" | "planning" | "generation" | "validation"
+    status: "pending" | "active" | "complete" | "error"
+  }>
   suggestsBackend?: boolean
   backendSetupStatus?: "pending" | "in-progress" | "complete" | "failed"
 }
@@ -91,6 +95,7 @@ export function generateDynamicTimeline(options: TimelineGenerationOptions): Age
     currentGeneratingFile,
     agentStatus,
     reasoningSteps,
+    thinkingSteps = [],
     suggestsBackend,
     backendSetupStatus,
   } = options
@@ -131,17 +136,37 @@ export function generateDynamicTimeline(options: TimelineGenerationOptions): Age
 
   steps.push(TIMELINE_STEPS.finalize)
 
-  // Determine current stage
+  // Determine current stage using live thinking phases first (more dynamic than static reasoning text)
   const normalized = reasoningSteps.map((step) => step.toLowerCase())
+  const activeThinking = thinkingSteps.find((step) => step.status === "active")
   let currentStage: number
 
-  if (agentStatus.toLowerCase().includes("final")) {
-    // Finalize step
-    currentStage = steps.length - 1
-  } else if (backendSetupStatus === "in-progress") {
+  if (backendSetupStatus === "in-progress") {
     // Backend setup step - find its index
     currentStage = steps.findIndex((s) => s.key === "backend-setup")
     if (currentStage === -1) currentStage = steps.length - 2 // Default to finalize if not found
+  } else if (activeThinking) {
+    switch (activeThinking.phase) {
+      case "analysis":
+        currentStage = steps.findIndex((s) => s.key === "analyze")
+        break
+      case "planning":
+        // In agent mode, planning is reflected in reasoning panel rather than a duplicate timeline step.
+        currentStage = steps.findIndex((s) => s.key === (shouldIncludePlanning ? "plan" : "analyze"))
+        break
+      case "generation":
+        currentStage = steps.findIndex((s) => s.key === "build")
+        break
+      case "validation":
+        currentStage = steps.findIndex((s) => s.key === "finalize")
+        break
+      default:
+        currentStage = 0
+    }
+    if (currentStage === -1) currentStage = 0
+  } else if (agentStatus.toLowerCase().includes("final")) {
+    // Finalize step
+    currentStage = steps.length - 1
   } else if (
     normalized.some((step) => step.includes("creating files")) ||
     !!currentGeneratingFile

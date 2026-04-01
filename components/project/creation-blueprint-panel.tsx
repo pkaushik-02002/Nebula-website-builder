@@ -29,22 +29,78 @@ function SummaryRow(props: { label: string; value?: string; muted?: boolean; mul
   )
 }
 
+function getItemValue(blueprint: ProjectBlueprint, key: string) {
+  return blueprint.sections.flatMap((section) => section.items).find((item) => item.key === key)
+}
+
+function normalizeSentence(value?: string, fallback = "TBD") {
+  if (!value) return fallback
+  const cleaned = value.trim()
+  if (!cleaned) return fallback
+  return cleaned.endsWith(".") ? cleaned : `${cleaned}.`
+}
+
+function buildPlanSteps(blueprint: ProjectBlueprint) {
+  const pages = getItemValue(blueprint, "pages")
+  const features = getItemValue(blueprint, "features")
+  const systems = getItemValue(blueprint, "systems")
+  const content = getItemValue(blueprint, "content")
+  const style = getItemValue(blueprint, "style")
+
+  return [
+    {
+      title: "Step 1: Foundation",
+      detail: `Set up core structure and navigation for version one. Initial surface: ${normalizeSentence(pages?.value, "Core screens and routes to be finalized")}`,
+    },
+    {
+      title: "Step 2: Core user flow",
+      detail: `Implement the highest-impact journey first. Priority capabilities: ${normalizeSentence(features?.value, "Core feature flow to be defined")}`,
+    },
+    {
+      title: "Step 3: Systems and data",
+      detail: `Integrate essential backend requirements for launch. Systems plan: ${normalizeSentence(systems?.value, "No backend dependencies confirmed yet")}`,
+    },
+    {
+      title: "Step 4: Content and visual polish",
+      detail: `Apply content model and final presentation pass. Content: ${normalizeSentence(content?.value, "Content source still open")} Style: ${normalizeSentence(style?.value, "Visual direction still open")}`,
+    },
+  ]
+}
+
 export function CreationBlueprintPanel(props: {
   blueprint: ProjectBlueprint
   planningStatus: PlanningStatus
 }) {
   const { blueprint, planningStatus } = props
 
-  const visibleItems = blueprint.sections
-    .flatMap((section) =>
-      section.items.map((item) => ({
-        label: item.label,
-        value: item.key === "goal" ? shorten(item.value) : item.value,
-        muted: item.status !== "confirmed",
-      }))
-    )
-    .filter((item) => item.value)
-    .slice(0, 6)
+  const goal = getItemValue(blueprint, "goal")
+  const audience = getItemValue(blueprint, "audience")
+  const type = getItemValue(blueprint, "type")
+  const scope = getItemValue(blueprint, "scope")
+  const visibleItems = [
+    {
+      label: "Primary brief",
+      value: shorten(goal?.value),
+      muted: goal?.status !== "confirmed",
+    },
+    {
+      label: "Target audience",
+      value: audience?.value,
+      muted: audience?.status !== "confirmed",
+    },
+    {
+      label: "Product type",
+      value: type?.value,
+      muted: type?.status !== "confirmed",
+    },
+    {
+      label: "Launch scope",
+      value: scope?.value,
+      muted: scope?.status !== "confirmed",
+    },
+  ].filter((item) => item.value)
+
+  const planSteps = buildPlanSteps(blueprint)
 
   const blockingMessage =
     blueprint.openQuestions[0] ||
@@ -62,7 +118,7 @@ export function CreationBlueprintPanel(props: {
         <div className="inline-flex rounded-full border border-[#e6ddcf] bg-white/80 px-3 py-1 text-[10px] font-medium uppercase tracking-[0.18em] text-zinc-500">
           Live plan
         </div>
-        <h2 className="mt-4 text-[1.4rem] font-semibold tracking-tight text-zinc-900">Before I build</h2>
+        <h2 className="mt-4 text-[1.4rem] font-semibold tracking-tight text-zinc-900">Version-one build plan</h2>
         <p className="mt-2 text-sm leading-6 text-zinc-600">{introCopy}</p>
       </div>
 
@@ -70,6 +126,21 @@ export function CreationBlueprintPanel(props: {
         {visibleItems.map((item) => (
           <SummaryRow key={`${item.label}-${item.value}`} label={item.label} value={item.value} muted={item.muted} />
         ))}
+      </div>
+
+      <div className="border-t border-[#eee8de] px-6 py-4">
+        <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-zinc-500">Implementation sequence</p>
+        <div className="mt-3 space-y-3">
+          {planSteps.map((step) => (
+            <div key={step.title} className="rounded-xl border border-[#ece6db] bg-white/70 px-3 py-3">
+              <p className="text-xs font-semibold uppercase tracking-[0.08em] text-zinc-700">{step.title}</p>
+              <p className="mt-1 text-sm leading-6 text-zinc-700">{step.detail}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="border-t border-[#eee8de] px-6 py-2">
         <SummaryRow
           label="Needs your input"
           value={blockingMessage || "Good to go - we can start building."}

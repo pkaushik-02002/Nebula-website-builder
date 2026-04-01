@@ -1063,6 +1063,42 @@ export function buildPlanningAssistantReply(
   }
 }
 
+function getSectionItemValue(blueprint: ProjectBlueprint, key: string) {
+  return blueprint.sections.flatMap((section) => section.items).find((item) => item.key === key)?.value?.trim()
+}
+
+export function buildPlanNarrative(blueprint: ProjectBlueprint) {
+  const goal = getSectionItemValue(blueprint, "goal") || blueprint.summary
+  const audience = getSectionItemValue(blueprint, "audience") || "Audience to be finalized"
+  const pages = getSectionItemValue(blueprint, "pages") || "Core screens to be finalized"
+  const features = getSectionItemValue(blueprint, "features") || "Core capabilities to be finalized"
+  const systems = getSectionItemValue(blueprint, "systems") || "No backend dependencies confirmed yet"
+  const style = getSectionItemValue(blueprint, "style") || "Visual direction to be finalized"
+  const content = getSectionItemValue(blueprint, "content") || "Content source to be finalized"
+  const scope = getSectionItemValue(blueprint, "scope") || "Launch scope to be finalized"
+
+  const unresolved = normalizeList(blueprint.openQuestions).slice(0, 2)
+  const unresolvedLine = unresolved.length
+    ? `Still to confirm before build: ${unresolved.join(" ")}`
+    : "No blocking questions remain. This is ready to build."
+
+  return [
+    "Plan ready. Here is the dynamic version-one plan from our chat:",
+    "",
+    `Primary goal: ${goal}`,
+    `Audience focus: ${audience}`,
+    "",
+    "Build sequence:",
+    `1. Foundation: set up core information architecture and routes around ${pages}.`,
+    `2. Core experience: implement the main journey with ${features}.`,
+    `3. Systems and data: integrate ${systems}.`,
+    `4. Content and polish: apply ${content} with a ${style} direction.`,
+    "",
+    `Scope guardrails: ${scope}`,
+    unresolvedLine,
+  ].join("\n")
+}
+
 export function getGuidedAnswerSet(blueprint: ProjectBlueprint): GuidedAnswerSet | null {
   const unresolvedItem = blueprint.sections
     .flatMap((section) => section.items)

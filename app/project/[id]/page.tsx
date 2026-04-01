@@ -47,7 +47,6 @@ import {
   Github,
   Edit2,
   FileText,
-  Crown,
   TrendingUp,
   HelpCircle,
   Rocket,
@@ -95,7 +94,7 @@ import { ProjectErrorBoundary, ChatMessage, ResponsivePreview, BrowserNavigator,
 import type { AgentTimelineItem } from "@/components/project/agent-timeline-panel"
 import { DynamicAgentTimeline } from "@/components/project/dynamic-agent-timeline"
 import type { ThinkingStep } from "@/components/project/agent-thinking-stream"
-import { generateImplicitThinkingSteps, completeThinkingStep } from "@/lib/extract-thinking-steps"
+import { completeThinkingStep } from "@/lib/extract-thinking-steps"
 import { WebsiteSettingsPanel } from "@/components/project/website-settings-panel"
 import { SupabaseSetupModal } from "@/components/project/SupabaseSetupModal"
 import { SupabaseProjectSelector } from "@/components/project/SupabaseProjectSelector"
@@ -105,6 +104,7 @@ import { VisualEditDesignPanel, type DesignSnapshot } from "@/components/project
 import type { VisualEditSectionItem, VisualEditStructureCommand } from "@/components/project/visual-edit-structure"
 import {
   buildPlanningAssistantReply,
+  buildPlanNarrative,
   createInitialBlueprint,
   createPlanningMessages,
   promptSuggestsSupabaseBackend,
@@ -147,7 +147,6 @@ function ProjectContent() {
   const [isPreparingPreview, setIsPreparingPreview] = useState(false)
   const [previewEnsureFailures, setPreviewEnsureFailures] = useState(0)
   const [copied, setCopied] = useState(false)
-  const [isPreviewReady, setIsPreviewReady] = useState(false)
   const [currentGeneratingFile, setCurrentGeneratingFile] = useState<string | null>(null)
   const [isSandboxLoading, setIsSandboxLoading] = useState(false)
   const [agentStatus, setAgentStatus] = useState("")
@@ -560,14 +559,6 @@ function ProjectContent() {
     }
   }, [ensuredPreviewUrl, allBuildSuccess])
 
-  const runSteps = reasoningSteps.length > 0
-    ? reasoningSteps
-    : [
-        "Analyzing your request and understanding scope.",
-        "Planning updates across relevant components.",
-        "Applying changes and validating output.",
-        "Finalizing and preparing preview.",
-      ]
   const getAuthHeader = useCallback(async () => {
     if (!user) throw new Error("Not authenticated")
     const token = await user.getIdToken()
@@ -662,6 +653,7 @@ function ProjectContent() {
       currentGeneratingFile,
       agentStatus,
       reasoningSteps,
+      thinkingSteps,
       suggestsBackend: project?.suggestsBackend,
       backendSetupStatus,
     })
@@ -671,6 +663,7 @@ function ProjectContent() {
     currentGeneratingFile,
     agentStatus,
     reasoningSteps,
+    thinkingSteps,
     project?.suggestsBackend,
     backendSetupStatus,
   ])
@@ -1621,7 +1614,9 @@ function ProjectContent() {
             return prev
           })
           if (projectData.sandboxUrl && projectData.status === "complete") {
+            setEnsuredPreviewUrl(projectData.sandboxUrl)
             setActiveTab("preview")
+            setMobileTab("preview")
           }
         } else {
           setProject(null)
@@ -1673,7 +1668,9 @@ function ProjectContent() {
           return prev
         })
         if (projectData.sandboxUrl && projectData.status === "complete") {
+          setEnsuredPreviewUrl(projectData.sandboxUrl)
           setActiveTab("preview")
+          setMobileTab("preview")
         }
         setLoading(false)
       })
@@ -1905,6 +1902,48 @@ function ProjectContent() {
     const controller = new AbortController()
     abortControllerRef.current = controller
 
+    const updateThinkingPhase = (
+      phase: ThinkingStep["phase"],
+      payload: {
+        title: string
+        description: string
+        details?: string[]
+        completePrevious?: ThinkingStep["phase"][]
+      }
+    ) => {
+      if (creationMode !== "agent") return
+      setThinkingSteps((prev) => {
+        const completeSet = new Set(payload.completePrevious || [])
+        const completed = prev.map((step) =>
+          completeSet.has(step.phase) && step.status === "active"
+            ? completeThinkingStep(step)
+            : step
+        )
+        const existingIndex = completed.findIndex((step) => step.phase === phase)
+        if (existingIndex >= 0) {
+          const next = [...completed]
+          next[existingIndex] = {
+            ...next[existingIndex],
+            title: payload.title,
+            description: payload.description,
+            status: "active",
+            details: payload.details,
+            timestamp: Date.now(),
+          }
+          return next
+        }
+        return completed.concat({
+          id: `${phase}-${Date.now()}`,
+          phase,
+          title: payload.title,
+          description: payload.description,
+          status: "active",
+          details: payload.details,
+          timestamp: Date.now(),
+        })
+      })
+    }
+
     setIsGenerating(true)
     setGeneratingFiles([])
     setAgentStatus("Analyzing your request...")
@@ -1912,17 +1951,11 @@ function ProjectContent() {
     
     // For agent mode: Initialize thinking steps with analysis phase
     if (creationMode === "agent") {
-      setThinkingSteps([
-        {
-          id: `analysis-${Date.now()}`,
-          phase: "analysis",
-          title: "Understanding requirements",
-          description: "Analyzing your project brief and gathering context",
-          status: "active",
-          details: ["Reading project brief", "Identifying core features", "Planning architecture"],
-          timestamp: Date.now(),
-        },
-      ])
+      updateThinkingPhase("analysis", {
+        title: "Understanding requirements",
+        description: "Analyzing your project brief and gathering context",
+        details: ["Reading project brief", "Identifying core features", "Scoping implementation"],
+      })
     } else {
       setThinkingSteps([])
     }
@@ -1939,19 +1972,12 @@ function ProjectContent() {
       
       // For agent mode: Transition to planning phase
       if (creationMode === "agent") {
-        setThinkingSteps((prev) =>
-          prev.map((s) =>
-            s.phase === "analysis" ? completeThinkingStep(s) : s
-          ).concat({
-            id: `planning-${Date.now()}`,
-            phase: "planning",
-            title: "Planning structure",
-            description: "Designing application structure and data models",
-            status: "active",
-            details: ["Defining components", "Planning data schemas", "Mapping user flows"],
-            timestamp: Date.now(),
-          })
-        )
+        updateThinkingPhase("planning", {
+          title: "Designing implementation approach",
+          description: "Mapping components, data flow, and delivery sequence",
+          details: ["Defining components", "Mapping data flow", "Sequencing user journeys"],
+          completePrevious: ["analysis"],
+        })
       }
 
       // include Firebase ID token so server can authenticate and charge tokens
@@ -2069,38 +2095,11 @@ function ProjectContent() {
           
           // For agent mode: update thinking steps with generation phase
           if (creationMode === "agent") {
-            setThinkingSteps((prev) => {
-              // Mark previous generation step as complete
-              const updated = prev.map((s) =>
-                s.phase === "generation" && s.status === "active"
-                  ? completeThinkingStep(s)
-                  : s
-              )
-              
-              // Add/update generation phase if not already there
-              const hasGeneration = updated.some((s) => s.phase === "generation")
-              if (!hasGeneration) {
-                updated.push({
-                  id: `generation-${Date.now()}`,
-                  phase: "generation",
-                  title: "Generating files",
-                  description: `Creating application code (${parsedBlocks.length} files)`,
-                  status: "active",
-                  details: [`Writing: ${newFile.path}`],
-                  timestamp: Date.now(),
-                })
-              } else {
-                // Update the generation step with new file
-                const genIdx = updated.findIndex((s) => s.phase === "generation")
-                if (genIdx >= 0) {
-                  updated[genIdx] = {
-                    ...updated[genIdx],
-                    status: "active",
-                    details: [`Writing: ${newFile.path}`],
-                  }
-                }
-              }
-              return updated
+            updateThinkingPhase("generation", {
+              title: "Generating files",
+              description: `Creating application code (${parsedBlocks.length} files)`,
+              details: [`Writing: ${newFile.path}`],
+              completePrevious: ["planning"],
             })
           }
           
@@ -2156,11 +2155,23 @@ function ProjectContent() {
       if (usesNvidiaVerificationGate(model)) {
         setAgentStatus("Verifying generated app in sandbox...")
         setReasoningSteps(prev => [...prev, "Verifying generated output in sandbox."])
+        updateThinkingPhase("validation", {
+          title: "Validating output",
+          description: "Running sandbox verification checks on generated code",
+          details: ["Booting sandbox", "Running install/build checks"],
+          completePrevious: ["generation"],
+        })
 
         const firstVerification = await verifyFilesInSandbox(finalFiles)
         if (!firstVerification.ok) {
           setAgentStatus("Repairing issues found during verification...")
           setReasoningSteps(prev => [...prev, "Repairing build issues before delivery."])
+          updateThinkingPhase("validation", {
+            title: "Repairing verification failures",
+            description: "Fixing issues discovered by sandbox checks",
+            details: ["Applying targeted fixes", "Preparing re-verification"],
+            completePrevious: ["generation"],
+          })
 
           const authHeader = await getAuthHeader()
           const repairRes = await fetch("/api/error/fix", {
@@ -2187,6 +2198,12 @@ function ProjectContent() {
 
           setAgentStatus("Re-verifying repaired app in sandbox...")
           setReasoningSteps(prev => [...prev, "Re-verifying repaired output in sandbox."])
+          updateThinkingPhase("validation", {
+            title: "Re-validating repaired output",
+            description: "Running sandbox checks again after repair",
+            details: ["Re-running build checks", "Confirming preview stability"],
+            completePrevious: ["generation"],
+          })
           const secondVerification = await verifyFilesInSandbox(finalFiles)
           if (!secondVerification.ok) {
             throw new Error(secondVerification.error || "Repaired output still failed sandbox verification")
@@ -2273,31 +2290,15 @@ function ProjectContent() {
       setAgentStatus("")
       setReasoningSteps([])
       
-      // For agent mode: Mark generation steps as complete and add validation
+      // For agent mode: mark any active reasoning phases as complete
       if (creationMode === "agent") {
-        setThinkingSteps((prev) => {
-          const updated = prev.map((s) =>
-            (s.phase === "planning" || s.phase === "generation") && s.status === "active"
+        setThinkingSteps((prev) =>
+          prev.map((s) =>
+            (s.phase === "planning" || s.phase === "generation" || s.phase === "validation") && s.status === "active"
               ? completeThinkingStep(s)
               : s
           )
-          
-          // Add validation phase
-          const hasValidation = updated.some((s) => s.phase === "validation")
-          if (!hasValidation) {
-            updated.push({
-              id: `validation-${Date.now()}`,
-              phase: "validation",
-              title: "Validating output",
-              description: "Checking code quality and consistency",
-              status: "complete",
-              details: ["Verifying imports", "Checking types", "Validating structure"],
-              timestamp: Date.now(),
-            })
-          }
-          
-          return updated
-        })
+        )
       }
     }
   }
@@ -2475,6 +2476,7 @@ function ProjectContent() {
           setBuildError(null)
           updateDoc(projectRef, { lastPreviewError: deleteField() }).catch(() => {})
           setActiveTab("preview")
+          setMobileTab("preview")
         } else if (data.type === "ping") {
           // Heartbeat, ignore
         }
@@ -2988,7 +2990,7 @@ function ProjectContent() {
       ...(project.messages || []),
       {
         role: "assistant" as const,
-        content: "Your answers are approved. I drafted the plan so you can review it, refine anything that feels off, and build from it when you're ready.",
+        content: buildPlanNarrative(resolvedBlueprint),
         timestamp: new Date().toISOString(),
       },
     ]
@@ -3293,24 +3295,6 @@ function ProjectContent() {
                 </Button>
               </div>
             ) : null}
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className={cn(
-                "h-9 rounded-lg border-zinc-300 bg-white px-3 text-zinc-700 hover:bg-zinc-100",
-                visualEditActive && "border-zinc-900 bg-zinc-900 text-white hover:bg-black hover:text-white"
-              )}
-              onClick={() => {
-                if (visualEditActive) {
-                  exitVisualEdit()
-                  return
-                }
-                setVisualEditActive(true)
-              }}
-            >
-              {visualEditActive ? "Exit Visual Edit" : "Visual Edit"}
-            </Button>
             <Button type="button" size="sm" variant="outline" className="hidden h-9 rounded-lg border-zinc-300 bg-white px-3 text-zinc-700 hover:bg-zinc-100 lg:inline-flex" onClick={() => setWebsiteSettingsOpen(true)}>
               Website Settings
             </Button>
@@ -3563,16 +3547,6 @@ function ProjectContent() {
                       onStop={handleStopGeneration}
                       disabled={isBuildTokenBlocked}
                       initialModel={project?.model}
-                      visualEditToggle={{
-                        active: visualEditActive,
-                        onToggle: () => {
-                          if (visualEditActive) {
-                            exitVisualEdit()
-                            return
-                          }
-                          setVisualEditActive(true)
-                        },
-                      }}
                       contextBadge={selectedElementDescription ? {
                         label: "Design",
                         value: getSelectionBadgeDisplay(selectedElementDescription, selectedElementCount),
@@ -3683,16 +3657,6 @@ function ProjectContent() {
                     onStop={handleStopGeneration}
                     disabled={isBuildTokenBlocked}
                     initialModel={project?.model}
-                    visualEditToggle={{
-                      active: visualEditActive,
-                      onToggle: () => {
-                        if (visualEditActive) {
-                          exitVisualEdit()
-                          return
-                        }
-                        setVisualEditActive(true)
-                      },
-                    }}
                     contextBadge={selectedElementDescription ? {
                       label: "Design",
                       value: getSelectionBadgeDisplay(selectedElementDescription, selectedElementCount),
@@ -3890,16 +3854,10 @@ function ProjectContent() {
                     <div className="border-b border-zinc-100 bg-[radial-gradient(circle_at_top_left,_rgba(244,244,245,0.95),_rgba(255,255,255,0.98)_58%)] px-4 py-4">
                       <div className="flex flex-col gap-3">
                         <div className="flex items-center gap-2">
-                          <div className="inline-flex w-fit items-center gap-2 rounded-full border border-zinc-200 bg-white/90 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.18em] text-zinc-500">
+                          <div className="inline-flex w-fit items-center gap-2 rounded-full border border-[#e7dfd2] bg-[#f7f3ec] px-3 py-1 text-[11px] font-medium uppercase tracking-[0.18em] text-zinc-600">
                             <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-                            {creationMode === "agent" ? "Elite Agent Mode" : "Agent Run Live"}
+                            {creationMode === "agent" ? "Agent Session" : "Agent Run Live"}
                           </div>
-                          {creationMode === "agent" && (
-                            <div className="inline-flex items-center gap-1.5 rounded-full border border-purple-200 bg-purple-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-purple-700">
-                              <Crown className="h-3 w-3" />
-                              God Level
-                            </div>
-                          )}
                         </div>
                         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                           <div className="space-y-1">
@@ -4588,5 +4546,3 @@ export default function ProjectPage() {
     </ProjectErrorBoundary>
   )
 }
-
-

@@ -1,11 +1,10 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import { ArrowLeft, Bot, LayoutPanelTop, Menu, Sparkles } from "lucide-react"
+import { ArrowLeft, Bot, Sparkles } from "lucide-react"
 
 import type { Message, PlanningStatus, ProjectBlueprint, ProjectCreationMode } from "@/app/project/[id]/types"
 import { CreationBlueprintPanel } from "@/components/project/creation-blueprint-panel"
-import { CreationStudioActions } from "@/components/project/creation-studio-actions"
 import { TextShimmer } from "@/components/prompt-kit/text-shimmer"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -25,14 +24,9 @@ type RemoteGuidedAnswerPayload = {
 
 function PlanningHeader(props: {
   projectLabel: string
-  statusLabel: string
-  planVisible: boolean
-  helperLabel: string
   onBack?: () => void
-  onTogglePlan: () => void
-  onOpenActions?: () => void
 }) {
-  const { projectLabel, statusLabel, planVisible, helperLabel, onBack, onTogglePlan, onOpenActions } = props
+  const { projectLabel, onBack } = props
 
   return (
     <header className="relative z-20 border-b border-zinc-200 bg-white/60 backdrop-blur-sm">
@@ -54,29 +48,7 @@ function PlanningHeader(props: {
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            {onOpenActions ? (
-              <button
-                type="button"
-                onClick={onOpenActions}
-                className="inline-flex h-8 w-8 items-center justify-center text-zinc-600 transition-colors hover:text-zinc-900"
-                aria-label="Next steps"
-              >
-                <Menu className="h-4 w-4" />
-              </button>
-            ) : null}
-            <button
-              type="button"
-              onClick={onTogglePlan}
-              className={cn(
-                "inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-medium transition-colors",
-                planVisible ? "bg-zinc-900 text-white" : "bg-zinc-100 text-zinc-700 hover:bg-zinc-200"
-              )}
-            >
-              <LayoutPanelTop className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Plan</span>
-            </button>
-          </div>
+          <div className="text-xs font-medium uppercase tracking-[0.14em] text-zinc-400">Planning</div>
         </div>
       </div>
     </header>
@@ -299,10 +271,46 @@ function ConversationThread(props: {
   isLoadingOptions: boolean
   isSubmitting?: boolean
   onSubmitSelection?: () => Promise<void> | void
+  blueprint: ProjectBlueprint
+  planningStatus: PlanningStatus
+  showPlanCard: boolean
+  isDraftingPlan: boolean
+  canEdit: boolean
+  onBuildFromPlan: () => Promise<void> | void
+  onRefine: () => void
+  onSkip: () => Promise<void> | void
+  showSkip: boolean
+  isDisabled: boolean
   composer: React.ReactNode
   scrollRef: React.RefObject<HTMLDivElement | null>
 }) {
-  const { prompt, introDescription, messages, guidedAnswerSet, guidedQuestion, guidedHelper, selectedGuidedOptions, onToggleGuidedOption, onEnableCustomAnswer, useCustomAnswer, isLoadingOptions, isSubmitting, onSubmitSelection, composer, scrollRef } = props
+  const {
+    prompt,
+    introDescription,
+    messages,
+    guidedAnswerSet,
+    guidedQuestion,
+    guidedHelper,
+    selectedGuidedOptions,
+    onToggleGuidedOption,
+    onEnableCustomAnswer,
+    useCustomAnswer,
+    isLoadingOptions,
+    isSubmitting,
+    onSubmitSelection,
+    blueprint,
+    planningStatus,
+    showPlanCard,
+    isDraftingPlan,
+    canEdit,
+    onBuildFromPlan,
+    onRefine,
+    onSkip,
+    showSkip,
+    isDisabled,
+    composer,
+    scrollRef,
+  } = props
 
   return (
     <div ref={scrollRef} className="relative flex-1 overflow-y-auto pb-32">
@@ -330,132 +338,55 @@ function ConversationThread(props: {
             isSubmitting={isSubmitting}
           />
         ) : null}
+
+        {showPlanCard ? (
+          <div className="mx-auto w-full max-w-2xl px-4 sm:px-6">
+            {isDraftingPlan ? (
+              <div className="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-4">
+                <TextShimmer className="text-sm font-medium text-zinc-800">Drafting your plan in chat</TextShimmer>
+                <p className="mt-1 text-xs text-zinc-500">Converting your confirmed answers into a version-one implementation plan.</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <CreationBlueprintPanel blueprint={blueprint} planningStatus={planningStatus} />
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Button
+                    type="button"
+                    onClick={() => void onBuildFromPlan()}
+                    disabled={!canEdit || isDisabled}
+                    className="h-10 rounded-lg bg-zinc-900 px-4 text-sm font-medium text-white hover:bg-black disabled:opacity-50"
+                  >
+                    Build from plan
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={onRefine}
+                    disabled={!canEdit || isDisabled}
+                    className="h-10 rounded-lg border-zinc-300 bg-white px-4 text-sm font-medium text-zinc-700 hover:bg-zinc-100"
+                  >
+                    Refine in chat
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : null}
+
+        {showSkip ? (
+          <div className="mx-auto w-full max-w-2xl px-4 sm:px-6">
+            <button
+              type="button"
+              onClick={() => void onSkip()}
+              disabled={!canEdit || isDisabled}
+              className="text-xs text-zinc-500 underline decoration-zinc-300 underline-offset-4 transition-colors hover:text-zinc-800 disabled:opacity-50"
+            >
+              Skip plan and build now
+            </button>
+          </div>
+        ) : null}
       </div>
       {composer}
-    </div>
-  )
-}
-
-function PlanModal(props: {
-  isVisible: boolean
-  isDraftingPlan: boolean
-  blueprint: ProjectBlueprint
-  planningStatus: PlanningStatus
-  onClose: () => void
-}) {
-  const { isVisible, isDraftingPlan, blueprint, planningStatus, onClose } = props
-  if (!isVisible) return null
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-start justify-end overflow-hidden bg-black/20 backdrop-blur-sm">
-      <div className="max-h-screen w-full max-w-2xl overflow-y-auto border-l border-zinc-200 bg-white shadow-xl sm:max-w-md">
-        <div className="sticky top-0 z-40 border-b border-zinc-100 bg-white px-4 py-3 sm:px-6">
-          <div className="flex items-center justify-between">
-            <h2 className="text-base font-medium text-zinc-900">Your plan</h2>
-            <button
-              type="button"
-              onClick={onClose}
-              className="text-zinc-400 hover:text-zinc-600"
-              aria-label="Close"
-            >
-              <span className="text-lg">✕</span>
-            </button>
-          </div>
-        </div>
-
-        <div className="px-4 py-6 sm:px-6">
-          {isDraftingPlan ? (
-            <div className="space-y-2">
-              <TextShimmer className="text-sm font-medium text-zinc-800">Drafting your plan</TextShimmer>
-              <p className="text-xs text-zinc-500">Synthesising the conversation into a reviewable plan before the build starts.</p>
-            </div>
-          ) : (
-            <CreationBlueprintPanel blueprint={blueprint} planningStatus={planningStatus} />
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function ActionsSidebar(props: {
-  isOpen: boolean
-  onClose: () => void
-  onGeneratePlan: () => void
-  onBuildFromPlan: () => void
-  onRefine: () => void
-  onSkip: () => void
-  disabled: boolean
-  stage: "define" | "plan"
-  planReady: boolean
-  questionsRemaining: number
-  isDraftingPlan: boolean
-}) {
-  const {
-    isOpen,
-    onClose,
-    onGeneratePlan,
-    onBuildFromPlan,
-    onRefine,
-    onSkip,
-    disabled,
-    stage,
-    planReady,
-    questionsRemaining,
-    isDraftingPlan,
-  } = props
-
-  if (!isOpen) return null
-
-  return (
-    <div className="fixed inset-0 z-40 flex justify-end overflow-hidden bg-black/20 backdrop-blur-sm">
-      <div className="max-h-screen w-full max-w-sm overflow-y-auto border-l border-zinc-200 bg-white shadow-xl">
-        <div className="sticky top-0 z-40 border-b border-zinc-100 bg-white px-4 py-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-base font-medium text-zinc-900">Next steps</h2>
-            <button
-              type="button"
-              onClick={onClose}
-              className="text-zinc-400 hover:text-zinc-600"
-              aria-label="Close"
-            >
-              <span className="text-lg">✕</span>
-            </button>
-          </div>
-        </div>
-
-        <div className="px-4 py-6 space-y-4">
-          <CreationStudioActions
-            onGeneratePlan={onGeneratePlan}
-            onBuildFromPlan={onBuildFromPlan}
-            onRefine={onRefine}
-            onSkip={onSkip}
-            disabled={disabled}
-            stage={stage}
-            planReady={planReady}
-            questionsRemaining={questionsRemaining}
-            isDraftingPlan={isDraftingPlan}
-          />
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function BottomActions(props: {
-  onGeneratePlan: () => void
-  onBuildFromPlan: () => void
-  onRefine: () => void
-  onSkip: () => void
-  disabled: boolean
-  stage: "define" | "plan"
-  planReady: boolean
-  questionsRemaining: number
-  isDraftingPlan: boolean
-}) {
-  return (
-    <div className="relative z-10">
-      <CreationStudioActions {...props} />
     </div>
   )
 }
@@ -487,29 +418,21 @@ export function ProjectCreationStudio(props: {
   const [guidedHelper, setGuidedHelper] = useState<string | undefined>(undefined)
   const [guidedQuestion, setGuidedQuestion] = useState<string | undefined>(undefined)
   const [isLoadingOptions, setIsLoadingOptions] = useState(false)
-  const [planSheetOpen, setPlanSheetOpen] = useState(false)
-  const [actionsOpen, setActionsOpen] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
-  const draftPlanTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const autoPlanRequestedRef = useRef(false)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const conversationMessages = Array.isArray(messages) ? messages : []
 
   const isAgentMode = creationMode === "agent"
   const projectLabel = projectName.length > 44 ? `${projectName.slice(0, 41).trimEnd()}...` : projectName
   const studioStage = getPlanningStudioStage(blueprint, planningStatus)
-  const { step, planReady, blueprintVisible, composerSubmitLabel, statusLabel, description, reassurance, nextStepLabel } = studioStage
-  const planPanelVisible = planSheetOpen && (blueprintVisible || isDraftingPlan)
+  const { planReady, blueprintVisible, composerSubmitLabel, description, reassurance, nextStepLabel } = studioStage
 
   const introDescription = useMemo(() => {
     if (blueprintVisible) return description
     if (isAgentMode) return `${agentName || "Your BuildKit copilot"} will guide the conversation, surface quick choices only when useful, and turn the chat into a plan you can review.`
     return description
   }, [agentName, blueprintVisible, description, isAgentMode])
-
-  const helperLabel = useMemo(() => {
-    if (blueprintVisible) return "Review the plan, refine anything that feels off, and build when it feels right."
-    return "Answer a few focused questions first so the first build lands much closer to what you want."
-  }, [blueprintVisible])
 
   const placeholder = useMemo(() => {
     if (blueprintVisible) return "Tell me what you want changed before we build."
@@ -523,23 +446,26 @@ export function ProjectCreationStudio(props: {
   }, [conversationMessages, guidedQuestion, guidedAnswerSet])
 
   useEffect(() => {
-    if (planningStatus === "plan-generated" || planningStatus === "approved") {
-      setIsDraftingPlan(false)
-      setPlanSheetOpen(true)
-    }
-  }, [planningStatus])
-
-  useEffect(() => {
     setSelectedGuidedOptions([])
     setUseCustomAnswer(false)
     setDraft("")
   }, [guidedQuestion])
 
   useEffect(() => {
-    return () => {
-      if (draftPlanTimerRef.current) clearTimeout(draftPlanTimerRef.current)
+    if (!planReady) {
+      autoPlanRequestedRef.current = false
     }
-  }, [])
+  }, [planReady])
+
+  useEffect(() => {
+    if (blueprintVisible || !planReady || !canEdit || isDraftingPlan || isSubmitting || autoPlanRequestedRef.current) {
+      return
+    }
+
+    autoPlanRequestedRef.current = true
+    setIsDraftingPlan(true)
+    Promise.resolve(onGeneratePlan()).finally(() => setIsDraftingPlan(false))
+  }, [blueprintVisible, planReady, canEdit, isDraftingPlan, isSubmitting, onGeneratePlan])
 
   useEffect(() => {
     const applyFallback = () => {
@@ -623,16 +549,6 @@ export function ProjectCreationStudio(props: {
     await onSubmit(value)
   }
 
-  const handleDraftPlan = () => {
-    if (!planReady || blueprintVisible) return
-    setIsDraftingPlan(true)
-    setPlanSheetOpen(true)
-    if (draftPlanTimerRef.current) clearTimeout(draftPlanTimerRef.current)
-    draftPlanTimerRef.current = setTimeout(() => {
-      Promise.resolve(onGeneratePlan()).finally(() => setIsDraftingPlan(false))
-    }, 1200)
-  }
-
   const toggleGuidedOption = (optionLabel: string) => {
     if (!guidedAnswerSet) return
     const nextSelection =
@@ -653,12 +569,7 @@ export function ProjectCreationStudio(props: {
       <div className="relative flex min-h-screen flex-col">
         <PlanningHeader
           projectLabel={projectLabel}
-          statusLabel={statusLabel}
-          planVisible={planSheetOpen}
-          helperLabel={helperLabel}
           onBack={onBack}
-          onTogglePlan={() => setPlanSheetOpen((v) => !v)}
-          onOpenActions={() => setActionsOpen(true)}
         />
 
         <ConversationThread
@@ -688,6 +599,18 @@ export function ProjectCreationStudio(props: {
             setUseCustomAnswer(false)
             return onSubmit(value)
           }}
+          blueprint={blueprint}
+          planningStatus={planningStatus}
+          showPlanCard={blueprintVisible || isDraftingPlan}
+          isDraftingPlan={isDraftingPlan}
+          canEdit={canEdit}
+          onBuildFromPlan={onBuildFromPlan}
+          onRefine={() => {
+            setTimeout(() => textareaRef.current?.focus(), 0)
+          }}
+          onSkip={onSkip}
+          showSkip={!blueprintVisible}
+          isDisabled={!canEdit || isSubmitting}
           composer={
             <ChatComposer
               helper={guidedHelper || (blueprintVisible ? reassurance : nextStepLabel)}
@@ -703,31 +626,6 @@ export function ProjectCreationStudio(props: {
             />
           }
           scrollRef={scrollRef}
-        />
-
-        <ActionsSidebar
-          isOpen={actionsOpen}
-          onClose={() => setActionsOpen(false)}
-          onGeneratePlan={handleDraftPlan}
-          onBuildFromPlan={onBuildFromPlan}
-          onRefine={() => {
-            setPlanSheetOpen(true)
-            textareaRef.current?.focus()
-          }}
-          onSkip={onSkip}
-          disabled={!canEdit || isSubmitting}
-          stage={step}
-          planReady={planReady}
-          questionsRemaining={blueprint.openQuestions.length}
-          isDraftingPlan={isDraftingPlan}
-        />
-
-        <PlanModal
-          isVisible={planSheetOpen}
-          isDraftingPlan={isDraftingPlan}
-          blueprint={blueprint}
-          planningStatus={planningStatus}
-          onClose={() => setPlanSheetOpen(false)}
         />
       </div>
     </div>

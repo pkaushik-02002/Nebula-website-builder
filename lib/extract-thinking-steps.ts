@@ -112,7 +112,7 @@ export function generateImplicitThinkingSteps(
       title: "Understanding requirements",
       description: "Analyzing your project brief and gathering context",
       status: "active",
-      details: ["Reading project brief", "Identifying core features", "Planning architecture"],
+      details: ["Reading project brief", "Identifying core features", "Scoping implementation"],
       timestamp: now,
     })
   }
@@ -126,13 +126,13 @@ export function generateImplicitThinkingSteps(
     steps.push({
       id: `planning-${now}`,
       phase: "planning",
-      title: "Planning structure",
-      description: "Designing application structure and data models",
+      title: "Designing implementation approach",
+      description: "Mapping components, data flow, and delivery sequence",
       status: steps.length > 0 ? "active" : "pending",
       details: [
         "Defining components",
-        "Planning data schemas",
-        "Mapping user flows",
+        "Mapping data flow",
+        "Sequencing user journeys",
       ],
       timestamp: now,
     })

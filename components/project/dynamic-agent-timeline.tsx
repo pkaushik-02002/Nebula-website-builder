@@ -50,10 +50,10 @@ function LiveIndicator() {
   return (
     <div className="flex items-center gap-1.5">
       <span className="relative flex h-2 w-2 shrink-0">
-        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-75" />
-        <span className="relative inline-flex h-2 w-2 rounded-full bg-blue-600" />
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-zinc-400 opacity-75" />
+        <span className="relative inline-flex h-2 w-2 rounded-full bg-zinc-700" />
       </span>
-      <span className="text-xs font-bold uppercase tracking-wider text-blue-600">
+      <span className="text-xs font-bold uppercase tracking-wider text-zinc-600">
         Live
       </span>
     </div>
@@ -92,12 +92,12 @@ export function DynamicAgentTimeline({
         />
 
         {/* Agent Execution Timeline - Secondary view */}
-        <div className="rounded-xl border border-zinc-200 bg-white shadow-sm overflow-hidden">
+        <div className="overflow-hidden rounded-xl border border-[#e7dfd2] bg-white shadow-sm">
           {/* Header */}
-          <div className="px-4 py-3 border-b border-zinc-100 bg-gradient-to-r from-zinc-50 to-zinc-50/50">
+          <div className="border-b border-[#eee6da] bg-[#f8f5ef] px-4 py-3">
             <div className="flex items-center justify-between mb-2.5">
               <div className="flex items-center gap-2">
-                <Zap className="h-4 w-4 text-amber-600" />
+                <Zap className="h-4 w-4 text-zinc-600" />
                 <span className="text-sm font-semibold text-zinc-900">
                   Execution Progress
                 </span>
@@ -108,7 +108,7 @@ export function DynamicAgentTimeline({
             {/* Current task */}
             {activeStep && (
               <div className="mb-2.5">
-                <TextShimmer className="bg-gradient-to-r from-amber-900 via-amber-500 to-amber-900 text-sm font-semibold">
+                <TextShimmer className="bg-gradient-to-r from-zinc-900 via-zinc-500 to-zinc-900 text-sm font-semibold">
                   {activeStep.title}
                 </TextShimmer>
                 {currentGeneratingFile && (
@@ -129,7 +129,7 @@ export function DynamicAgentTimeline({
               </div>
               <div className="h-1.5 w-full bg-zinc-200 rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-gradient-to-r from-amber-500 to-amber-600 transition-all duration-500"
+                  className="h-full bg-zinc-900 transition-all duration-500"
                   style={{ width: `${pct}%` }}
                 />
               </div>
@@ -137,7 +137,7 @@ export function DynamicAgentTimeline({
           </div>
 
           {/* Files counter */}
-          <div className="px-4 py-2.5 border-t border-zinc-100 bg-zinc-50/50 flex items-center justify-between text-xs">
+          <div className="flex items-center justify-between border-t border-[#eee6da] bg-[#faf8f4] px-4 py-2.5 text-xs">
             <span className="text-zinc-600">Files touched</span>
             <span className="font-semibold text-zinc-900">{generatedFileCount}</span>
           </div>
@@ -148,9 +148,9 @@ export function DynamicAgentTimeline({
 
   // BUILD MODE: Single unified timeline (traditional view)
   return (
-    <div className={cn("rounded-xl border border-zinc-200 bg-white shadow-sm overflow-hidden", className)}>
+    <div className={cn("overflow-hidden rounded-xl border border-[#e7dfd2] bg-white shadow-sm", className)}>
       {/* Header */}
-      <div className="px-4 py-3 border-b border-zinc-100 bg-gradient-to-r from-zinc-50 to-green-50/30">
+      <div className="border-b border-[#eee6da] bg-[#f8f5ef] px-4 py-3">
         <div className="flex items-center justify-between mb-2.5">
           <span className="text-sm font-semibold text-zinc-900">Build Progress</span>
           {isStreaming && <LiveIndicator />}
@@ -199,7 +199,7 @@ export function DynamicAgentTimeline({
                 <div
                   className={cn(
                     "absolute left-[10px] top-[26px] w-px h-6",
-                    isComplete ? "bg-green-200" : "bg-zinc-100"
+                    isComplete ? "bg-zinc-300" : "bg-zinc-100"
                   )}
                 />
               )}
@@ -207,7 +207,7 @@ export function DynamicAgentTimeline({
               {/* Marker */}
               <div className="relative z-10 flex shrink-0 flex-col items-center pt-[3px]">
                 {isComplete && (
-                  <div className="flex h-5 w-5 items-center justify-center rounded-full bg-green-500">
+                  <div className="flex h-5 w-5 items-center justify-center rounded-full bg-zinc-700">
                     <Check className="h-2.5 w-2.5 stroke-[3] text-white" />
                   </div>
                 )}
@@ -228,7 +228,7 @@ export function DynamicAgentTimeline({
               <div
                 className={cn(
                   "mb-2 min-w-0 flex-1 rounded-lg border px-3 py-2.5 transition-all duration-200",
-                  isComplete && "border-green-100 bg-green-50/70",
+                  isComplete && "border-zinc-200 bg-[#f5f3ef]",
                   isActive && "border-zinc-200 bg-white shadow-md",
                   isPending && "border-zinc-100 bg-zinc-50/60 opacity-55"
                 )}
@@ -244,7 +244,7 @@ export function DynamicAgentTimeline({
                       <p
                         className={cn(
                           "text-sm font-semibold",
-                          isComplete ? "text-green-700" : "text-zinc-400"
+                          isComplete ? "text-zinc-800" : "text-zinc-400"
                         )}
                       >
                         {step.title}
@@ -253,7 +253,7 @@ export function DynamicAgentTimeline({
                   </div>
 
                   {isComplete && (
-                    <span className="shrink-0 rounded text-xs font-bold uppercase text-green-700">
+                    <span className="shrink-0 rounded text-xs font-bold uppercase text-zinc-700">
                       Done
                     </span>
                   )}
@@ -270,7 +270,7 @@ export function DynamicAgentTimeline({
       </div>
 
       {/* Files counter */}
-      <div className="px-4 py-2.5 border-t border-zinc-100 bg-zinc-50/50 flex items-center justify-between text-xs">
+      <div className="flex items-center justify-between border-t border-[#eee6da] bg-[#faf8f4] px-4 py-2.5 text-xs">
         <span className="text-zinc-600">Files touched</span>
         <span className="font-semibold text-zinc-900">{generatedFileCount}</span>
       </div>
@@ -301,7 +301,7 @@ export function DynamicAgentTimelineCompact({
     <div className="flex items-center gap-2 text-xs text-zinc-600">
       {isStreaming && (
         <>
-          <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse" />
+          <span className="h-1.5 w-1.5 rounded-full bg-zinc-700 animate-pulse" />
           {mode === "agent" && activeThinking ? (
             <span>
               <strong>{activeThinking.title}</strong> — {activeThinking.phase}
