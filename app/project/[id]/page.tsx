@@ -653,16 +653,27 @@ function ProjectContent() {
   }, [getAuthHeader])
 
   const agentTimeline = useMemo<AgentTimelineItem[]>(() => {
+    const timelineCreationMode = project?.creationMode || "build"
+    const timelinePlanningStatus: PlanningStatus = project?.planningStatus || "draft"
+
     return generateDynamicTimeline({
-      creationMode,
-      planningStatus,
+      creationMode: timelineCreationMode,
+      planningStatus: timelinePlanningStatus,
       currentGeneratingFile,
       agentStatus,
       reasoningSteps,
       suggestsBackend: project?.suggestsBackend,
       backendSetupStatus,
     })
-  }, [creationMode, planningStatus, currentGeneratingFile, agentStatus, reasoningSteps, project?.suggestsBackend, backendSetupStatus])
+  }, [
+    project?.creationMode,
+    project?.planningStatus,
+    currentGeneratingFile,
+    agentStatus,
+    reasoningSteps,
+    project?.suggestsBackend,
+    backendSetupStatus,
+  ])
 
   const generatedFileCount = generatingFiles.length
 
@@ -4577,7 +4588,6 @@ export default function ProjectPage() {
     </ProjectErrorBoundary>
   )
 }
-
 
 
 
