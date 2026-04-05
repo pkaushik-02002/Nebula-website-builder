@@ -305,18 +305,23 @@ export function AnimatedAIInput({
     setIsCreating(true);
     try {
       const resolvedCreationMode: "build" | "agent" = creationMode === "agent" && !canUseAgents ? "build" : creationMode;
-      const docRef = await addDoc(collection(db, "projects"), {
+      const projectData: Record<string, unknown> = {
         prompt: value.trim(),
         model: effectiveModel,
         status: "pending",
         creationMode: resolvedCreationMode,
-        agentSlug: resolvedCreationMode === "agent" ? primaryAgent.slug : undefined,
         suggestsBackend: promptSuggestsSupabaseBackend(value.trim()),
         createdAt: serverTimestamp(),
         messages: [],
-        ownerId: user?.uid ?? undefined,
+        ownerId: user.uid,
         visibility: "private",
-      });
+      };
+
+      if (resolvedCreationMode === "agent") {
+        projectData.agentSlug = primaryAgent.slug;
+      }
+
+      const docRef = await addDoc(collection(db, "projects"), projectData);
       router.push(`/project/${docRef.id}`);
     } catch (error) {
       console.error("Error creating project:", error);

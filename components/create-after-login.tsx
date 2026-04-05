@@ -49,18 +49,23 @@ export function CreateAfterLogin() {
     const resolvedCreationMode: "build" | "agent" =
       data.creationMode === "agent" && agentRemaining <= 0 ? "build" : (data.creationMode || "build")
 
-    addDoc(collection(db, "projects"), {
+    const projectData: Record<string, unknown> = {
       prompt: data.prompt.trim(),
       model: data.model || "GPT-4-1 Mini",
       status: "pending",
       creationMode: resolvedCreationMode,
-      agentSlug: resolvedCreationMode === "agent" ? data.agentSlug || undefined : undefined,
       suggestsBackend: promptSuggestsSupabaseBackend(data.prompt.trim()),
       createdAt: serverTimestamp(),
       messages: [],
       ownerId: user.uid,
       visibility: "private",
-    })
+    }
+
+    if (resolvedCreationMode === "agent" && data.agentSlug) {
+      projectData.agentSlug = data.agentSlug
+    }
+
+    addDoc(collection(db, "projects"), projectData)
       .then((docRef) => {
         router.replace(`/project/${docRef.id}`)
       })
