@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { adminAuth, adminDb } from "@/lib/firebase-admin"
 import { requireUserUid } from "@/lib/server-auth"
+import { serializeProjectForApi } from "@/lib/project-shape"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -17,18 +18,6 @@ async function getOptionalUserUid(req: Request): Promise<string | null> {
   } catch {
     return null
   }
-}
-
-function serializeProject(data: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(data)) {
-    if (v && typeof v === "object" && "toDate" in v && typeof (v as { toDate: () => Date }).toDate === "function") {
-      out[k] = (v as { toDate: () => Date }).toDate().toISOString()
-    } else {
-      out[k] = v
-    }
-  }
-  return out
 }
 
 export async function GET(
@@ -65,7 +54,7 @@ export async function GET(
       return NextResponse.json({ error: "This project is private" }, { status: 403 })
     }
     if (canViewPublic || isOwner || isEditor) {
-      const payload = serializeProject({ id: snap.id, ...data })
+      const payload = serializeProjectForApi({ id: snap.id, ...data }, snap.id)
       return NextResponse.json(payload)
     }
 

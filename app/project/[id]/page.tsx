@@ -99,7 +99,6 @@ import { WebsiteSettingsPanel } from "@/components/project/website-settings-pane
 import { SupabaseSetupModal } from "@/components/project/SupabaseSetupModal"
 import { SupabaseProjectSelector } from "@/components/project/SupabaseProjectSelector"
 import { SupabaseCreateProjectModal } from "@/components/project/SupabaseCreateProjectModal"
-import { SupabaseAutoSetupFlow } from "@/components/project/SupabaseAutoSetupFlow"
 import { VisualEditDesignPanel, type DesignSnapshot } from "@/components/project/visual-edit-design-panel"
 import type { VisualEditSectionItem, VisualEditStructureCommand } from "@/components/project/visual-edit-structure"
 import {
@@ -115,11 +114,20 @@ import { buildkitAgents } from "@/lib/buildkit-agents"
 import { hasGenerationMeta, parseGenerationMeta } from "@/lib/generation-meta"
 import { resolveTerminalAgentPhase } from "@/lib/agent-runtime"
 import { getAgentRunLimitForPlan } from "@/lib/agent-quotas"
+import { normalizeProject } from "@/lib/project-shape"
 
 // Persists across Strict Mode remounts so only one sandbox run can update logs
 let sandboxRunIdCounter = 0
 // Prevents auto-preview from running twice when effect runs twice (e.g. Strict Mode remount)
 let lastAutoPreviewKey: string | null = null
+
+type BackendOrchestrationStage =
+  | "idle"
+  | "generating"
+  | "provisioning_backend"
+  | "integrating_backend"
+  | "done"
+  | "error"
 
 function ProjectContent() {
   const params = useParams()
@@ -150,6 +158,7 @@ function ProjectContent() {
   const [currentGeneratingFile, setCurrentGeneratingFile] = useState<string | null>(null)
   const [isSandboxLoading, setIsSandboxLoading] = useState(false)
   const [agentStatus, setAgentStatus] = useState("")
+  const [backendOrchestrationStage, setBackendOrchestrationStage] = useState<BackendOrchestrationStage>("idle")
   const [reasoningSteps, setReasoningSteps] = useState<string[]>([])
   const [thinkingSteps, setThinkingSteps] = useState<ThinkingStep[]>([])
   const abortControllerRef = useRef<AbortController | null>(null)
@@ -196,6 +205,11 @@ function ProjectContent() {
   useEffect(() => {
     setPreviewPathDraft(previewPath)
   }, [previewPath])
+
+  useEffect(() => {
+    setSuggestBackendDismissed(false)
+  }, [projectId])
+
   const [integrationsOpen, setIntegrationsOpen] = useState(false)
   const [selectedIntegration, setSelectedIntegration] = useState<"all" | "github" | "netlify" | "vercel" | "supabase" | "vars">("all")
   const [requiredEnvVars, setRequiredEnvVars] = useState<string[]>([])
@@ -320,17 +334,6 @@ function ProjectContent() {
 
     initBlueprint()
   }, [project])
-
-  // Auto-open Supabase setup prompt when the project context indicates a backend is needed
-  useEffect(() => {
-    if (!project) return
-    const requiresBackend = project.suggestsBackend || promptSuggestsSupabaseBackend(project.prompt || "")
-
-    if (!project.supabaseProjectRef && requiresBackend && !supabaseSetupModalOpen) {
-      setBackendSetupStatus("in-progress")
-      setSupabaseSetupModalOpen(true)
-    }
-  }, [project, project?.prompt, project?.suggestsBackend, project?.supabaseProjectRef, supabaseSetupModalOpen])
 
   // Check if user has Supabase OAuth connection when setup modal is opened
   useEffect(() => {
@@ -684,9 +687,14 @@ function ProjectContent() {
       if (!res.ok || !json?.previewUrl) {
         throw new Error(json?.error || "Failed to prepare preview")
       }
-      setEnsuredPreviewUrl(String(json.previewUrl))
+      const nextPreviewUrl = String(json.previewUrl)
+      setEnsuredPreviewUrl(nextPreviewUrl)
+      setPreviewPath("/")
+      setPreviewPathDraft("/")
+      setPreviewReloadNonce(Date.now())
+      setPreviewKey((k) => k + 1)
       setPreviewEnsureFailures(0)
-      return String(json.previewUrl)
+      return nextPreviewUrl
     } catch (e) {
       setPreviewEnsureFailures((prev) => prev + 1)
       throw e
@@ -958,6 +966,8 @@ function ProjectContent() {
 
   const projectUrl = typeof window !== "undefined" ? `${window.location.origin}/project/${projectId}` : ""
   const canEdit = !!user && !!project && (!project.ownerId || project.ownerId === user.uid || (Array.isArray(project.editorIds) && project.editorIds.includes(user.uid)))
+  const projectNeedsSupabase = !!project && !project.supabaseProjectRef && (project.suggestsBackend || promptSuggestsSupabaseBackend(project.prompt || ""))
+  const showSupabaseChatPrompt = canEdit && projectNeedsSupabase && !suggestBackendDismissed
   const creationMode = project?.creationMode || "build"
   const isBuildTokenBlocked = remainingTokens <= 0 && creationMode !== "agent"
   const activeAgent = creationMode === "agent"
@@ -982,6 +992,54 @@ function ProjectContent() {
   const handleShare = () => {
     setShareVisibility(project?.visibility ?? "private")
     setShareOpen(true)
+  }
+
+  const renderSupabaseChatPrompt = () => {
+    if (!showSupabaseChatPrompt) return null
+
+    return (
+      <div className="mr-auto max-w-[92%] rounded-2xl border border-[#e7dfd2] bg-[#f7f3ec] px-4 py-3">
+        <div className="flex items-start gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="inline-flex items-center gap-2 rounded-full border border-[#e7dfd2] bg-white px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.18em] text-zinc-600">
+              <Database className="h-3.5 w-3.5" />
+              Supabase
+            </div>
+            <p className="mt-3 text-sm font-medium leading-6 text-zinc-900">This website likely needs a database connection.</p>
+            <p className="mt-1 text-sm leading-6 text-zinc-600">
+              Connect Supabase in Website Settings so we can wire up auth, data, and schema changes.
+            </p>
+            <div className="mt-3 flex items-center gap-3">
+              <Button
+                type="button"
+                size="sm"
+                className="h-9 rounded-lg bg-zinc-900 px-4 text-sm text-white hover:bg-black"
+                onClick={() => setWebsiteSettingsOpen(true)}
+              >
+                Connect Supabase
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-9 rounded-lg px-1 text-sm text-zinc-600 hover:bg-transparent hover:text-zinc-900"
+                onClick={() => setSuggestBackendDismissed(true)}
+              >
+                Not now
+              </Button>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSuggestBackendDismissed(true)}
+            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-zinc-400 transition hover:bg-white hover:text-zinc-700"
+            aria-label="Dismiss Supabase prompt"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+    )
   }
 
   const handleCopyShareLink = async () => {
@@ -1607,11 +1665,12 @@ function ProjectContent() {
             return
           }
           setAccessError(null)
-          const projectData = { id: docSnap.id, ...data } as Project
+          const projectData = normalizeProject({ id: docSnap.id, ...data }, { fallbackId: docSnap.id })
           setProject(projectData)
           setSelectedFile((prev) => {
-            if (data.files && data.files.length > 0 && !prev) return data.files[0]
-            return prev
+            if (projectData.files.length === 0) return null
+            if (!prev) return projectData.files[0]
+            return projectData.files.find((file) => file.path === prev.path) ?? projectData.files[0]
           })
           if (projectData.sandboxUrl && projectData.status === "complete") {
             setEnsuredPreviewUrl(projectData.sandboxUrl)
@@ -1657,15 +1716,12 @@ function ProjectContent() {
           setLoading(false)
           return
         }
-        const projectData: Project = {
-          ...data,
-          id: data.id || projectId,
-          createdAt: typeof data.createdAt === "string" ? new Date(data.createdAt) : (data.createdAt || new Date()),
-        }
+        const projectData = normalizeProject(data, { fallbackId: projectId })
         setProject(projectData)
         setSelectedFile((prev) => {
-          if (data.files?.length > 0 && !prev) return data.files[0]
-          return prev
+          if (projectData.files.length === 0) return null
+          if (!prev) return projectData.files[0]
+          return projectData.files.find((file) => file.path === prev.path) ?? projectData.files[0]
         })
         if (projectData.sandboxUrl && projectData.status === "complete") {
           setEnsuredPreviewUrl(projectData.sandboxUrl)
@@ -1681,6 +1737,19 @@ function ProjectContent() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- getOptionalAuthHeader stable
   }, [projectId, user, authLoading])
+
+  useEffect(() => {
+    if (!project) {
+      setSelectedFile(null)
+      return
+    }
+
+    setSelectedFile((prev) => {
+      if (project.files.length === 0) return null
+      if (!prev) return project.files[0]
+      return project.files.find((file) => file.path === prev.path) ?? project.files[0]
+    })
+  }, [project?.id, project?.files])
 
   // Claim legacy projects: set ownerId when current user opens a project with no owner
   useEffect(() => {
@@ -1945,6 +2014,7 @@ function ProjectContent() {
     }
 
     setIsGenerating(true)
+    setBackendOrchestrationStage("generating")
     setGeneratingFiles([])
     setAgentStatus("Analyzing your request...")
     setReasoningSteps(["Analyzing your request and understanding scope."])
@@ -1962,6 +2032,7 @@ function ProjectContent() {
 
     // Track if we've auto-selected a file during this generation
     let hasAutoSelectedFile = false
+    let didAutoSetupBackend = false
 
     const projectRef = doc(db, "projects", projectId)
     await updateDoc(projectRef, { status: "generating" })
@@ -1984,6 +2055,52 @@ function ProjectContent() {
       const idToken = await user?.getIdToken()
       if (!idToken) {
         throw new Error("Not authenticated - please sign in")
+      }
+
+      const runFollowUpGeneration = async (followUpPrompt: string, baseFiles: GeneratedFile[]) => {
+        const followUpBody: {
+          prompt: string
+          model: string
+          idToken: string
+          existingFiles: { path: string; content: string }[]
+          creationMode?: "build" | "agent"
+          agentSlug?: string
+        } = {
+          prompt: followUpPrompt,
+          model: model || "GPT-4-1 Mini",
+          idToken,
+          existingFiles: baseFiles.map((file) => ({ path: file.path, content: file.content })),
+          creationMode: project.creationMode || "build",
+          agentSlug: project.creationMode === "agent" ? project.agentSlug : undefined,
+        }
+
+        const followUpResponse = await fetch("/api/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(followUpBody),
+          signal: controller.signal,
+        })
+
+        if (!followUpResponse.ok) {
+          const errorData = await followUpResponse.json().catch(() => ({}))
+          throw new Error(errorData?.error || `Generation failed: ${followUpResponse.status}`)
+        }
+
+        const followUpReader = followUpResponse.body?.getReader()
+        const followUpDecoder = new TextDecoder()
+        let followUpContent = ""
+
+        while (followUpReader) {
+          const { done, value } = await followUpReader.read()
+          if (done) break
+          followUpContent += followUpDecoder.decode(value)
+        }
+
+        const { contentWithoutAgent } = extractAgentMessage(followUpContent)
+        const followUpBlocks = parseStreamingFiles(contentWithoutAgent)
+        if (followUpBlocks.length === 0) return baseFiles
+
+        return mergeWithExistingFiles(baseFiles, followUpBlocks)
       }
 
       const hasBlueprintPlan = project.planningStatus === "approved" || project.planningStatus === "plan-generated"
@@ -2127,6 +2244,7 @@ function ProjectContent() {
       // Final parse (use content without agent block)
       const { contentWithoutAgent: finalContent } = extractAgentMessage(fullContent)
       const finalBlocks = parseStreamingFiles(finalContent)
+      const suggestsBackend = fullContent.includes("===META: suggestsBackend=true===")
 
       let finalFiles: GeneratedFile[]
       if (project.files && project.files.length > 0) {
@@ -2246,12 +2364,69 @@ function ProjectContent() {
           : prev
       )
 
+      if (suggestsBackend) {
+        try {
+          setBackendOrchestrationStage("provisioning_backend")
+          setAgentStatus("Setting up Supabase...")
+          const supabaseRes = await fetch("/api/integrations/supabase/auto-setup", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${idToken}`,
+            },
+            body: JSON.stringify({ projectId }),
+          })
+          const supabaseJson = await supabaseRes.json().catch(() => ({}))
+          const supabaseUrl = typeof supabaseJson?.supabaseUrl === "string" ? supabaseJson.supabaseUrl : ""
+          const supabaseAnonKey = typeof supabaseJson?.supabaseAnonKey === "string" ? supabaseJson.supabaseAnonKey : ""
+
+          if (supabaseRes.ok && supabaseUrl && supabaseAnonKey) {
+            setBackendOrchestrationStage("integrating_backend")
+            setAgentStatus("Integrating Supabase...")
+            const integratedFiles = await runFollowUpGeneration(
+              [
+                "Integrate Supabase into the existing project.",
+                "Do not regenerate the full project. Only add or modify the files needed for integration.",
+                "Create a reusable client in src/lib/supabase.ts.",
+                "Create or update .env with these values:",
+                `VITE_SUPABASE_URL=${supabaseUrl}`,
+                `VITE_SUPABASE_ANON_KEY=${supabaseAnonKey}`,
+                "Wire Supabase only where it is relevant and preserve the existing app structure.",
+              ].join("\n"),
+              finalFiles
+            )
+
+            if (integratedFiles !== finalFiles) {
+              finalFiles = integratedFiles
+              await updateDoc(projectRef, { files: finalFiles })
+              setProject((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      files: finalFiles,
+                    }
+                  : prev
+              )
+            }
+            didAutoSetupBackend = true
+            setBackendOrchestrationStage("done")
+          } else if (supabaseRes.ok) {
+            setBackendOrchestrationStage("idle")
+          }
+        } catch (supabaseError) {
+          setBackendOrchestrationStage("error")
+          console.error("Supabase auto-setup skipped:", supabaseError)
+        }
+      } else {
+        setBackendOrchestrationStage("done")
+      }
+
       if (finalFiles.length > 0) {
         setSelectedFile(finalFiles[0])
       }
 
       // Show Supabase setup modal if backend is needed and not yet dismissed
-      if (generationMeta.suggestsBackend) {
+      if (!didAutoSetupBackend && generationMeta.suggestsBackend) {
         if (project?.supabaseProjectRef) {
           try {
             await runSupabaseProvisioning(projectId)
@@ -2260,9 +2435,7 @@ function ProjectContent() {
             console.error("Supabase provisioning error:", provisionError)
           }
         } else if (!suggestBackendDismissed) {
-          setBackendSetupStatus("in-progress")
-          setSupabaseSetupModalOpen(true)
-          setSelectedSupabaseRef("")
+          setBackendSetupStatus("pending")
         }
       }
 
@@ -2270,6 +2443,7 @@ function ProjectContent() {
       await createSandbox(finalFiles)
 
     } catch (error) {
+      setBackendOrchestrationStage("error")
       if (error instanceof Error && error.name === "AbortError") {
         await updateDoc(projectRef, { status: "pending" })
         setProject((prev) => (prev ? { ...prev, status: "pending" } : prev))
@@ -2458,6 +2632,10 @@ function ProjectContent() {
           
           setProject((prev) => (prev ? { ...prev, sandboxUrl: url } : prev))
           setEnsuredPreviewUrl(url)
+          setPreviewPath("/")
+          setPreviewPathDraft("/")
+          setPreviewReloadNonce(Date.now())
+          setPreviewKey((k) => k + 1)
           
           if (data.warning) {
             setPreviewRefreshHint(data.warning)
@@ -3041,9 +3219,7 @@ function ProjectContent() {
         : prev
     )
     pendingGenerationStartedRef.current = projectId
-    const planBody = blueprintToText(resolvedBlueprint)
-    const effectivePrompt = `${project.prompt}\n\nApproved plan:\n${planBody}`
-    await generateCode(effectivePrompt, project.model)
+    await generateCode(project.prompt, project.model)
   }, [project, resolvedBlueprint, canEdit, projectId, generateCode])
 
   const handleSkipPlanAndBuild = useCallback(async () => {
@@ -3343,16 +3519,16 @@ function ProjectContent() {
             visualEditActive ? "lg:col-span-4" : "lg:col-span-3",
             mobileTab !== "chat" && "hidden lg:flex"
           )}>
-            <div className="border-b border-zinc-100 px-4 py-3 sm:px-5 sm:py-4">
-              <div className="min-w-0">
-                <p className="text-sm font-semibold tracking-wide text-zinc-800">{visualEditActive ? "AI Creative Assistant" : "Conversation"}</p>
-                <p className="mt-1 text-xs text-zinc-500">
-                  {visualEditActive
-                    ? (editingContextLabel || "Select a section in the canvas to refine it with AI.")
-                    : (editingContextLabel || "Editing entire website")}
-                </p>
+            {visualEditActive ? (
+              <div className="border-b border-zinc-100 px-4 py-3 sm:px-5 sm:py-4">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold tracking-wide text-zinc-800">AI Creative Assistant</p>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    {editingContextLabel || "Select a section in the canvas to refine it with AI."}
+                  </p>
+                </div>
               </div>
-            </div>
+            ) : null}
 
             {visualEditActive ? (
               <>
@@ -3621,11 +3797,11 @@ function ProjectContent() {
                   </div>
                 </div>
               </div>
-              {canEdit ? (
-                <div className="border-t border-zinc-100 p-2.5 sm:p-3">
-                  {isBuildTokenBlocked && (
-                    <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5">
-                      <p className="text-sm font-medium text-amber-900">Youâ€™ve used all credits for this cycle.</p>
+            {canEdit ? (
+              <div className="border-t border-zinc-100 p-2.5 sm:p-3">
+                {isBuildTokenBlocked && (
+                  <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5">
+                    <p className="text-sm font-medium text-amber-900">Youâ€™ve used all credits for this cycle.</p>
                       <p className="mt-0.5 text-xs text-amber-800">
                         Upgrade your plan to continue generating website updates.
                         {" "}
@@ -3849,6 +4025,7 @@ function ProjectContent() {
                   </div>
                 )
               })}
+                {renderSupabaseChatPrompt()}
                 {isGenerating && (
                   <div className="overflow-hidden rounded-[1.5rem] border border-zinc-200 bg-white shadow-[0_20px_70px_-36px_rgba(24,24,27,0.42)]">
                     <div className="border-b border-zinc-100 bg-[radial-gradient(circle_at_top_left,_rgba(244,244,245,0.95),_rgba(255,255,255,0.98)_58%)] px-4 py-4">
@@ -4465,36 +4642,6 @@ function ProjectContent() {
           </div>
         </SheetContent>
       </Sheet>
-
-      {/* New Auto-Setup Flow - Orchestrator-based */}
-      <SupabaseAutoSetupFlow
-        open={supabaseSetupModalOpen}
-        projectId={projectId}
-        onClose={handleSupabaseSetupModalClose}
-        onStatusChange={(status) => {
-          setBackendSetupStatus(status)
-        }}
-        onSetupComplete={async () => {
-          // Mark setup as complete
-          setBackendSetupStatus("complete")
-          
-          // Refresh project
-          await projectRef.get().then(() => {
-            toast({ title: "Backend connected!", description: "Your Supabase database is now integrated." })
-          })
-          
-          // In agent mode, auto-resume generation after a brief delay
-          if (creationMode === "agent" && !isGenerating) {
-            setTimeout(() => {
-              setSupabaseSetupModalOpen(false)
-              // Continue with next phase
-              setAgentStatus("Backend setup complete. Continuing with next implementation step...")
-            }, 1500)
-          } else {
-            setSupabaseSetupModalOpen(false)
-          }
-        }}
-      />
 
       {/* Legacy modals (keeping for backward compatibility) */}
       <SupabaseSetupModal

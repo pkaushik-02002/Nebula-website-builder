@@ -55,6 +55,11 @@ type ParsedFileBlock = {
   content: string
 }
 
+type ProjectFileInput = {
+  path: string
+  content: string
+}
+
 type AgentStreamParseResult = {
   content: string
   streamedLength: number
@@ -69,6 +74,214 @@ type RuntimeSelection =
 type StreamState = {
   usageInfo: any
   streamedLength: number
+}
+
+const FILE_SELECTION_LIMIT = 8
+const FILE_CONTENT_SCAN_LIMIT = 1500
+const PROMPT_KEYWORD_LIMIT = 12
+const OPENAI_TIMEOUT_MS = 25000
+const MAX_PROMPT_CHARS = 12000
+const PROMPT_KEYWORD_STOPWORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "app",
+  "build",
+  "change",
+  "create",
+  "file",
+  "for",
+  "from",
+  "in",
+  "into",
+  "make",
+  "page",
+  "project",
+  "section",
+  "site",
+  "the",
+  "this",
+  "to",
+  "update",
+  "with",
+])
+
+function dedupeFilesByPath(files: ProjectFileInput[]) {
+  const seen = new Set<string>()
+  return files.filter((file) => {
+    const path = typeof file.path === "string" ? file.path : ""
+    if (!path || seen.has(path)) return false
+    seen.add(path)
+    return true
+  })
+}
+
+function isCoreContextFile(path: string) {
+  const normalizedPath = path.replace(/\\/g, "/").toLowerCase()
+  return (
+    normalizedPath === "app.tsx" ||
+    normalizedPath === "main.tsx" ||
+    normalizedPath.endsWith("/app.tsx") ||
+    normalizedPath.endsWith("/main.tsx")
+  )
+}
+
+function extractPromptKeywords(prompt: string) {
+  return Array.from(
+    new Set(
+      prompt
+        .toLowerCase()
+        .replace(/[^a-z0-9/_.\-\s]/g, " ")
+        .split(/\s+/)
+        .map((token) => token.trim())
+        .filter((token) => token.length >= 3 && !PROMPT_KEYWORD_STOPWORDS.has(token))
+    )
+  ).slice(0, PROMPT_KEYWORD_LIMIT)
+}
+
+function scoreFileForPrompt(file: ProjectFileInput, keywords: string[]) {
+  if (isCoreContextFile(file.path)) return Number.MAX_SAFE_INTEGER
+
+  const normalizedPath = file.path.toLowerCase()
+  const fileName = normalizedPath.split("/").pop() || normalizedPath
+  const contentPreview = file.content.slice(0, FILE_CONTENT_SCAN_LIMIT).toLowerCase()
+  let score = 0
+
+  for (const keyword of keywords) {
+    if (fileName.includes(keyword)) score += 8
+    else if (normalizedPath.includes(keyword)) score += 5
+    if (contentPreview.includes(keyword)) score += 2
+  }
+
+  return score
+}
+
+function extractRelativeImports(content: string): string[] {
+  const importRegex = /from\s+["'](\.[^"']+)["']|import\s+["'](\.[^"']+)["']/g
+  const imports: string[] = []
+  let match: RegExpExecArray | null
+
+  while ((match = importRegex.exec(content)) !== null) {
+    const raw = match[1] || match[2]
+    if (raw && raw.startsWith(".")) {
+      imports.push(raw)
+    }
+  }
+
+  return imports
+}
+
+function resolveImportPath(basePath: string, relativePath: string): string {
+  const baseDir = basePath.includes("/") ? basePath.slice(0, basePath.lastIndexOf("/")) : ""
+  const combined = `${baseDir}/${relativePath}`
+
+  const normalizedParts: string[] = []
+  for (const part of combined.split("/")) {
+    if (!part || part === ".") continue
+    if (part === "..") {
+      normalizedParts.pop()
+      continue
+    }
+    normalizedParts.push(part)
+  }
+
+  return normalizedParts.join("/")
+}
+
+function collectDependencyFiles(
+  files: ProjectFileInput[],
+  seedFiles: ProjectFileInput[]
+): ProjectFileInput[] {
+  const fileMap = new Map(files.map((f) => [f.path, f]))
+  const visited = new Set<string>()
+  const result: ProjectFileInput[] = []
+
+  const stack = [...seedFiles]
+
+  while (stack.length > 0) {
+    const current = stack.pop()
+    if (!current || visited.has(current.path)) continue
+
+    visited.add(current.path)
+    result.push(current)
+
+    const imports = extractRelativeImports(current.content)
+
+    for (const imp of imports) {
+      const resolved = resolveImportPath(current.path, imp)
+
+      const candidates = [
+        resolved,
+        `${resolved}.ts`,
+        `${resolved}.tsx`,
+        `${resolved}.js`,
+        `${resolved}.jsx`,
+        `${resolved}/index.tsx`,
+        `${resolved}/index.ts`,
+      ]
+
+      for (const candidate of candidates) {
+        const found = fileMap.get(candidate)
+        if (found && !visited.has(found.path)) {
+          stack.push(found)
+        }
+      }
+    }
+  }
+
+  return result
+}
+
+function trimPromptFilesToBudget(
+  prompt: string,
+  files: ProjectFileInput[]
+): ProjectFileInput[] {
+  let totalLength = prompt.length
+  const result: ProjectFileInput[] = []
+
+  for (const file of files) {
+    const fileLength = file.path.length + file.content.length + 50
+
+    if (totalLength + fileLength > MAX_PROMPT_CHARS) break
+
+    result.push(file)
+    totalLength += fileLength
+  }
+
+  return result
+}
+
+function buildFollowUpUserMessage(
+  prompt: string,
+  files: ProjectFileInput[]
+) {
+  return `The user wants these changes or additions to their existing project:\n\n${prompt}\n\nCurrent project files (only modify or add as needed; do not output unchanged files):\n${files.map((f) => `\n--- FILE: ${f.path} ---\n${f.content}\n--- END ${f.path} ---`).join("")}`
+}
+
+function selectRelevantFiles(existingFiles: ProjectFileInput[], prompt: string) {
+  const dedupedFiles = dedupeFilesByPath(existingFiles)
+  if (dedupedFiles.length <= FILE_SELECTION_LIMIT) return dedupedFiles
+
+  const keywords = extractPromptKeywords(prompt)
+  const coreFiles = dedupedFiles.filter((file) => isCoreContextFile(file.path))
+  const rankedNonCoreFiles = dedupedFiles
+    .filter((file) => !isCoreContextFile(file.path))
+    .map((file, index) => ({
+      file,
+      index,
+      score: scoreFileForPrompt(file, keywords),
+    }))
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .map((entry) => entry.file)
+
+  const topKeywordFiles = rankedNonCoreFiles.slice(0, FILE_SELECTION_LIMIT)
+
+  const dependencyExpanded = collectDependencyFiles(
+    dedupedFiles,
+    [...coreFiles, ...topKeywordFiles]
+  )
+
+  return dedupeFilesByPath(dependencyExpanded).slice(0, FILE_SELECTION_LIMIT * 2)
 }
 
 function parse21stUiMessageSSE(raw: string): AgentStreamParseResult {
@@ -481,16 +694,64 @@ async function streamWithResolvedProvider(params: {
     return
   }
 
-  const completion = await params.client.chat.completions.create({
-    model: params.selectedModel,
-    stream: true,
-    messages: [
-      { role: "system", content: params.systemPrompt },
-      { role: "user", content: params.userMessageContent },
-    ],
-    max_tokens: 8000,
-    stream_options: { include_usage: true } as any,
-  })
+  const createOpenAICompletion = async (userMessage: string) => {
+    const controllerAbort = new AbortController()
+    const timeoutId = setTimeout(() => {
+      controllerAbort.abort()
+    }, OPENAI_TIMEOUT_MS)
+
+    try {
+      const completion = await params.client.chat.completions.create({
+        model: params.selectedModel,
+        stream: true,
+        messages: [
+          { role: "system", content: params.systemPrompt },
+          { role: "user", content: userMessage },
+        ],
+        max_tokens: 8000,
+        stream_options: { include_usage: true } as any,
+        signal: controllerAbort.signal,
+      })
+      clearTimeout(timeoutId)
+      return completion
+    } catch (err: any) {
+      clearTimeout(timeoutId)
+
+      if (err?.name === "AbortError") {
+        console.error("OpenAI request aborted due to timeout")
+        throw new Error("MODEL_TIMEOUT")
+      }
+
+      throw err
+    }
+  }
+
+  let completion
+  let basePrompt = params.userMessageContent
+
+  if (params.userMessageContent.includes("\n\nCurrent project files")) {
+    basePrompt = params.userMessageContent.split("\n\nCurrent project files")[0]
+  }
+
+  try {
+    completion = await createOpenAICompletion(params.userMessageContent)
+  } catch (err: any) {
+    if (err?.message === "MODEL_TIMEOUT" && params.existingFiles?.length) {
+      const retrySeedFiles = selectRelevantFiles(params.existingFiles, params.userMessageContent)
+      const reducedCount = Math.max(2, Math.ceil(retrySeedFiles.length / 2))
+      const reducedFiles = trimPromptFilesToBudget(
+        params.userMessageContent,
+        retrySeedFiles.slice(0, reducedCount)
+      )
+      const retryUserMessage = buildFollowUpUserMessage(
+        basePrompt,
+        reducedFiles
+      )
+      completion = await createOpenAICompletion(retryUserMessage)
+    } else {
+      throw err
+    }
+  }
 
   for await (const chunk of completion) {
     if ((chunk as any).usage) params.state.usageInfo = (chunk as any).usage
@@ -568,13 +829,16 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  const body = await req.json() as {
+  const body = await req.json().catch(() => null) as {
     prompt: string
     model?: string
     idToken?: string
     existingFiles?: { path: string; content: string }[]
     creationMode?: "build" | "agent"
     agentSlug?: string
+  } | null
+  if (!body || typeof body !== "object") {
+    return Response.json({ error: "Invalid JSON body" }, { status: 400 })
   }
   const {
     prompt,
@@ -691,6 +955,11 @@ export async function POST(req: Request) {
 
   const { client, selectedModel, provider } = await resolveModel(model)
   const isFollowUp = Array.isArray(existingFiles) && existingFiles.length > 0
+  let promptFiles = isFollowUp ? selectRelevantFiles(existingFiles || [], prompt) : []
+
+  if (isFollowUp) {
+    promptFiles = trimPromptFilesToBudget(prompt, promptFiles)
+  }
 
   const systemPromptFollowUp = `You are an expert React developer. The user is asking for CHANGES or ADDITIONS to an existing project. You will receive the current project files.
 
@@ -700,7 +969,7 @@ RESPONSIVE: Preserve or improve responsiveness on all devices. Use Tailwind brea
 
 DEPENDENCIES (CRITICAL):
 - Before using ANY new import/package in your code, you MUST add it to package.json dependencies or devDependencies.
-- If you use react-icons (e.g., import { FaStar } from 'react-icons/fa'), add "react-icons": "^5.0.0" to dependencies.
+- If you use react-icons (e.g., import { FaStar } from 'react-icons/fa'), add exactly "react-icons": "^5.0.0" to dependencies. Do not invent higher react-icons versions.
 - If you use framer-motion, add "framer-motion": "^11.0.0" to dependencies.
 - If you use lucide-react, add "lucide-react": "^0.400.0" to dependencies.
 - Check the existing package.json first. Only add packages that are truly needed and don't already exist.
@@ -786,7 +1055,7 @@ Dependencies requirements (MUST follow):
   * lucide-react (for icons)
   * clsx or classnames (for conditional classes)
   * date-fns (for date utilities)
-- If you use an icon from react-icons (e.g., import { FaStar } from 'react-icons/fa'), you MUST include "react-icons": "^5.0.0" in dependencies.
+- If you use an icon from react-icons (e.g., import { FaStar } from 'react-icons/fa'), you MUST include exactly "react-icons": "^5.0.0" in dependencies. Do not invent higher react-icons versions.
 - If you use Tailwind CSS, include tailwindcss, postcss, and autoprefixer in devDependencies.
 - Do not reference any package in code unless it exists in package.json.
 - NEVER use packages that don't exist on npm (e.g., @shadcn/ui is not a real package).
@@ -827,7 +1096,7 @@ OPEN-SOURCE MODEL RELIABILITY RULES (MANDATORY):
 
   // Build user message: for follow-up include current files so the model can edit them
   const userMessageContent = isFollowUp
-    ? `The user wants these changes or additions to their existing project:\n\n${prompt}\n\nCurrent project files (only modify or add as needed; do not output unchanged files):\n${existingFiles.map((f: { path: string; content: string }) => `\n--- FILE: ${f.path} ---\n${f.content}\n--- END ${f.path} ---`).join("")}`
+    ? buildFollowUpUserMessage(prompt, promptFiles)
     : `Create a Vite + React + TypeScript application: ${prompt}`
 
   const encoder = new TextEncoder()
@@ -939,8 +1208,19 @@ OPEN-SOURCE MODEL RELIABILITY RULES (MANDATORY):
         }
 
         controller.close()
-      } catch (err) {
+      } catch (err: any) {
         console.error('Stream error', err)
+
+        if (err?.message === "MODEL_TIMEOUT") {
+          controller.enqueue(
+            encoder.encode(
+              "===AGENT_MESSAGE=== The request took too long. Try simplifying your request or retrying. ===END_AGENT_MESSAGE==="
+            )
+          )
+          controller.close()
+          return
+        }
+
         controller.error(err)
       }
     },

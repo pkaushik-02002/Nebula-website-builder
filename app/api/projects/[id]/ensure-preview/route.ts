@@ -163,6 +163,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Failed to ensure preview"
     console.error("[ensure-preview] error", message)
-    return NextResponse.json({ error: message }, { status: 500 })
+    const status = message === "Project not found" ? 404 : message.startsWith("Forbidden:") ? 403 : 500
+    return NextResponse.json({ error: message }, { status })
   }
 }

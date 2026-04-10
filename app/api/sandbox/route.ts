@@ -271,6 +271,41 @@ function parsePackageJsonText(txt: string): any {
   }
 }
 
+const SANDBOX_DEPENDENCY_VERSION_OVERRIDES: Record<string, string> = {
+  "react-icons": "^5.0.0",
+}
+
+async function normalizePackageJsonDependenciesForPreview(sandbox: Sandbox): Promise<any> {
+  const packageJsonPath = `${PROJECT_DIR}/package.json`
+  const pkgText = await readFileMaybe(sandbox, packageJsonPath)
+  const pkg = parsePackageJsonText(pkgText)
+
+  if (!pkg) return null
+
+  let changed = false
+
+  for (const field of ["dependencies", "devDependencies"] as const) {
+    const deps = pkg?.[field]
+    if (!deps || typeof deps !== "object") continue
+
+    for (const [packageName, safeVersion] of Object.entries(SANDBOX_DEPENDENCY_VERSION_OVERRIDES)) {
+      const currentVersion = deps[packageName]
+      if (typeof currentVersion !== "string") continue
+      if (currentVersion === safeVersion) continue
+
+      deps[packageName] = safeVersion
+      changed = true
+      console.log(`[sandbox] Normalized ${packageName} version from ${currentVersion} to ${safeVersion}`)
+    }
+  }
+
+  if (changed) {
+    await sandbox.files.write(packageJsonPath, `${JSON.stringify(pkg, null, 2)}\n`)
+  }
+
+  return pkg
+}
+
 function inferFramework(pkg: any): "next" | "vite" | "unknown" {
   if (!pkg) return "unknown"
   const deps = { ...(pkg?.dependencies || {}), ...(pkg?.devDependencies || {}) }
@@ -1075,8 +1110,7 @@ export async function POST(req: Request) {
         }
 
         // Parse package.json and detect framework
-        const pkgText = await readFileMaybe(sandbox, `${PROJECT_DIR}/package.json`)
-        const pkg = parsePackageJsonText(pkgText)
+        const pkg = await normalizePackageJsonDependenciesForPreview(sandbox)
         
         if (!pkg) {
           emitTerminalError({
@@ -1357,7 +1391,8 @@ export async function PATCH(req: Request) {
     return Response.json({ error: "E2B API key not configured" }, { status: 500 })
   }
 
-  const { sandboxId } = await req.json()
+  const body = await req.json().catch(() => null) as { sandboxId?: unknown } | null
+  const sandboxId = typeof body?.sandboxId === "string" ? body.sandboxId : ""
   if (!sandboxId) return Response.json({ error: "sandboxId required" }, { status: 400 })
 
   const opts = {
@@ -1382,7 +1417,8 @@ export async function DELETE(req: Request) {
     return Response.json({ error: "E2B API key not configured" }, { status: 500 })
   }
 
-  const { sandboxId } = await req.json()
+  const body = await req.json().catch(() => null) as { sandboxId?: unknown } | null
+  const sandboxId = typeof body?.sandboxId === "string" ? body.sandboxId : ""
   if (!sandboxId) return Response.json({ error: "Sandbox ID required" }, { status: 400 })
 
   try {

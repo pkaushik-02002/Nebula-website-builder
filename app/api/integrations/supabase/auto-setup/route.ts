@@ -1,24 +1,23 @@
+import crypto from "crypto"
 import { NextResponse } from "next/server"
+
 import type { Message } from "@/app/project/[id]/types"
 import { adminDb } from "@/lib/firebase-admin"
-import {
-  analyzeSupabaseProvisioningNeed,
-  generateSupabaseIntegrationUpdates,
-  mergeProjectFiles,
-} from "@/lib/integrations/supabase/provision"
-import { generatePostgresSchema } from "@/lib/integrations/supabase/schema"
+import { analyzeSupabaseProvisioningNeed } from "@/lib/integrations/supabase/provision"
+import { extractSqlTables, generatePostgresSchema } from "@/lib/integrations/supabase/schema"
 import { assertProjectCanEdit } from "@/lib/project-access"
 import { requireUserUid } from "@/lib/server-auth"
 import { getSupabaseConnection, supabaseManagementFetch } from "@/lib/supabase-management"
-import { encryptEnvVars } from "@/lib/encrypt-env"
 
 export const runtime = "nodejs"
+
+type ProjectFile = { path: string; content: string }
 
 type ProjectRecord = {
   name?: string
   prompt?: string
   workspaceId?: string
-  files?: Array<{ path: string; content: string }>
+  files?: ProjectFile[]
   messages?: Message[]
   generatedSchemaSql?: string
   generatedSchemaTables?: string[]
@@ -29,78 +28,138 @@ type ProjectRecord = {
   generationMeta?: Record<string, unknown>
 }
 
-type SupabaseProject = {
-  id: string
-  name: string
-  ref: string
-  organization_id: string
+type SupabaseProjectRecord = {
+  id?: string
+  ref?: string
+  name?: string
+  region?: string
+  organization_id?: string
+  api_url?: string
+  url?: string
+  api_keys?: Array<{ name?: string; api_key?: string }>
 }
 
-interface AutoSetupResponse {
-  status:
-    | "success"
-    | "oauth_required"
-    | "no_projects"
-    | "project_selection_needed"
-    | "provisioning_failed"
-    | "analyzing"
-  message: string
-  data?: {
-    projects?: SupabaseProject[]
-    schema?: string
-    tables?: string[]
-    filesUpdated?: number
+async function getWorkspaceContext(workspaceId: string) {
+  if (!workspaceId) return ""
+  const wsSnap = await adminDb.collection("workspaces").doc(workspaceId).get()
+  if (!wsSnap.exists) return ""
+  const ws = wsSnap.data() as { aiContextPrompt?: string }
+  return (ws?.aiContextPrompt ?? "").toString().trim()
+}
+
+async function resolveOrganizationId(uid: string, requestedId: string) {
+  if (requestedId) return requestedId
+
+  try {
+    const organizations = await supabaseManagementFetch<Array<{ id: string }>>(uid, "/v1/organizations")
+    const organizationId = organizations[0]?.id || ""
+    if (organizationId) return organizationId
+  } catch {}
+
+  try {
+    const projects = await supabaseManagementFetch<Array<{ organization_id?: string }>>(uid, "/v1/projects")
+    return projects.find((project) => !!project.organization_id)?.organization_id || ""
+  } catch {
+    return ""
   }
 }
 
-/**
- * Ensures support files exist in the project
- */
-function ensureSupportFiles(params: { files: Array<{ path: string; content: string }>; schemaSql: string }) {
-  const next = new Map(params.files.map((file) => [file.path, file]))
+async function fetchProjectCredentials(uid: string, projectRef: string) {
+  const details = await supabaseManagementFetch<SupabaseProjectRecord>(
+    uid,
+    `/v1/projects/${encodeURIComponent(projectRef)}`
+  )
+  const apiKeys = await supabaseManagementFetch<Array<{ api_key?: string; name?: string }>>(
+    uid,
+    `/v1/projects/${encodeURIComponent(projectRef)}/api-keys`
+  )
 
-  if (!next.has(".env.example")) {
-    next.set(".env.example", {
-      path: ".env.example",
-      content: ["VITE_SUPABASE_URL=", "VITE_SUPABASE_ANON_KEY="].join("\n"),
-    })
+  const supabaseUrl = (details?.api_url ?? details?.url ?? `https://${projectRef}.supabase.co`).toString().trim()
+  const supabaseAnonKey = apiKeys.find((key) => (key.name || "").toLowerCase().includes("anon"))?.api_key?.trim() || ""
+  const projectName = (details?.name ?? projectRef).toString().trim()
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    throw new Error("Could not retrieve Supabase project credentials")
   }
 
-  if (params.schemaSql.trim()) {
-    next.set("supabase/migrations/001_initial.sql", {
-      path: "supabase/migrations/001_initial.sql",
-      content: params.schemaSql.trim(),
-    })
+  return {
+    projectRef,
+    projectName,
+    supabaseUrl,
+    supabaseAnonKey,
   }
-
-  return Array.from(next.values())
 }
 
-/**
- * Orchestrates the complete Supabase auto-setup flow:
- * 1. Checks OAuth connection
- * 2. Lists user's Supabase projects
- * 3. Handles project selection/creation
- * 4. Auto-provisions backend (schema + client integration)
- *
- * POST /api/integrations/supabase/auto-setup
- * Body: {
- *   projectId: string
- *   supabaseProjectId?: string (optional, if user pre-selected)
- *   forceSetup?: boolean (skip "not needed" detection)
- * }
- */
-export async function POST(req: Request): Promise<NextResponse<AutoSetupResponse>> {
+async function ensureLinkedSupabaseProject(params: {
+  uid: string
+  projectId: string
+  project: ProjectRecord
+  body: Record<string, unknown>
+}) {
+  const linkedRef = (params.project?.supabaseProjectRef ?? "").toString().trim()
+  if (linkedRef) {
+    const credentials = await fetchProjectCredentials(params.uid, linkedRef)
+    return credentials
+  }
+
+  const requestedRef = (params.body?.supabaseProjectRef ?? params.body?.supabaseProjectId ?? "").toString().trim()
+  if (requestedRef) {
+    return fetchProjectCredentials(params.uid, requestedRef)
+  }
+
+  const createProject = params.body?.createProject === true
+  if (!createProject) {
+    throw new Error("No linked Supabase project. Provide supabaseProjectRef or set createProject=true.")
+  }
+
+  const projectName =
+    (params.body?.projectName ?? params.body?.name ?? params.project?.name ?? "").toString().trim()
+  const region = (params.body?.region ?? "").toString().trim()
+  const dbPassword =
+    (params.body?.dbPassword ?? params.body?.databasePassword ?? "").toString().trim() ||
+    crypto.randomBytes(24).toString("base64url")
+  const organizationId = await resolveOrganizationId(
+    params.uid,
+    (params.body?.organizationId ?? "").toString().trim()
+  )
+
+  if (!projectName || !region) {
+    throw new Error("Missing required fields to create Supabase project: projectName, region")
+  }
+  if (!organizationId) {
+    throw new Error("No Supabase organization found for this account")
+  }
+
+  const created = await supabaseManagementFetch<SupabaseProjectRecord>(params.uid, "/v1/projects", {
+    method: "POST",
+    body: JSON.stringify({
+      name: projectName,
+      region,
+      db_pass: dbPassword,
+      organization_id: organizationId,
+    }),
+  })
+
+  const projectRef = (created?.ref ?? created?.id ?? "").toString().trim()
+  if (!projectRef) {
+    throw new Error("Supabase project was created without a project ref")
+  }
+
+  return fetchProjectCredentials(params.uid, projectRef)
+}
+
+export async function POST(req: Request) {
   try {
     const uid = await requireUserUid(req)
-    const body = await req.json().catch(() => ({}))
-
+    const body = await req.json().catch(() => ({})) as Record<string, unknown>
     const projectId = (body?.projectId ?? "").toString().trim()
+    const userId = (body?.userId ?? "").toString().trim()
+
     if (!projectId) {
-      return NextResponse.json(
-        { status: "provisioning_failed" as const, message: "Missing projectId" },
-        { status: 400 }
-      )
+      return NextResponse.json({ error: "Missing projectId" }, { status: 400 })
+    }
+    if (userId && userId !== uid) {
+      return NextResponse.json({ error: "userId does not match authenticated user" }, { status: 403 })
     }
 
     await assertProjectCanEdit(projectId, uid)
@@ -108,274 +167,124 @@ export async function POST(req: Request): Promise<NextResponse<AutoSetupResponse
     const projectRef = adminDb.collection("projects").doc(projectId)
     const projectSnap = await projectRef.get()
     if (!projectSnap.exists) {
-      return NextResponse.json(
-        { status: "provisioning_failed" as const, message: "Project not found" },
-        { status: 404 }
-      )
+      return NextResponse.json({ error: "Project not found" }, { status: 404 })
     }
 
     const project = projectSnap.data() as ProjectRecord
     const prompt = (project?.prompt ?? "").toString().trim()
     if (!prompt) {
-      return NextResponse.json(
-        { status: "provisioning_failed" as const, message: "Project prompt is missing" },
-        { status: 400 }
-      )
+      return NextResponse.json({ error: "Project prompt is missing" }, { status: 400 })
     }
 
-    // === STEP 1: Check OAuth connection ===
     const connection = await getSupabaseConnection(uid)
     if (!connection) {
-      return NextResponse.json(
-        {
-          status: "oauth_required" as const,
-          message: "Supabase OAuth connection required. Please authorize first.",
-        },
-        { status: 401 }
-      )
+      return NextResponse.json({ error: "Supabase OAuth connection required" }, { status: 401 })
     }
 
-    // === STEP 2: List user's Supabase projects ===
-    let projects: SupabaseProject[] = []
-    try {
-      const projectsRes = await supabaseManagementFetch(uid, "/v1/projects")
-      if (projectsRes.ok) {
-        const data = (await projectsRes.json()) as { data?: SupabaseProject[] }
-        projects = Array.isArray(data?.data) ? data.data : []
-      }
-    } catch (error) {
-      console.error("Failed to fetch Supabase projects:", error)
-      // Don't fail, just continue with empty projects
-    }
-
-    // === STEP 3a: Check if user provided a project ID ===
-    let selectedProjectId = (body?.supabaseProjectId ?? "").toString().trim()
-
-    // === STEP 3b: If no project provided and no projects exist, request creation ===
-    if (!selectedProjectId && projects.length === 0) {
+    if (project?.supabaseProjectRef && project?.supabaseUrl && project?.supabaseAnonKey) {
       return NextResponse.json({
-        status: "no_projects" as const,
-        message: "No Supabase projects found. Create one to continue.",
-        data: { projects: [] },
+        supabaseUrl: project.supabaseUrl,
+        supabaseAnonKey: project.supabaseAnonKey,
+        projectRef: project.supabaseProjectRef,
       })
     }
 
-    // === STEP 3c: If no project provided but projects exist, request selection ===
-    if (!selectedProjectId && projects.length > 0) {
-      return NextResponse.json({
-        status: "project_selection_needed" as const,
-        message: "Select a Supabase project to set up backend.",
-        data: { projects },
-      })
-    }
-
-    // === STEP 3d: Verify selected project exists ===
-    const selectedProject = projects.find((p) => p.id === selectedProjectId || p.ref === selectedProjectId)
-    if (!selectedProject) {
-      return NextResponse.json(
-        {
-          status: "provisioning_failed" as const,
-          message: "Selected Supabase project not found.",
-        },
-        { status: 400 }
-      )
-    }
-
-    const projectRefId = selectedProject.ref
-    const projectName = selectedProject.name
-
-    // === STEP 4: Get project details (URL, anon key) ===
-    let supabaseUrl = ""
-    let supabaseAnonKey = ""
-
-    try {
-      const projectDetailsRes = await supabaseManagementFetch(
-        uid,
-        `/v1/projects/${encodeURIComponent(projectRefId)}`
-      )
-      if (projectDetailsRes.ok) {
-        const details = (await projectDetailsRes.json()) as {
-          project?: {
-            id?: string
-            name?: string
-            api_keys?: Array<{ name?: string; api_key?: string }>
-          }
-        }
-        const projectData = details.project
-        if (projectData?.api_keys) {
-          const anonKeyObj = projectData.api_keys.find((k) => k.name?.includes("anon"))
-          supabaseAnonKey = anonKeyObj?.api_key ?? ""
-        }
-        // Construct URL from project ref
-        supabaseUrl = `https://${projectRefId}.supabase.co`
-      }
-    } catch (error) {
-      console.error("Failed to fetch project details:", error)
-      return NextResponse.json(
-        {
-          status: "provisioning_failed" as const,
-          message: "Failed to fetch Supabase project details.",
-        },
-        { status: 500 }
-      )
-    }
-
-    if (!supabaseUrl || !supabaseAnonKey) {
-      return NextResponse.json(
-        {
-          status: "provisioning_failed" as const,
-          message: "Could not retrieve Supabase credentials.",
-        },
-        { status: 500 }
-      )
-    }
-
-    // === STEP 5: Analyze if provisioning is needed ===
-    const forceSetup = body?.forceSetup === true
     const files = Array.isArray(project?.files) ? project.files : []
     const messages = Array.isArray(project?.messages) ? project.messages : []
-    const generationMeta = project?.generationMeta
-
-    let companyContext = ""
-    const workspaceId = (project?.workspaceId ?? "").toString().trim()
-    if (workspaceId) {
-      const wsSnap = await adminDb.collection("workspaces").doc(workspaceId).get()
-      if (wsSnap.exists) {
-        const ws = wsSnap.data() as { aiContextPrompt?: string }
-        companyContext = (ws?.aiContextPrompt ?? "").toString().trim()
-      }
-    }
+    const companyContext = await getWorkspaceContext((project?.workspaceId ?? "").toString().trim())
 
     const plan = await analyzeSupabaseProvisioningNeed({
       prompt,
       projectName: (project?.name ?? "").toString().trim(),
       messages,
       files,
-      generationMeta,
+      generationMeta: project?.generationMeta,
     })
 
-    // If provisioning not needed and not forced, return early
-    if (!plan.shouldProvision && !forceSetup) {
+    if (!plan?.shouldProvision) {
       await projectRef.set(
         {
-          supabaseProjectRef: projectRefId,
-          supabaseProjectName: projectName,
-          supabaseUrl,
-          supabaseAnonKey,
-          supabaseProvisioningStatus: "not-needed",
-          supabaseProvisioningReason: plan.reason,
-          supabaseProvisionedAt: new Date(),
+          supabaseProvisioningStatus: "skipped",
+          supabaseProvisioningReason: plan?.reason || "Backend not required",
+          supabaseProvisionedAt: null,
         },
         { merge: true }
       )
 
       return NextResponse.json({
-        status: "success" as const,
-        message: `Project linked but provisioning not needed: ${plan.reason}`,
-        data: { filesUpdated: 0 },
+        supabaseUrl: "",
+        supabaseAnonKey: "",
+        projectRef: "",
       })
     }
 
-    // === STEP 6: Generate PostgreSQL schema (if needed) ===
-    const schemaSql =
+    const linkedProject = await ensureLinkedSupabaseProject({
+      uid,
+      projectId,
+      project,
+      body,
+    })
+
+    const schemaResult =
       typeof project?.generatedSchemaSql === "string" && project.generatedSchemaSql.trim()
-        ? project.generatedSchemaSql.trim()
-        : plan.needsSchema
-          ? (
-              await generatePostgresSchema({
-                appPrompt: prompt,
-                projectName: (project?.name ?? "").toString().trim(),
-                companyContext,
-                existingFiles: files,
-                conversationMessages: messages.map((message) => `${message.role}: ${message.content}`),
-                setupReason: plan.reason,
-              })
-            ).sql
-          : ""
+        ? {
+            sql: project.generatedSchemaSql.trim(),
+            tables: Array.isArray(project?.generatedSchemaTables) ? project.generatedSchemaTables : extractSqlTables(project.generatedSchemaSql),
+          }
+        : await generatePostgresSchema({
+            appPrompt: prompt,
+            projectName: (project?.name ?? "").toString().trim(),
+            companyContext,
+            existingFiles: files,
+            conversationMessages: messages.map((message) => `${message.role}: ${message.content}`),
+            setupReason: plan.reason,
+          })
 
-    // === STEP 7: Push schema to Supabase ===
-    if (schemaSql) {
+    let schemaPushStatus = "skipped"
+    let schemaPushError = ""
+
+    if (schemaResult.sql.trim()) {
       try {
-        await supabaseManagementFetch(uid, `/v1/projects/${encodeURIComponent(projectRefId)}/database/query`, {
+        await supabaseManagementFetch(uid, `/v1/projects/${encodeURIComponent(linkedProject.projectRef)}/database/query`, {
           method: "POST",
-          body: JSON.stringify({ query: schemaSql }),
+          body: JSON.stringify({ query: schemaResult.sql }),
         })
-      } catch (error) {
-        console.error("Failed to push schema to Supabase:", error)
-        return NextResponse.json(
-          {
-            status: "provisioning_failed" as const,
-            message: "Failed to apply database schema.",
-          },
-          { status: 500 }
-        )
+        schemaPushStatus = "success"
+      } catch (err) {
+        schemaPushStatus = "failed"
+        schemaPushError = err instanceof Error ? err.message : "Unknown schema push error"
+        throw err
       }
     }
 
-    // === STEP 8: Generate client integration (if needed) ===
-    let nextFiles = files
-    if (plan.needsClientIntegration) {
-      try {
-        const updates = await generateSupabaseIntegrationUpdates({
-          prompt,
-          projectName: (project?.name ?? "").toString().trim(),
-          messages,
-          files,
-          schemaSql,
-          supabaseUrl,
-          anonKeyPresent: Boolean(supabaseAnonKey),
-          setupReason: plan.reason,
-        })
-
-        if (updates.length > 0) {
-          nextFiles = mergeProjectFiles(files, updates)
-        }
-      } catch (error) {
-        console.error("Failed to generate client integration:", error)
-        // Don't fail hard, just skip client integration
-      }
-    }
-
-    // === STEP 9: Ensure support files ===
-    nextFiles = ensureSupportFiles({ files: nextFiles, schemaSql })
-
-    // === STEP 10: Encrypt and store env vars ===
-    const { encrypted } = encryptEnvVars(
-      JSON.stringify({
-        VITE_SUPABASE_URL: supabaseUrl,
-        VITE_SUPABASE_ANON_KEY: supabaseAnonKey,
-      })
-    )
-
-    // === STEP 11: Link project and store credentials ===
     await adminDb.collection("supabaseLinks").doc(projectId).set(
       {
-        projectId,
-        supabaseProjectRef: projectRefId,
-        supabaseProjectName: projectName,
-        supabaseUrl,
-        supabaseAnonKey,
+        id: projectId,
+        userId: uid,
+        builderProjectId: projectId,
+        supabaseProjectRef: linkedProject.projectRef,
+        supabaseProjectName: linkedProject.projectName,
+        supabaseUrl: linkedProject.supabaseUrl,
+        supabaseAnonKey: linkedProject.supabaseAnonKey,
         oauthTokenId: uid,
-        linkedAt: new Date(),
+        updatedAt: new Date(),
+        ...(project?.supabaseProjectRef ? {} : { createdAt: new Date() }),
       },
       { merge: true }
     )
 
-    // === STEP 12: Update project with provisioning results ===
     await projectRef.set(
       {
-        files: nextFiles,
-        generatedSchemaSql: schemaSql || project?.generatedSchemaSql || "",
-        generatedSchemaTables: Array.isArray(project?.generatedSchemaTables) ? project.generatedSchemaTables : [],
-        schemaPushedAt: schemaSql ? new Date() : null,
-        schemaPushStatus: schemaSql ? "success" : "skipped",
-        envVarsEncrypted: encrypted,
-        envVarNames: ["VITE_SUPABASE_URL", "VITE_SUPABASE_ANON_KEY"],
-        envVarsUpdatedAt: new Date(),
-        supabaseProjectRef: projectRefId,
-        supabaseProjectName: projectName,
-        supabaseUrl,
-        supabaseAnonKey,
+        generatedSchemaSql: schemaResult.sql,
+        generatedSchemaTables: schemaResult.tables,
+        generatedSchemaUpdatedAt: new Date(),
+        schemaPushedAt: schemaResult.sql.trim() ? new Date() : null,
+        schemaPushStatus,
+        schemaPushError: schemaPushError || null,
+        supabaseProjectRef: linkedProject.projectRef,
+        supabaseProjectName: linkedProject.projectName,
+        supabaseUrl: linkedProject.supabaseUrl,
+        supabaseAnonKey: linkedProject.supabaseAnonKey,
         supabaseProvisioningStatus: "success",
         supabaseProvisioningReason: plan.reason,
         supabaseProvisionedAt: new Date(),
@@ -384,23 +293,20 @@ export async function POST(req: Request): Promise<NextResponse<AutoSetupResponse
     )
 
     return NextResponse.json({
-      status: "success" as const,
-      message: "Supabase backend successfully set up and connected.",
-      data: {
-        schema: schemaSql ? "Schema generated and applied" : "No schema needed",
-        tables: [],
-        filesUpdated: nextFiles.length,
-      },
+      supabaseUrl: linkedProject.supabaseUrl,
+      supabaseAnonKey: linkedProject.supabaseAnonKey,
+      projectRef: linkedProject.projectRef,
     })
-  } catch (error) {
-    console.error("Auto-setup error:", error)
-    const message = error instanceof Error ? error.message : "Unknown error occurred"
-    return NextResponse.json(
-      {
-        status: "provisioning_failed" as const,
-        message: `Setup failed: ${message}`,
-      },
-      { status: 500 }
-    )
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Failed to auto-setup Supabase"
+    const status =
+      message.includes("Forbidden") ? 403 :
+      message.includes("not found") ? 404 :
+      message.includes("OAuth") || message.includes("connected") ? 401 :
+      message.includes("Missing") || message.includes("Provide") ? 400 :
+      message.includes("organization") ? 400 :
+      500
+
+    return NextResponse.json({ error: message }, { status })
   }
 }
