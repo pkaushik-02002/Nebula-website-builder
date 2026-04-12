@@ -710,8 +710,7 @@ async function streamWithResolvedProvider(params: {
         ],
         max_tokens: 8000,
         stream_options: { include_usage: true } as any,
-        signal: controllerAbort.signal,
-      })
+      }, { signal: controllerAbort.signal })
       clearTimeout(timeoutId)
       return completion
     } catch (err: any) {
@@ -836,6 +835,7 @@ export async function POST(req: Request) {
     existingFiles?: { path: string; content: string }[]
     creationMode?: "build" | "agent"
     agentSlug?: string
+    cloneContext?: { title: string; description: string; markdown: string; sourceUrl: string }
   } | null
   if (!body || typeof body !== "object") {
     return Response.json({ error: "Invalid JSON body" }, { status: 400 })
@@ -962,6 +962,27 @@ export async function POST(req: Request) {
   }
 
   const systemPromptFollowUp = `You are an expert React developer. The user is asking for CHANGES or ADDITIONS to an existing project. You will receive the current project files.
+
+INTENT CLASSIFICATION (do this first, silently):
+Classify the user request into one of:
+- STYLE: color, font, spacing, animation, visual tweak → max 1-2 files
+- CONTENT: text, copy, labels, images → max 1-2 files
+- COMPONENT: add/remove/modify a single UI section → max 3 files
+- FEATURE: new functionality, state, logic → touch only affected files
+- PAGE: new route/page → only new files + App.tsx routing
+- REFACTOR: restructure existing code → affected files only
+
+SCOPE RULES based on classification:
+- STYLE/CONTENT: return ONLY the single file containing that element. Never touch package.json, vite.config.ts, or unrelated components.
+- COMPONENT: return only the component file + its direct parent if wiring is needed.
+- FEATURE: return only files that need new imports, state, or logic. Do not rewrite files that only need 1-2 line changes — use diffs instead.
+- PAGE/REFACTOR: still do not rewrite unchanged files.
+
+HARD RULES:
+- Never rewrite a file just to "clean it up"
+- Never return package.json unless a new dependency is genuinely needed
+- If a file needs fewer than 5 line changes, use unified diff format not full file
+- If you are about to return more than 4 files for a STYLE or CONTENT request, stop and reconsider
 
 UI STANDARD: When adding or changing UI, keep it modern and polished—distinctive typography, intentional colors, generous spacing, subtle motion (Framer Motion). Avoid generic "AI slop" aesthetics. Match or elevate the existing design language.
 
@@ -1095,9 +1116,13 @@ OPEN-SOURCE MODEL RELIABILITY RULES (MANDATORY):
     : systemPrompt
 
   // Build user message: for follow-up include current files so the model can edit them
+  const clonePrefix = body.cloneContext
+    ? `REFERENCE SITE TO CLONE:\nURL: ${body.cloneContext.sourceUrl}\nTitle: ${body.cloneContext.title}\nDescription: ${body.cloneContext.description}\n\nSite content:\n${body.cloneContext.markdown}\n\nUse the above as the content and structural reference. Recreate it as a modern React app matching the layout, sections, copy, and visual hierarchy. Do not copy CSS — rebuild with Tailwind.\n\n`
+    : ""
+
   const userMessageContent = isFollowUp
-    ? buildFollowUpUserMessage(prompt, promptFiles)
-    : `Create a Vite + React + TypeScript application: ${prompt}`
+    ? buildFollowUpUserMessage(clonePrefix + prompt, promptFiles)
+    : `Create a Vite + React + TypeScript application: ${clonePrefix}${prompt}`
 
   const encoder = new TextEncoder()
   const streamState: StreamState = {

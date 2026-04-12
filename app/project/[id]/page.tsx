@@ -93,6 +93,7 @@ import { generateDynamicTimeline } from "@/lib/generate-agent-timeline"
 import { ProjectErrorBoundary, ChatMessage, ResponsivePreview, BrowserNavigator, ProjectCreationStudio, AgentTimelinePanel } from "@/components/project"
 import type { AgentTimelineItem } from "@/components/project/agent-timeline-panel"
 import { DynamicAgentTimeline } from "@/components/project/dynamic-agent-timeline"
+import { useTypewriter } from "@/components/project/useTypewriter"
 import type { ThinkingStep } from "@/components/project/agent-thinking-stream"
 import { completeThinkingStep } from "@/lib/extract-thinking-steps"
 import { WebsiteSettingsPanel } from "@/components/project/website-settings-panel"
@@ -158,6 +159,9 @@ function ProjectContent() {
   const [currentGeneratingFile, setCurrentGeneratingFile] = useState<string | null>(null)
   const [isSandboxLoading, setIsSandboxLoading] = useState(false)
   const [agentStatus, setAgentStatus] = useState("")
+  const displayedStatus = useTypewriter(agentStatus || "")
+  const lastAssistantMsg = project?.messages?.filter(m => m.role === "assistant").at(-1)?.content ?? ""
+  const displayedLastMsg = useTypewriter(lastAssistantMsg, 18, isGenerating)
   const [backendOrchestrationStage, setBackendOrchestrationStage] = useState<BackendOrchestrationStage>("idle")
   const [reasoningSteps, setReasoningSteps] = useState<string[]>([])
   const [thinkingSteps, setThinkingSteps] = useState<ThinkingStep[]>([])
@@ -1954,7 +1958,7 @@ function ProjectContent() {
     return files
   }
 
-  const generateCode = async (prompt: string, model?: string) => {
+  const generateCode = async (prompt: string, model?: string, cloneContext?: { title: string; description: string; markdown: string; sourceUrl: string }) => {
     if (!project) return
     if (isBuildTokenBlocked) {
       setTokenLimitModalOpen(true)
@@ -2121,12 +2125,14 @@ function ProjectContent() {
         existingFiles?: { path: string; content: string }[]
         creationMode?: "build" | "agent"
         agentSlug?: string
+        cloneContext?: { title: string; description: string; markdown: string; sourceUrl: string }
       } = {
         prompt: generationPrompt,
         model: model || "GPT-4-1 Mini",
         idToken,
         creationMode: project.creationMode || "build",
         agentSlug: project.creationMode === "agent" ? project.agentSlug : undefined,
+        ...(cloneContext ? { cloneContext } : {}),
       }
       if (project.files && project.files.length > 0) {
         body.existingFiles = project.files
@@ -2859,8 +2865,27 @@ function ProjectContent() {
       ]
     })
 
+    const urlRegex = /https?:\/\/[^\s]+/
+    const detectedUrl = urlRegex.exec(nextMessage)?.[0] ?? null
+    let cloneContext: { title: string; description: string; markdown: string; sourceUrl: string } | undefined
+
+    if (detectedUrl) {
+      toast({ title: "Fetching site...", description: detectedUrl })
+      const idToken = await user?.getIdToken()
+      if (idToken) {
+        const cloneRes = await fetch("/api/clone", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: detectedUrl, idToken }),
+        })
+        if (cloneRes.ok) {
+          cloneContext = await cloneRes.json()
+        }
+      }
+    }
+
     const fullPrompt = `Original request: ${project.prompt}\n\nUser wants these modifications: ${userMessage}`
-    await generateCode(fullPrompt, submittedModel || project.model)
+    await generateCode(fullPrompt, submittedModel || project.model, cloneContext)
     setSelectedElementDescription(null)
     setSelectedElementCount(0)
     setEditingContextLabel(null)
@@ -3515,7 +3540,7 @@ function ProjectContent() {
           visualEditActive ? "lg:grid-cols-12" : "lg:grid-cols-10"
         )}>
           <section className={cn(
-            "flex min-h-[52vh] flex-col overflow-hidden rounded-[1.9rem] border border-[#e2ddd3] bg-[rgba(255,255,255,0.92)] shadow-[0_24px_80px_-62px_rgba(24,24,27,0.38)] lg:min-h-0",
+            "flex min-h-[52vh] flex-col overflow-hidden rounded-[1.9rem] border border-zinc-200 bg-white lg:min-h-0",
             visualEditActive ? "lg:col-span-4" : "lg:col-span-3",
             mobileTab !== "chat" && "hidden lg:flex"
           )}>
@@ -3846,77 +3871,82 @@ function ProjectContent() {
               </>
             ) : (
               <>
-            <div className="h-[32vh] min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 sm:h-[38vh] sm:px-5 sm:py-5 lg:h-auto">
-              <div className="group mr-auto max-w-[90%]">
-                {editingTarget?.kind === "prompt" ? (
-                  <div className="rounded-2xl border border-zinc-200 bg-white px-3 py-3 text-zinc-900">
-                    <textarea
-                      value={editingDraft}
-                      onChange={(e) => setEditingDraft(e.target.value)}
-                      className="w-full resize-none bg-transparent text-sm text-zinc-900 outline-none"
-                      rows={3}
-                      autoFocus
-                    />
-                    <div className="mt-2 flex justify-end gap-2">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        className="h-8 border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
-                        onClick={handleCancelEdit}
-                      >
-                        Cancel
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        className="h-8 bg-zinc-900 text-white hover:bg-black"
-                        onClick={() => handleEditSubmit(editingDraft)}
-                        disabled={!editingDraft.trim()}
-                      >
-                        Save
-                      </Button>
-                    </div>
+            <div className="h-[32vh] min-h-0 flex-1 flex flex-col gap-6 overflow-y-auto px-5 py-6 sm:h-[38vh] lg:h-auto">
+              <div className="group flex justify-end">
+                <div className="max-w-[85%]">
+                  <div className="mb-1 px-1">
+                    <span className="text-[11px] font-medium text-zinc-400">You</span>
                   </div>
-                ) : (
-                  <>
-                    <div className="relative rounded-2xl bg-zinc-100 px-4 py-3 text-sm leading-relaxed text-zinc-800">
-                      {project.prompt}
-                      {canEdit && (
-                        <div className="absolute right-2 top-2 flex items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              try {
-                                await navigator.clipboard.writeText(project.prompt || "")
-                                toast({ title: "Copied", description: "Prompt copied to clipboard." })
-                              } catch {
-                                toast({ title: "Copy failed", description: "Could not copy prompt.", variant: "destructive" })
-                              }
-                            }}
-                            className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-zinc-200 bg-white/90 text-zinc-600 transition-colors hover:bg-white hover:text-zinc-900"
-                            aria-label="Copy prompt"
-                            title="Copy"
-                          >
-                            <Copy className="h-3 w-3" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditingTarget({ kind: "prompt" })
-                              setEditingDraft(project.prompt || "")
-                            }}
-                            className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-zinc-200 bg-white/90 text-zinc-600 transition-colors hover:bg-white hover:text-zinc-900"
-                            aria-label="Edit prompt"
-                            title="Edit"
-                          >
-                            <Edit2 className="h-3 w-3" />
-                          </button>
-                        </div>
-                      )}
+                  {editingTarget?.kind === "prompt" ? (
+                    <div className="rounded-2xl border border-zinc-200 bg-white px-3 py-3 text-zinc-900">
+                      <textarea
+                        value={editingDraft}
+                        onChange={(e) => setEditingDraft(e.target.value)}
+                        className="w-full resize-none bg-transparent text-sm text-zinc-900 outline-none"
+                        rows={3}
+                        autoFocus
+                      />
+                      <div className="mt-2 flex justify-end gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="h-8 border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
+                          onClick={handleCancelEdit}
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="h-8 bg-zinc-900 text-white hover:bg-black"
+                          onClick={() => handleEditSubmit(editingDraft)}
+                          disabled={!editingDraft.trim()}
+                        >
+                          Save
+                        </Button>
+                      </div>
                     </div>
-                  </>
-                )}
+                  ) : (
+                    <>
+                      <div className="relative rounded-2xl bg-[#f4f4f4] px-4 py-3 text-sm leading-relaxed text-zinc-900">
+                        {project.prompt}
+                        {canEdit && (
+                          <div className="absolute right-2 top-2 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                try {
+                                  await navigator.clipboard.writeText(project.prompt || "")
+                                  toast({ title: "Copied", description: "Prompt copied to clipboard." })
+                                } catch {
+                                  toast({ title: "Copy failed", description: "Could not copy prompt.", variant: "destructive" })
+                                }
+                              }}
+                              className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-zinc-200 bg-white/90 text-zinc-600 transition-colors hover:bg-white hover:text-zinc-900"
+                              aria-label="Copy prompt"
+                              title="Copy"
+                            >
+                              <Copy className="h-3 w-3" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingTarget({ kind: "prompt" })
+                                setEditingDraft(project.prompt || "")
+                              }}
+                              className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-zinc-200 bg-white/90 text-zinc-600 transition-colors hover:bg-white hover:text-zinc-900"
+                              aria-label="Edit prompt"
+                              title="Edit"
+                            >
+                              <Edit2 className="h-3 w-3" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
               </div>
               {project.messages?.map((msg, i) => {
                 const isUserMessage = msg.role === "user"
@@ -3925,17 +3955,11 @@ function ProjectContent() {
                 return (
                   <div
                     key={i}
-                    className={cn("group flex gap-3", isUserMessage ? "justify-end" : "justify-start")}
+                    className={cn("group flex", isUserMessage ? "justify-end" : "justify-start")}
                   >
-                    {!isUserMessage ? (
-                      <div className="mt-1 hidden h-9 w-9 shrink-0 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-700 sm:flex">
-                        <Bot className="h-4 w-4" />
-                      </div>
-                    ) : null}
-
-                    <div className="max-w-[92%] sm:max-w-[82%]">
-                      <div className={cn("mb-1.5 flex items-center gap-2 px-1", isUserMessage ? "justify-end" : "justify-start")}>
-                        <span className="text-[11px] font-medium text-zinc-500">
+                    <div className={isUserMessage ? "max-w-[85%]" : "w-full"}>
+                      <div className="mb-1 flex items-center px-1">
+                        <span className="text-[11px] font-medium text-zinc-400">
                           {isUserMessage ? "You" : "BuildKit"}
                         </span>
                       </div>
@@ -3973,13 +3997,13 @@ function ProjectContent() {
                       ) : (
                         <div
                           className={cn(
-                            "relative px-4 py-3 text-sm leading-7 transition-colors sm:px-5 sm:py-4",
+                            "relative text-sm leading-7 transition-colors",
                             isUserMessage
-                              ? "rounded-[2rem] bg-[#1f1f1f] text-white"
-                              : "rounded-[2rem] border border-[#ebe3d7] bg-[#f5f1ea] text-zinc-800"
+                              ? "rounded-2xl bg-[#f4f4f4] px-4 py-3 text-zinc-900"
+                              : "px-1 text-zinc-800"
                           )}
                         >
-                          <p className="whitespace-pre-wrap">{msg.content}</p>
+                          <p className="whitespace-pre-wrap">{(!isUserMessage && isGenerating && i === (project.messages?.length ?? 0) - 1) ? displayedLastMsg : msg.content}</p>
 
                           {isUserMessage && canEdit && (
                             <div className="absolute right-3 top-3 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
@@ -3993,7 +4017,7 @@ function ProjectContent() {
                                     toast({ title: "Copy failed", description: "Could not copy message.", variant: "destructive" })
                                   }
                                 }}
-                                className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/15 bg-white/10 text-white/80 transition-colors hover:bg-white/20 hover:text-white"
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-zinc-200 bg-white/80 text-zinc-500 transition-colors hover:bg-white hover:text-zinc-900"
                                 aria-label="Copy message"
                                 title="Copy"
                               >
@@ -4005,7 +4029,7 @@ function ProjectContent() {
                                   setEditingTarget({ kind: "message", index: i })
                                   setEditingDraft(msg.content)
                                 }}
-                                className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/15 bg-white/10 text-white/80 transition-colors hover:bg-white/20 hover:text-white"
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-zinc-200 bg-white/80 text-zinc-500 transition-colors hover:bg-white hover:text-zinc-900"
                                 aria-label="Edit message"
                                 title="Edit"
                               >
@@ -4017,11 +4041,6 @@ function ProjectContent() {
                       )}
                     </div>
 
-                    {isUserMessage ? (
-                      <div className="mt-1 hidden h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#1f1f1f] text-white sm:flex">
-                        <User className="h-4 w-4" />
-                      </div>
-                    ) : null}
                   </div>
                 )
               })}
@@ -4042,7 +4061,7 @@ function ProjectContent() {
                               The agent is shaping, implementing, and validating this update
                             </p>
                             <TextShimmer className="text-sm text-zinc-600">
-                              {agentStatus || "Preparing the next implementation step"}
+                              {displayedStatus || "Preparing the next implementation step"}
                             </TextShimmer>
                           </div>
                         </div>
@@ -4085,7 +4104,7 @@ function ProjectContent() {
                       type="button"
                       onClick={() => handleSendMessage(chip)}
                       disabled={!canEdit || isGenerating || isBuildTokenBlocked}
-                      className="whitespace-nowrap rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs text-zinc-700 transition-colors hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="whitespace-nowrap rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-600 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {chip}
                     </button>

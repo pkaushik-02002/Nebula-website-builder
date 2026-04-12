@@ -1,39 +1,40 @@
 "use client"
 
+import { useEffect, useRef } from "react"
+import { motion, AnimatePresence } from "framer-motion"
 import { AgentTimelineItem } from "@/components/project/agent-timeline-panel"
 import {
-  AgentThinkingStream,
   ThinkingStep,
 } from "@/components/project/agent-thinking-stream"
 import { TextShimmer } from "@/components/prompt-kit/text-shimmer"
 import { cn } from "@/lib/utils"
-import { Check, Zap } from "lucide-react"
+import { Check } from "lucide-react"
 
 interface DynamicAgentTimelineProps {
   /** Timeline steps (overall progress) */
   timelineSteps: AgentTimelineItem[]
-  
+
   /** Real-time thinking/reasoning steps */
   thinkingSteps: ThinkingStep[]
-  
+
   /** Currently generating file path */
   currentGeneratingFile: string | null
-  
+
   /** Number of files touched/generated */
   generatedFileCount: number
-  
+
   /** Is actively streaming */
   isStreaming: boolean
-  
+
   /** Agent status text (what it's doing now) */
   agentStatus?: string
-  
+
   /** "agent" | "build" - differentiates display style */
   mode?: "agent" | "build"
-  
+
   /** Show reasoning/thinking panel */
   showThinking?: boolean
-  
+
   className?: string
 }
 
@@ -61,8 +62,9 @@ function LiveIndicator() {
 }
 
 /**
- * Dynamic Agent Timeline - Shows both high-level progress and real-time thinking
- * Like Claude Artifacts but for agent mode - displays the agent's reasoning alongside execution
+ * Dynamic Agent Timeline — Cursor-style live log stream.
+ * Steps render as a flowing terminal log, not boxed cards.
+ * Agent thinking is inlined as a subtitle under the active step (no separate panel).
  */
 export function DynamicAgentTimeline({
   timelineSteps,
@@ -75,204 +77,115 @@ export function DynamicAgentTimeline({
   showThinking = true,
   className,
 }: DynamicAgentTimelineProps) {
-  const { activeStep, currentCount, total, progress } = getTimelineSummary(timelineSteps)
-  const pct = Math.round(progress * 100)
+  const { currentCount, total } = getTimelineSummary(timelineSteps)
   const activeThinkingStep = thinkingSteps.find((s) => s.status === "active")
+  const containerRef = useRef<HTMLDivElement>(null)
 
-  if (mode === "agent" && showThinking) {
-    // AGENT MODE: Two-panel layout - thinking + timeline
-    return (
-      <div className={cn("space-y-3", className)}>
-        {/* Thinking Stream - Primary focus for agent mode */}
-        <AgentThinkingStream
-          steps={thinkingSteps}
-          isStreaming={isStreaming}
-          currentPhase={activeThinkingStep?.phase}
-          expandedView={true}
-        />
+  // Auto-scroll to the latest active step
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+    const activeEl = container.querySelector("[data-active='true']")
+    if (activeEl) {
+      activeEl.scrollIntoView({ behavior: "smooth", block: "nearest" })
+    }
+  }, [timelineSteps, thinkingSteps, currentGeneratingFile])
 
-        {/* Agent Execution Timeline - Secondary view */}
-        <div className="overflow-hidden rounded-xl border border-[#e7dfd2] bg-white shadow-sm">
-          {/* Header */}
-          <div className="border-b border-[#eee6da] bg-[#f8f5ef] px-4 py-3">
-            <div className="flex items-center justify-between mb-2.5">
-              <div className="flex items-center gap-2">
-                <Zap className="h-4 w-4 text-zinc-600" />
-                <span className="text-sm font-semibold text-zinc-900">
-                  Execution Progress
-                </span>
-              </div>
-              {isStreaming && <LiveIndicator />}
-            </div>
-
-            {/* Current task */}
-            {activeStep && (
-              <div className="mb-2.5">
-                <TextShimmer className="bg-gradient-to-r from-zinc-900 via-zinc-500 to-zinc-900 text-sm font-semibold">
-                  {activeStep.title}
-                </TextShimmer>
-                {currentGeneratingFile && (
-                  <p className="text-xs text-zinc-500 font-mono mt-1">
-                    {currentGeneratingFile}
-                  </p>
-                )}
-              </div>
-            )}
-
-            {/* Progress bar */}
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-zinc-500 font-medium">Execution</span>
-                <span className="text-xs font-mono text-zinc-400">
-                  {currentCount} / {total}
-                </span>
-              </div>
-              <div className="h-1.5 w-full bg-zinc-200 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-zinc-900 transition-all duration-500"
-                  style={{ width: `${pct}%` }}
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Files counter */}
-          <div className="flex items-center justify-between border-t border-[#eee6da] bg-[#faf8f4] px-4 py-2.5 text-xs">
-            <span className="text-zinc-600">Files touched</span>
-            <span className="font-semibold text-zinc-900">{generatedFileCount}</span>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  // BUILD MODE: Single unified timeline (traditional view)
   return (
-    <div className={cn("overflow-hidden rounded-xl border border-[#e7dfd2] bg-white shadow-sm", className)}>
-      {/* Header */}
-      <div className="border-b border-[#eee6da] bg-[#f8f5ef] px-4 py-3">
-        <div className="flex items-center justify-between mb-2.5">
-          <span className="text-sm font-semibold text-zinc-900">Build Progress</span>
-          {isStreaming && <LiveIndicator />}
-        </div>
+    <div className={cn("overflow-hidden rounded-xl border border-[#e7dfd2] bg-white", className)}>
+      {/* Header — LiveIndicator + "Step X of Y", no progress bar */}
+      <div className="flex items-center justify-between border-b border-[#eee6da] bg-[#f8f5ef] px-4 py-2.5">
+        {isStreaming ? (
+          <LiveIndicator />
+        ) : (
+          <span className="text-xs font-medium text-zinc-500">Complete</span>
+        )}
+        <span className="font-mono text-xs text-zinc-500">
+          Step {currentCount} of {total}
+        </span>
+      </div>
 
-        {/* Current step */}
-        {activeStep && (
-          <div className="mb-2.5">
-            <TextShimmer className="bg-gradient-to-r from-zinc-950 via-zinc-500 to-zinc-950 text-sm font-semibold">
-              {activeStep.title}
-            </TextShimmer>
-            {currentGeneratingFile && (
-              <p className="text-xs text-zinc-500 font-mono mt-1">{currentGeneratingFile}</p>
-            )}
-          </div>
+      {/* Log stream — flowing vertical list, no boxed cards */}
+      <div ref={containerRef} className="relative max-h-72 overflow-y-auto px-4 py-3">
+        {/* Thin vertical connector line (git-log style) */}
+        {timelineSteps.length > 0 && (
+          <div className="pointer-events-none absolute inset-y-3 left-[22px] w-px bg-zinc-100" />
         )}
 
-        {/* Progress */}
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-zinc-500 font-medium">Progress</span>
-            <span className="text-xs font-mono text-zinc-400">
-              {currentCount} / {total}
-            </span>
-          </div>
-          <div className="h-1.5 w-full bg-zinc-200 rounded-full overflow-hidden">
-            <div
-              className="h-full bg-zinc-900 transition-all duration-700 ease-out"
-              style={{ width: `${pct}%` }}
-            />
-          </div>
-        </div>
-      </div>
+        <AnimatePresence initial={false}>
+          {timelineSteps.map((step) => {
+            const isComplete = step.status === "complete"
+            const isActive = step.status === "active"
+            const isPending = step.status === "pending"
 
-      {/* Timeline steps */}
-      <div className="px-4 py-3 space-y-2 max-h-64 overflow-y-auto">
-        {timelineSteps.map((step, idx) => {
-          const isComplete = step.status === "complete"
-          const isActive = step.status === "active"
-          const isPending = step.status === "pending"
-
-          return (
-            <div key={step.key} className="relative flex gap-2.5">
-              {/* Connecting line */}
-              {idx < timelineSteps.length - 1 && (
-                <div
-                  className={cn(
-                    "absolute left-[10px] top-[26px] w-px h-6",
-                    isComplete ? "bg-zinc-300" : "bg-zinc-100"
-                  )}
-                />
-              )}
-
-              {/* Marker */}
-              <div className="relative z-10 flex shrink-0 flex-col items-center pt-[3px]">
-                {isComplete && (
-                  <div className="flex h-5 w-5 items-center justify-center rounded-full bg-zinc-700">
-                    <Check className="h-2.5 w-2.5 stroke-[3] text-white" />
-                  </div>
-                )}
-
-                {isActive && (
-                  <div className="relative flex h-5 w-5 items-center justify-center rounded-full border-2 border-zinc-900 bg-zinc-900">
-                    <span className="absolute inset-[-4px] animate-ping rounded-full border border-zinc-900/20" />
-                    <span className="relative z-10 h-1.5 w-1.5 rounded-full bg-white" />
-                  </div>
-                )}
-
-                {isPending && (
-                  <div className="mt-[7px] h-2 w-2 rounded-full border-[1.5px] border-zinc-300 bg-white" />
-                )}
-              </div>
-
-              {/* Step card */}
-              <div
-                className={cn(
-                  "mb-2 min-w-0 flex-1 rounded-lg border px-3 py-2.5 transition-all duration-200",
-                  isComplete && "border-zinc-200 bg-[#f5f3ef]",
-                  isActive && "border-zinc-200 bg-white shadow-md",
-                  isPending && "border-zinc-100 bg-zinc-50/60 opacity-55"
-                )}
+            return (
+              <motion.div
+                key={step.key}
+                data-active={isActive ? "true" : undefined}
+                initial={{ opacity: 0, y: 5 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.18, ease: "easeOut" }}
+                className={cn("py-[5px]", isPending && "opacity-35")}
               >
-                {/* Title */}
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0 flex-1">
-                    {isActive ? (
-                      <TextShimmer className="bg-gradient-to-r from-zinc-950 via-zinc-500 to-zinc-950 text-sm font-semibold">
-                        {step.title}
-                      </TextShimmer>
-                    ) : (
-                      <p
-                        className={cn(
-                          "text-sm font-semibold",
-                          isComplete ? "text-zinc-800" : "text-zinc-400"
-                        )}
-                      >
-                        {step.title}
-                      </p>
+                {/* Single-line row: dot + label */}
+                <div className="flex items-center gap-2.5">
+                  {/* Dot/icon — sits over the connector line */}
+                  <div className="relative z-10 flex h-3 w-3 shrink-0 items-center justify-center bg-white">
+                    {isComplete && (
+                      <Check className="h-3 w-3 stroke-[2.5] text-zinc-400" />
                     )}
+                    {isActive && (
+                      <span className="relative flex h-2 w-2">
+                        <span className="absolute inset-0 animate-ping rounded-full bg-zinc-600 opacity-50" />
+                        <span className="relative h-2 w-2 rounded-full bg-zinc-900" />
+                      </span>
+                    )}
+                    {/* pending: empty column for alignment, no icon */}
                   </div>
 
-                  {isComplete && (
-                    <span className="shrink-0 rounded text-xs font-bold uppercase text-zinc-700">
-                      Done
-                    </span>
+                  {/* Label */}
+                  {isActive ? (
+                    <TextShimmer className="text-sm font-medium bg-gradient-to-r from-zinc-900 via-zinc-500 to-zinc-900">
+                      {step.title}
+                    </TextShimmer>
+                  ) : isComplete ? (
+                    <span className="text-sm text-zinc-400">{step.title}</span>
+                  ) : (
+                    <span className="text-sm text-zinc-300">{step.title}</span>
                   )}
                 </div>
 
-                {/* Description */}
-                {step.description && (
-                  <p className="mt-1 text-xs text-zinc-500">{step.description}</p>
+                {/* Extras under active step only */}
+                {isActive && (
+                  <div className="ml-[22px] mt-0.5 space-y-0.5">
+                    {/* Inline thinking phase — no separate AgentThinkingStream panel */}
+                    {mode === "agent" && showThinking && activeThinkingStep && (
+                      <p className="text-xs italic text-zinc-400">
+                        {activeThinkingStep.title}
+                        {activeThinkingStep.phase
+                          ? ` — ${activeThinkingStep.phase}`
+                          : ""}
+                      </p>
+                    )}
+                    {/* File being written */}
+                    {currentGeneratingFile && (
+                      <p className="font-mono text-xs text-zinc-500">
+                        → {currentGeneratingFile}
+                      </p>
+                    )}
+                  </div>
                 )}
-              </div>
-            </div>
-          )
-        })}
+              </motion.div>
+            )
+          })}
+        </AnimatePresence>
       </div>
 
-      {/* Files counter */}
-      <div className="flex items-center justify-between border-t border-[#eee6da] bg-[#faf8f4] px-4 py-2.5 text-xs">
-        <span className="text-zinc-600">Files touched</span>
-        <span className="font-semibold text-zinc-900">{generatedFileCount}</span>
+      {/* Files counter — monospace, like a terminal output line */}
+      <div className="border-t border-[#eee6da] bg-[#faf8f4] px-4 py-2.5">
+        <span className="font-mono text-xs text-zinc-500">
+          → {generatedFileCount} files written
+        </span>
       </div>
     </div>
   )
