@@ -58,14 +58,14 @@ export async function exchangeSupabaseOauthCode(code: string) {
   const { clientId, clientSecret, redirectUri } = getOAuthEnv()
   const tokenRes = await fetch(`${SUPABASE_API_BASE}/v1/oauth/token`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
       grant_type: "authorization_code",
       client_id: clientId,
       client_secret: clientSecret,
       redirect_uri: redirectUri,
       code,
-    }),
+    }).toString(),
   })
   if (!tokenRes.ok) {
     const text = await tokenRes.text().catch(() => "")
