@@ -954,38 +954,134 @@ function ProjectContent() {
   useEffect(() => {
     const onMessage = async (event: MessageEvent) => {
       if (event.origin !== window.location.origin) return
-      const data = event.data as { type?: string; ok?: boolean; message?: string }
+      const data = event.data as {
+        type?: string; ok?: boolean; message?: string
+      }
       if (data?.type !== "supabase-oauth") return
       if (!data.ok) {
-        alert(data.message || "Supabase OAuth failed")
+        toast({
+          title: "Supabase connection failed",
+          description: data.message || "Please try again.",
+          variant: "destructive"
+        })
         return
       }
-      refreshSupabaseProjects()
-      // Trigger provision then sandbox restart
-      if (data.ok && projectId && user) {
-        try {
-          const idToken = await user.getIdToken()
-          const provisionRes = await fetch("/api/integrations/supabase/provision", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
-            body: JSON.stringify({ projectId }),
-          })
-          const provisionJson = await provisionRes.json().catch(() => ({}))
-          if (provisionRes.ok && provisionJson?.provisioned && project?.files?.length) {
-            toast({ title: "Supabase connected", description: "Restarting preview with database wired up..." })
-            await new Promise(r => setTimeout(r, 1000))
-            await createSandbox(
-              provisionJson.filesUpdated ?
-                (await (await fetch(`/api/projects/${projectId}`, { headers: { Authorization: `Bearer ${idToken}` } })).json()).files
-                : project.files,
-              { forceNewSandbox: true }
-            )
+      try {
+        const idToken = await user?.getIdToken()
+        if (!idToken) return
+        const authHeader = { Authorization: `Bearer ${idToken}` }
+
+        // Fetch projects and auto-link first one
+        const projRes = await fetch("/api/supabase/projects", {
+          headers: authHeader
+        })
+        const projJson = await projRes.json().catch(() => ({}))
+        const projects = Array.isArray(projJson?.projects)
+          ? projJson.projects : []
+
+        let linkedRef = ""
+
+        if (projects.length > 0) {
+          linkedRef = (projects[0]?.ref || projects[0]?.id || "")
+            .toString().trim()
+        } else {
+          // No projects — auto-create one named after the project
+          const projectName = (
+            project?.name ||
+            project?.prompt?.split(" ").slice(0, 3).join("-").toLowerCase()
+              .replace(/[^a-z0-9-]/g, "") ||
+            "my-app"
+          ).slice(0, 40)
+
+          const createRes = await fetch(
+            "/api/integrations/supabase/create-project",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                ...authHeader
+              },
+              body: JSON.stringify({
+                name: projectName,
+                region: "us-east-1",
+                dbPassword: crypto.randomUUID().replace(/-/g, "").slice(0, 24),
+              }),
+            }
+          )
+          const createJson = await createRes.json().catch(() => ({}))
+          if (createRes.ok) {
+            linkedRef = (
+              createJson?.projectRef ||
+              createJson?.project?.ref ||
+              createJson?.project?.id || ""
+            ).toString().trim()
+            toast({
+              title: "Supabase project created",
+              description: `Created "${projectName}" automatically.`
+            })
           } else {
-            toast({ title: "Supabase connected", description: "Database linked. Regenerate to wire it into your app." })
+            toast({
+              title: "Could not create Supabase project",
+              description: createJson?.error ||
+                "Create a project in Supabase first then reconnect.",
+              variant: "destructive",
+            })
           }
-        } catch (e) {
-          console.error("Post-OAuth provision failed:", e)
         }
+
+        if (linkedRef) {
+          await fetch("/api/integrations/supabase/link-project", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...authHeader
+            },
+            body: JSON.stringify({
+              builderProjectId: projectId,
+              supabaseProjectRef: linkedRef
+            }),
+          })
+        }
+
+        // Fire provision
+        const provisionRes = await fetch(
+          "/api/integrations/supabase/provision",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...authHeader
+            },
+            body: JSON.stringify({ projectId }),
+          }
+        )
+        const provisionJson = await provisionRes.json().catch(() => ({}))
+
+        toast({
+          title: "Supabase connected!",
+          description: "Restarting preview with database wired up..."
+        })
+        setSuggestBackendDismissed(true)
+
+        // Restart sandbox with updated files
+        if (project?.files?.length) {
+          await new Promise(r => setTimeout(r, 1200))
+          const latestFiles = provisionJson?.filesUpdated && projectId
+            ? await fetch(`/api/projects/${projectId}`, {
+                headers: authHeader
+              })
+                .then(r => r.json())
+                .then(d => d?.files || project.files)
+                .catch(() => project.files)
+            : project.files
+          await createSandbox(latestFiles, { forceNewSandbox: true })
+        }
+      } catch (e) {
+        console.error("Post-OAuth Supabase setup failed:", e)
+        toast({
+          title: "Supabase connected",
+          description: "Linked but preview restart failed. Try refreshing.",
+        })
       }
     }
     window.addEventListener("message", onMessage)
