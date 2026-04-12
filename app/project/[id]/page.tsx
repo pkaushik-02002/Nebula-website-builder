@@ -1045,6 +1045,17 @@ function ProjectContent() {
           })
         }
 
+        console.log("[supabase] linkedRef:", linkedRef)
+        if (!linkedRef) {
+          toast({
+            title: "No Supabase project found",
+            description: "Please create a project in Supabase first.",
+            variant: "destructive"
+          })
+          return
+        }
+        await new Promise(r => setTimeout(r, 500))
+
         // Fire provision
         const provisionRes = await fetch(
           "/api/integrations/supabase/provision",
@@ -1066,18 +1077,17 @@ function ProjectContent() {
         setSuggestBackendDismissed(true)
 
         // Restart sandbox with updated files
-        if (project?.files?.length) {
-          await new Promise(r => setTimeout(r, 1200))
-          const latestFiles = provisionJson?.filesUpdated && projectId
-            ? await fetch(`/api/projects/${projectId}`, {
-                headers: authHeader
-              })
-                .then(r => r.json())
-                .then(d => d?.files || project.files)
-                .catch(() => project.files)
-            : project.files
-          await createSandbox(latestFiles, { forceNewSandbox: true })
-        }
+        await new Promise(r => setTimeout(r, 1200))
+        const idToken2 = await user?.getIdToken()
+        const freshRes = await fetch(`/api/projects/${projectId}`, {
+          headers: { Authorization: `Bearer ${idToken2}` }
+        })
+        const freshData = await freshRes.json().catch(() => ({}))
+        const latestFiles = Array.isArray(freshData?.files) &&
+          freshData.files.length > 0
+          ? freshData.files
+          : project?.files || []
+        await createSandbox(latestFiles, { forceNewSandbox: true })
       } catch (e) {
         console.error("Post-OAuth Supabase setup failed:", e)
         toast({
