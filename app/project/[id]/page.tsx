@@ -544,6 +544,10 @@ function ProjectContent() {
           ? "Supabase linked and backend setup was applied to your project."
           : "Supabase project linked successfully.",
       })
+      if (project?.files?.length) {
+        await new Promise(r => setTimeout(r, 1000))
+        await createSandbox(project.files, { forceNewSandbox: true })
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to link Supabase project."
       setSupabaseSetupError(msg)
@@ -948,7 +952,7 @@ function ProjectContent() {
   }, [getAuthHeader, projectId])
 
   useEffect(() => {
-    const onMessage = (event: MessageEvent) => {
+    const onMessage = async (event: MessageEvent) => {
       if (event.origin !== window.location.origin) return
       const data = event.data as { type?: string; ok?: boolean; message?: string }
       if (data?.type !== "supabase-oauth") return
@@ -957,6 +961,32 @@ function ProjectContent() {
         return
       }
       refreshSupabaseProjects()
+      // Trigger provision then sandbox restart
+      if (data.ok && projectId && user) {
+        try {
+          const idToken = await user.getIdToken()
+          const provisionRes = await fetch("/api/integrations/supabase/provision", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+            body: JSON.stringify({ projectId }),
+          })
+          const provisionJson = await provisionRes.json().catch(() => ({}))
+          if (provisionRes.ok && provisionJson?.provisioned && project?.files?.length) {
+            toast({ title: "Supabase connected", description: "Restarting preview with database wired up..." })
+            await new Promise(r => setTimeout(r, 1000))
+            await createSandbox(
+              provisionJson.filesUpdated ?
+                (await (await fetch(`/api/projects/${projectId}`, { headers: { Authorization: `Bearer ${idToken}` } })).json()).files
+                : project.files,
+              { forceNewSandbox: true }
+            )
+          } else {
+            toast({ title: "Supabase connected", description: "Database linked. Regenerate to wire it into your app." })
+          }
+        } catch (e) {
+          console.error("Post-OAuth provision failed:", e)
+        }
+      }
     }
     window.addEventListener("message", onMessage)
     return () => window.removeEventListener("message", onMessage)
@@ -971,7 +1001,8 @@ function ProjectContent() {
   const projectUrl = typeof window !== "undefined" ? `${window.location.origin}/project/${projectId}` : ""
   const canEdit = !!user && !!project && (!project.ownerId || project.ownerId === user.uid || (Array.isArray(project.editorIds) && project.editorIds.includes(user.uid)))
   const projectNeedsSupabase = !!project && !project.supabaseProjectRef && (project.suggestsBackend || promptSuggestsSupabaseBackend(project.prompt || ""))
-  const showSupabaseChatPrompt = canEdit && projectNeedsSupabase && !suggestBackendDismissed
+  const showSupabaseChatPrompt = canEdit && projectNeedsSupabase &&
+    !suggestBackendDismissed && project.status === "complete" && !isGenerating
   const creationMode = project?.creationMode || "build"
   const isBuildTokenBlocked = remainingTokens <= 0 && creationMode !== "agent"
   const activeAgent = creationMode === "agent"
@@ -1018,7 +1049,20 @@ function ProjectContent() {
                 type="button"
                 size="sm"
                 className="h-9 rounded-lg bg-zinc-900 px-4 text-sm text-white hover:bg-black"
-                onClick={() => setWebsiteSettingsOpen(true)}
+                onClick={async () => {
+                  try {
+                    const idToken = await user?.getIdToken()
+                    if (!idToken) return
+                    const res = await fetch(
+                      `/api/integrations/supabase/authorize?builderProjectId=${encodeURIComponent(projectId)}`,
+                      { headers: { Authorization: `Bearer ${idToken}` } }
+                    )
+                    const json = await res.json().catch(() => ({}))
+                    if (!res.ok || !json?.url) return
+                    window.open(json.url, "supabase-oauth",
+                      "width=560,height=760,menubar=no,toolbar=no")
+                  } catch {}
+                }}
               >
                 Connect Supabase
               </Button>
