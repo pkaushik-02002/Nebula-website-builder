@@ -198,7 +198,16 @@ function prioritizeOpenQuestions(openQuestions: string[], messages: Message[]) {
     return a.index - b.index
   })
 
-  return scored.map((entry) => entry.question)
+  const filtered = scored
+    .map((entry) => entry.question)
+    .filter((question) => {
+      const closestMatch = askedHistory.reduce((max, asked) => {
+        return Math.max(max, questionSimilarity(question, asked))
+      }, 0)
+      return closestMatch < 0.55
+    })
+
+  return filtered.length > 0 ? filtered : scored.map((e) => e.question)
 }
 
 export function getBlueprintItem(blueprint: ProjectBlueprint, key: string) {
@@ -424,8 +433,8 @@ function detectVisualSync(prompt: string) {
   }
 
   return {
-    value: "Brand and visual direction still needs confirmation",
-    status: "unknown" as const,
+    value: "Clean, modern, and welcoming",
+    status: "suggested" as const,
   }
 }
 
@@ -489,8 +498,8 @@ function detectContentSync(prompt: string) {
   }
 
   return {
-    value: "Content source and writing needs still open",
-    status: "unknown" as const,
+    value: "Placeholder copy, to be updated later",
+    status: "suggested" as const,
   }
 }
 
@@ -526,8 +535,8 @@ function detectScopeSync(prompt: string) {
   }
 
   return {
-    value: "Build scope should be confirmed before implementation",
-    status: "unknown" as const,
+    value: "Standard first-version scope",
+    status: "suggested" as const,
   }
 }
 
@@ -709,7 +718,7 @@ function buildOpenQuestions(sections: BlueprintSection[]) {
       : "",
   ]
 
-  return normalizeList(prompts).slice(0, 3)
+  return normalizeList(prompts).slice(0, 2)
 }
 
 /** Detect which backend systems are explicitly mentioned and required */
@@ -1048,8 +1057,8 @@ export function buildPlanningAssistantReply(
 
   if (openQuestions.length === 0) {
     return {
-      content: `${intro} I have enough context to draft a solid first plan once you approve these answers. After the plan is generated, you can still refine it before we build.`,
-      planningStatus: "draft",
+      content: `${intro} I have enough to draft a solid plan. Review it and approve when ready to build.`,
+      planningStatus: "plan-generated",
     }
   }
 

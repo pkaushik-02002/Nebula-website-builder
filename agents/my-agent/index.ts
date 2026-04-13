@@ -18,7 +18,7 @@ export default agent({
   runtime: "claude-code",
   systemPrompt: buildBuildKitAgentPrompt(),
   permissionMode: "default",
-  maxTurns: 12,
+  maxTurns: 8,
   tools: {
     lookupSiteContent: tool({
       description: "Retrieve grounded BuildKit website content by section before answering product questions.",

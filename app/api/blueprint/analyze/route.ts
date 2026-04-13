@@ -75,28 +75,66 @@ export async function POST(request: NextRequest) {
     const { prompt, existingBlueprint } = body
 
     if (!prompt) {
-      return NextResponse.json({ error: "prompt is required" }, { status: 400 })
+      return NextResponse.json(
+        { error: "prompt is required" },
+        { status: 400 }
+      )
     }
 
     const contextAddendum =
       existingBlueprint && existingBlueprint.sections.length > 0
-        ? `\n\nExisting blueprint context (items already confirmed or suggested):
-${existingBlueprint.sections
-  .flatMap((section) =>
-    section.items
-      .filter((item) => item.status !== "unknown")
-      .map((item) => `- ${item.label}: "${item.value}" (${item.status})`)
-  )
-  .join("\n")}`
+        ? `\n\nExisting blueprint context:\n${existingBlueprint.sections
+            .flatMap((s) =>
+              s.items
+                .filter((i) => i.status !== "unknown")
+                .map((i) => `- ${i.label}: "${i.value}" (${i.status})`)
+            )
+            .join("\n")}`
         : ""
 
     const fullPrompt = ANALYSIS_PROMPT + prompt + contextAddendum
-    void fullPrompt
 
-    return NextResponse.json(
-      { error: "Blueprint AI analysis unavailable" },
-      { status: 503 }
+    const response = await fetch(
+      "https://api.openai.com/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: "gpt-4.1-mini",
+          temperature: 0.2,
+          messages: [{ role: "user", content: fullPrompt }],
+          max_tokens: 1200,
+        }),
+      }
     )
+
+    if (!response.ok) {
+      return NextResponse.json(
+        { error: "AI analysis failed" },
+        { status: 503 }
+      )
+    }
+
+    const data = await response.json()
+    const content = data.choices?.[0]?.message?.content || ""
+
+    const jsonStart = content.indexOf("{")
+    const jsonEnd = content.lastIndexOf("}")
+    if (jsonStart === -1 || jsonEnd === -1) {
+      return NextResponse.json(
+        { error: "Invalid AI response" },
+        { status: 500 }
+      )
+    }
+
+    const parsed: AnalyzeResponse = JSON.parse(
+      content.slice(jsonStart, jsonEnd + 1)
+    )
+
+    return NextResponse.json(parsed)
   } catch (error) {
     console.error("Blueprint analysis error:", error)
     return NextResponse.json(

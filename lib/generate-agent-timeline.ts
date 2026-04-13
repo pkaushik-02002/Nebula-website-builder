@@ -24,7 +24,7 @@ interface AgentTimelineItem {
 const TIMELINE_STEPS = {
   analyze: {
     key: "analyze" as const,
-    title: "Understanding your request",
+    title: "Analyzing prompt",
     description: "Reviewing the prompt, website context, and current project files.",
     detail: "Parsing intent, product scope, and constraints before touching the build.",
     accent: "Brief",
@@ -73,7 +73,7 @@ function isAiRequestingClarifications(agentStatus: string, reasoningSteps: strin
 
   // Check if any reasoning step indicates planning/clarification
   const hasPlanningStep = normalized.some((step) =>
-    /plan|scope|analy|reason|understand|design|clarif|ask|question|waiting/.test(step)
+    /clarif|ask|question|waiting|need more info/.test(step)
   )
 
   return hasStatus || hasPlanningStep

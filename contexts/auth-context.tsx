@@ -123,7 +123,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         })
         if (wsRes.ok) {
           const ws = await wsRes.json()
-          await updateDoc(userRef, { currentWorkspaceId: ws.id })
+          if (ws.id !== undefined) {
+            await updateDoc(userRef, { currentWorkspaceId: ws.id })
+          }
         }
       } catch (e) {
         console.error('Failed to auto-create personal workspace', e)
@@ -342,7 +344,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const switchWorkspace = async (workspaceId: string) => {
     if (!user) return
     const userRef = doc(db, 'users', user.uid)
-    await updateDoc(userRef, { currentWorkspaceId: workspaceId })
+    if (workspaceId !== undefined) {
+      await updateDoc(userRef, { currentWorkspaceId: workspaceId })
+    }
   }
 
   const currentWorkspace = Array.isArray(workspaces) ? workspaces.find(w => w.id === userData?.currentWorkspaceId) || null : null
