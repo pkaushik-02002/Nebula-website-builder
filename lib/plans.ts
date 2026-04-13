@@ -13,7 +13,7 @@ export interface PlanDisplayConfig {
 
 export const PLAN_DISPLAY: Record<PlanId, PlanDisplayConfig> = {
   free: {
-    description: "Perfect for trying BuildKit before going live.",
+    description: "Perfect for trying Lotus.build before going live.",
     features: [
       "10,000 credits/month",
       "5 agent runs per period",

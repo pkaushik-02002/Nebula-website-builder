@@ -6,7 +6,7 @@ export function FooterSection() {
       <div className="mx-auto max-w-6xl">
         <div className="grid gap-10 md:grid-cols-12">
           <div className="md:col-span-5">
-            <p className="text-2xl font-semibold tracking-tight text-zinc-900">BuildKit</p>
+            <p className="text-2xl font-semibold tracking-tight text-zinc-900">Lotus.build</p>
             <p className="mt-3 max-w-md text-sm leading-relaxed text-zinc-600">
               A calm, premium website builder for founders. Turn ideas into polished websites with AI guidance and live editing.
             </p>
@@ -42,7 +42,7 @@ export function FooterSection() {
           </div>
         </div>
         <div className="mt-10 flex flex-col items-start justify-between gap-3 border-t border-zinc-200 pt-5 text-xs text-zinc-500 sm:flex-row sm:items-center">
-          <p>© {new Date().getFullYear()} BuildKit. All rights reserved.</p>
+          <p>© {new Date().getFullYear()} Lotus.build. All rights reserved.</p>
           <p>Made for founders building real companies.</p>
         </div>
       </div>

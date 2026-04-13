@@ -5,7 +5,7 @@ import { FooterSection } from "@/components/sections/footer-section"
 import { Users, History, ShieldCheck, LayoutGrid, Sparkles, ArrowRight, CheckCircle2 } from "lucide-react"
 
 export const metadata: Metadata = {
-  title: "Teams | BuildKit",
+  title: "Teams | Lotus.build",
   description:
     "Built for teams and growing startups. Collaborate, iterate, and launch company websites together with shared workspaces and reliable previews.",
 }
@@ -54,7 +54,7 @@ const testimonials = [
     name: "Growth Lead, Seed-stage SaaS",
   },
   {
-    quote: "BuildKit helped us standardize how product and marketing collaborate.",
+    quote: "Lotus.build helped us standardize how product and marketing collaborate.",
     name: "Head of Product, Startup Team",
   },
   {
@@ -118,7 +118,7 @@ export default function TeamsPage() {
         <div className="mx-auto max-w-7xl">
           <h2 className="text-2xl font-semibold tracking-tight text-zinc-900 sm:text-3xl">Scaling & reliability</h2>
           <p className="mt-4 max-w-4xl text-sm leading-relaxed text-zinc-600 sm:text-base">
-            BuildKit supports teams managing multiple websites and internal previews at once. As projects grow, updates stay smooth with reliable preview recovery that keeps teams moving without disruption.
+            Lotus.build supports teams managing multiple websites and internal previews at once. As projects grow, updates stay smooth with reliable preview recovery that keeps teams moving without disruption.
           </p>
           <div className="mt-6 inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-zinc-100 px-4 py-2 text-sm text-zinc-700">
             <Sparkles className="h-4 w-4" />
@@ -143,7 +143,7 @@ export default function TeamsPage() {
 
       <section className="px-4 py-14 sm:px-6 sm:py-16 lg:px-8">
         <div className="mx-auto max-w-7xl">
-          <h2 className="text-2xl font-semibold tracking-tight text-zinc-900 sm:text-3xl">Growing teams already shipping with BuildKit</h2>
+          <h2 className="text-2xl font-semibold tracking-tight text-zinc-900 sm:text-3xl">Growing teams already shipping with Lotus.build</h2>
           <div className="mt-8 grid gap-4 md:grid-cols-3">
             {testimonials.map((item) => (
               <blockquote key={item.name} className="rounded-2xl border border-zinc-200 bg-white/75 p-5">

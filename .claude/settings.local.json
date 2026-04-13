@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(grep -rn \"BuildKit\\\\|buildkit\" /c/Users/Preet/Desktop/Nebula-website-builder --include=\"*.json\" ! -path \"*/node_modules/*\" ! -path \"*/.next/*\" ! -path \"*/.git/*\")"
     ]
   }
 }

@@ -173,6 +173,11 @@ function ProjectContent() {
     { key: "install", label: "Installing dependencies", status: "idle" },
     { key: "dev", label: "Starting dev server", status: "idle" },
   ])
+  const [supabaseSteps, setSupabaseSteps] = useState<Array<{
+    label: string
+    status: "idle" | "running" | "success" | "failed"
+  }>>([])
+  const [supabaseProvisioningInProgress, setSupabaseProvisioningInProgress] = useState(false)
   const [buildError, setBuildError] = useState<string | null>(null)
   const [buildLogs, setBuildLogs] = useState<{ install?: string; dev?: string }>({})
   const [buildFailureCategory, setBuildFailureCategory] = useState<
@@ -1096,8 +1101,172 @@ function ProjectContent() {
         })
       }
     }
-    const handleOAuthSuccess = async (data: { type?: string; ok?: boolean; message?: string }) => {
-      await onMessage(new MessageEvent("message", { origin: window.location.origin, data }))
+    const handleOAuthSuccess = async (data: { ok?: boolean; message?: string }) => {
+      if (!data.ok) {
+        toast({
+          title: "Supabase connection failed",
+          description: data.message || "Please try again.",
+          variant: "destructive"
+        })
+        return
+      }
+
+      setSupabaseProvisioningInProgress(true)
+
+      const steps = [
+        { label: "Connecting to Supabase account", status: "idle" },
+        { label: "Linking project", status: "idle" },
+        { label: "Generating database schema", status: "idle" },
+        { label: "Pushing schema to Supabase", status: "idle" },
+        { label: "Wiring app to database", status: "idle" },
+        { label: "Restarting preview", status: "idle" },
+      ] as Array<{ label: string; status: "idle"|"running"|"success"|"failed" }>
+
+      const setStep = (index: number, status: "idle"|"running"|"success"|"failed") => {
+        steps[index].status = status
+        setSupabaseSteps([...steps])
+      }
+
+      try {
+        const idToken = await user?.getIdToken()
+        if (!idToken) return
+        const authHeader = { Authorization: `Bearer ${idToken}` }
+
+        // Step 1 — fetch projects
+        setStep(0, "running")
+        const projRes = await fetch("/api/supabase/projects", {
+          headers: authHeader
+        })
+        const projJson = await projRes.json().catch(() => ({}))
+        const projects = Array.isArray(projJson?.projects)
+          ? projJson.projects : []
+        setStep(0, "success")
+
+        // Step 2 — link project
+        setStep(1, "running")
+        let linkedRef = ""
+        if (projects.length > 0) {
+          linkedRef = (projects[0]?.ref || projects[0]?.id || "")
+            .toString().trim()
+        } else {
+          const projectName = (
+            project?.name ||
+            project?.prompt?.split(" ").slice(0, 3)
+              .join("-").toLowerCase()
+              .replace(/[^a-z0-9-]/g, "") ||
+            "my-app"
+          ).slice(0, 40)
+          const createRes = await fetch(
+            "/api/integrations/supabase/create-project",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json", ...authHeader },
+              body: JSON.stringify({
+                name: projectName,
+                region: "us-east-1",
+                dbPassword: crypto.randomUUID().replace(/-/g, "").slice(0, 24),
+              }),
+            }
+          )
+          const createJson = await createRes.json().catch(() => ({}))
+          linkedRef = (
+            createJson?.projectRef ||
+            createJson?.project?.ref ||
+            createJson?.project?.id || ""
+          ).toString().trim()
+        }
+
+        console.log("[supabase] linkedRef:", linkedRef)
+        if (!linkedRef) {
+          setStep(1, "failed")
+          toast({
+            title: "No Supabase project found",
+            description: "Create a project in Supabase first.",
+            variant: "destructive"
+          })
+          return
+        }
+
+        await fetch("/api/integrations/supabase/link-project", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeader },
+          body: JSON.stringify({
+            builderProjectId: projectId,
+            supabaseProjectRef: linkedRef
+          }),
+        })
+        setStep(1, "success")
+
+        await new Promise(r => setTimeout(r, 500))
+
+        // Steps 3+4+5 — provision (generates schema, pushes, wires app)
+        setStep(2, "running")
+        await new Promise(r => setTimeout(r, 800))
+        setStep(2, "success")
+        setStep(3, "running")
+
+        const provisionRes = await fetch(
+          "/api/integrations/supabase/provision",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...authHeader },
+            body: JSON.stringify({ projectId }),
+          }
+        )
+        const provisionJson = await provisionRes.json().catch(() => ({}))
+
+        if (!provisionRes.ok) {
+          setStep(3, "failed")
+          toast({
+            title: "Schema push failed",
+            description: provisionJson?.error || "Provision failed.",
+            variant: "destructive"
+          })
+          return
+        }
+        setStep(3, "success")
+        setStep(4, "running")
+        await new Promise(r => setTimeout(r, 600))
+        setStep(4, "success")
+
+        // Step 6 — restart sandbox
+        setStep(5, "running")
+        setSuggestBackendDismissed(true)
+
+        const idToken2 = await user?.getIdToken()
+        const freshRes = await fetch(`/api/projects/${projectId}`, {
+          headers: { Authorization: `Bearer ${idToken2}` }
+        })
+        const freshData = await freshRes.json().catch(() => ({}))
+        const latestFiles = Array.isArray(freshData?.files) &&
+          freshData.files.length > 0
+          ? freshData.files
+          : project?.files || []
+
+        await createSandbox(latestFiles, { forceNewSandbox: true })
+        setStep(5, "success")
+
+        toast({
+          title: "🎉 Supabase connected!",
+          description: "Schema pushed, app wired up, preview restarted.",
+        })
+
+        // Clear steps after 4s
+        setTimeout(() => setSupabaseSteps([]), 4000)
+        setSupabaseProvisioningInProgress(false)
+
+      } catch (e) {
+        console.error("Post-OAuth Supabase setup failed:", e)
+        setSupabaseSteps(prev => prev.map(s =>
+          s.status === "running" ? { ...s, status: "failed" } : s
+        ))
+        setSupabaseProvisioningInProgress(false)
+        toast({
+          title: "Supabase setup failed",
+          description: e instanceof Error ? e.message : "Please try again.",
+          variant: "destructive"
+        })
+      }
     }
 
     const poll = setInterval(() => {
@@ -2636,7 +2805,9 @@ function ProjectContent() {
       }
 
       // Create E2B sandbox (auto-start) — uses finalFiles; project state already updated above
-      await createSandbox(finalFiles)
+      if (!supabaseProvisioningInProgress) {
+        await createSandbox(finalFiles)
+      }
 
     } catch (error) {
       setBackendOrchestrationStage("error")
@@ -3014,6 +3185,7 @@ function ProjectContent() {
     if (!project) return
     if (!project.files || project.files.length === 0) return
     if (isSandboxLoading || isGenerating || isPreparingPreview) return
+    if (supabaseProvisioningInProgress) return
     if (ensuredPreviewUrl) return
 
     const signature = `${project.id}:${project.files.length}:${project.files[0]?.path || ""}:${project.files[project.files.length - 1]?.path || ""}`
@@ -4150,7 +4322,7 @@ function ProjectContent() {
                     <div className={isUserMessage ? "max-w-[85%]" : "w-full"}>
                       <div className="mb-1 flex items-center px-1">
                         <span className="text-[11px] font-medium text-zinc-400">
-                          {isUserMessage ? "You" : "BuildKit"}
+                          {isUserMessage ? "You" : "Lotus.build"}
                         </span>
                       </div>
 
@@ -4312,6 +4484,36 @@ function ProjectContent() {
                     )}
                   </div>
                 )}
+                {supabaseSteps.length > 0 && (
+                  <div className="mr-auto w-full max-w-[92%] rounded-2xl border border-zinc-200 bg-white px-4 py-3 space-y-2">
+                    <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-zinc-400">Setting up database</p>
+                    <div className="space-y-2">
+                      {supabaseSteps.map((step, i) => (
+                        <div key={i} className="flex items-center gap-2 text-sm">
+                          {step.status === "running" && (
+                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                          )}
+                          {step.status === "success" && (
+                            <Check className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                          )}
+                          {step.status === "failed" && (
+                            <X className="h-3.5 w-3.5 text-red-500 shrink-0" />
+                          )}
+                          {step.status === "idle" && (
+                            <span className="h-1.5 w-1.5 rounded-full border border-zinc-300 shrink-0" />
+                          )}
+                          <span className={cn(
+                            "text-xs",
+                            step.status === "running" && "text-zinc-900 font-medium",
+                            step.status === "success" && "text-zinc-400",
+                            step.status === "failed" && "text-red-600",
+                            step.status === "idle" && "text-zinc-300"
+                          )}>{step.label}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               <div ref={messagesEndRef} />
             </div>
 
@@ -4434,7 +4636,15 @@ function ProjectContent() {
                 )}
               </div>
               <div className="relative min-h-0 flex-1 overflow-hidden">
-                {resolvedPreviewUrl ? (
+                {supabaseProvisioningInProgress ? (
+                  <div className="flex h-full w-full flex-col items-center justify-center gap-4 px-8 text-center">
+                    <div className="h-8 w-8 rounded-full border-2 border-zinc-200 border-t-zinc-900 animate-spin" />
+                    <div>
+                      <p className="text-sm font-semibold text-zinc-900">Setting up your database...</p>
+                      <p className="mt-1 text-xs text-zinc-500">Preview will load once Supabase is fully connected.</p>
+                    </div>
+                  </div>
+                ) : resolvedPreviewUrl ? (
                   <ResponsivePreview
                     src={resolvedPreviewUrl}
                     canEdit={canEdit}

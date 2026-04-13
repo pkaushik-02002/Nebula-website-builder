@@ -2,7 +2,7 @@ import type { Metadata } from "next"
 
 export const metadata: Metadata = {
   title: "Settings",
-  description: "Manage your BuildKit account settings.",
+  description: "Manage your Lotus.build account settings.",
   robots: { index: false, follow: false },
 }
 

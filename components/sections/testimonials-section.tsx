@@ -10,12 +10,12 @@ const testimonials = [
     role: "Indie Hacker",
   },
   {
-    text: "BuildKit is like having a senior developer on demand. The AI understands exactly what I want to build.",
+    text: "Lotus.build is like having a senior developer on demand. The AI understands exactly what I want to build.",
     name: "Marcus Johnson",
     role: "Startup Founder",
   },
   {
-    text: "We use BuildKit to prototype client projects. It's 10x faster than traditional development.",
+    text: "We use Lotus.build to prototype client projects. It's 10x faster than traditional development.",
     name: "Emily Rodriguez",
     role: "Agency Owner",
   },
@@ -30,7 +30,7 @@ const testimonials = [
     role: "Full-Stack Developer",
   },
   {
-    text: "BuildKit helped us validate 5 product ideas in a single week. It's a game-changer for MVPs.",
+    text: "Lotus.build helped us validate 5 product ideas in a single week. It's a game-changer for MVPs.",
     name: "James Wilson",
     role: "CEO at LaunchPad",
   },

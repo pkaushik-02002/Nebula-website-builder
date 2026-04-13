@@ -23,8 +23,8 @@ const siteUrl = normalizeSiteUrl(process.env.NEXT_PUBLIC_APP_URL)
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
   title: {
-    default: "BuildKit | AI-Powered Full-Stack App Builder",
-    template: "%s | BuildKit",
+    default: "Lotus.build | AI-Powered Full-Stack App Builder",
+    template: "%s | Lotus.build",
   },
   description:
     "Turn ideas into production-ready web apps with AI. Describe what you want to build in plain English—landing pages, dashboards, SaaS UIs—and get React/TypeScript code, live preview, and one-click deploy to Vercel or Netlify.",
@@ -37,25 +37,25 @@ export const metadata: Metadata = {
     "web app generator",
     "Vite React",
     "deploy to Vercel",
-    "BuildKit",
+    "Lotus.build",
   ],
-  authors: [{ name: "BuildKit", url: siteUrl }],
-  creator: "BuildKit",
-  publisher: "BuildKit",
-  applicationName: "BuildKit",
+  authors: [{ name: "Lotus.build", url: siteUrl }],
+  creator: "Lotus.build",
+  publisher: "Lotus.build",
+  applicationName: "Lotus.build",
   referrer: "origin-when-cross-origin",
   openGraph: {
     type: "website",
     locale: "en_US",
     url: siteUrl,
-    siteName: "BuildKit",
-    title: "BuildKit | AI-Powered Full-Stack App Builder",
+    siteName: "Lotus.build",
+    title: "Lotus.build | AI-Powered Full-Stack App Builder",
     description:
       "Turn ideas into production-ready web apps with AI. Describe what you want—get React code, live preview, and one-click deploy.",
   },
   twitter: {
     card: "summary",
-    title: "BuildKit | AI-Powered Full-Stack App Builder",
+    title: "Lotus.build | AI-Powered Full-Stack App Builder",
     description: "Turn ideas into production-ready web apps with AI. Describe what you want—get code, preview, deploy.",
   },
   robots: {
@@ -104,7 +104,7 @@ export default function RootLayout({
       {
         "@type": "Organization",
         "@id": `${siteUrl}/#organization`,
-        name: "BuildKit",
+        name: "Lotus.build",
         url: siteUrl,
         logo: { "@type": "ImageObject", url: `${siteUrl}/icon.svg` },
         description: "AI-powered full-stack app builder. Turn ideas into production-ready web applications.",
@@ -113,7 +113,7 @@ export default function RootLayout({
         "@type": "WebSite",
         "@id": `${siteUrl}/#website`,
         url: siteUrl,
-        name: "BuildKit",
+        name: "Lotus.build",
         description: "Build full-stack web apps with AI. Describe your idea—get React code, live preview, and deploy.",
         publisher: { "@id": `${siteUrl}/#organization` },
         inLanguage: "en-US",
@@ -125,7 +125,7 @@ export default function RootLayout({
       },
       {
         "@type": "SoftwareApplication",
-        name: "BuildKit",
+        name: "Lotus.build",
         applicationCategory: "DeveloperApplication",
         operatingSystem: "Web",
         description: "AI-powered app builder. Generate React/TypeScript apps from a prompt, preview in-browser, deploy to Vercel or Netlify.",

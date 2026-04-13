@@ -41,7 +41,7 @@
     "--an-show-date-divider": "true",
     "--an-show-copy-button": "true",
     "--an-text-contrast": "normal",
-    "--an-input-placeholder": "Ask BuildKit anything...",
+    "--an-input-placeholder": "Ask Lotus.build anything...",
     "--an-attachment-button-style": "hidden",
     "--an-attachment-preview-style": "chip",
     "--an-tool-call-style": "normal",

@@ -2,10 +2,10 @@ export const buildkitAgents = [
   {
     id: "guide",
     slug: "my-agent",
-    name: "BuildKit agents",
+    name: "Lotus.build agents",
     shortLabel: "agents",
-    description: "Answers product, pricing, workflow, and launch questions using live BuildKit site context.",
-    starterPrompt: "What can I build with BuildKit, and where should I start?",
+    description: "Answers product, pricing, workflow, and launch questions using live Lotus.build site context.",
+    starterPrompt: "What can I build with Lotus.build, and where should I start?",
   },
 ] as const
 

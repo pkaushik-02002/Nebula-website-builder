@@ -64,7 +64,7 @@ function IntroMessage(props: { description: string; prompt: string }) {
         <Sparkles className="h-4 w-4" />
       </div>
       <div className="flex-1">
-        <div className="mb-3 text-xs font-medium text-zinc-400">BuildKit</div>
+        <div className="mb-3 text-xs font-medium text-zinc-400">Lotus.build</div>
         <div className="space-y-3">
           <p className="text-base leading-7 text-zinc-800">{description}</p>
           <p className="text-sm leading-6 text-zinc-500">{prompt}</p>
@@ -86,7 +86,7 @@ function ChatMessage({ message }: { message: Message }) {
       ) : null}
 
       <div className={cn("flex-1 space-y-1 sm:max-w-xl", isUser ? "text-right" : "")}>
-        <div className="text-xs font-medium text-zinc-400">{isUser ? "You" : "BuildKit"}</div>
+        <div className="text-xs font-medium text-zinc-400">{isUser ? "You" : "Lotus.build"}</div>
         <div
           className={cn(
             "inline-block rounded-2xl px-4 py-3 text-sm leading-6",
@@ -237,7 +237,7 @@ function ChatComposer(props: {
               disabled={!canEdit || isSubmitting}
             />
             <div className="flex items-center justify-between gap-3 border-t border-zinc-100 bg-zinc-50 px-4 py-2.5">
-              <span className="text-xs text-zinc-400">{helper || "Chat with BuildKit"}</span>
+              <span className="text-xs text-zinc-400">{helper || "Chat with Lotus.build"}</span>
               <div className="flex items-center gap-2">
                 <span className="hidden text-[10px] text-zinc-300 sm:block">Cmd/Ctrl + Enter</span>
                 <Button
@@ -430,7 +430,7 @@ export function ProjectCreationStudio(props: {
 
   const introDescription = useMemo(() => {
     if (blueprintVisible) return description
-    if (isAgentMode) return `${agentName || "Your BuildKit copilot"} will guide the conversation, surface quick choices only when useful, and turn the chat into a plan you can review.`
+    if (isAgentMode) return `${agentName || "Your Lotus.build copilot"} will guide the conversation, surface quick choices only when useful, and turn the chat into a plan you can review.`
     return description
   }, [agentName, blueprintVisible, description, isAgentMode])
 

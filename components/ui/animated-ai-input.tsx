@@ -342,7 +342,7 @@ export function AnimatedAIInput({
   const canStop = mode === "chat" && isLoading && !disabled && typeof onStop === "function";
   const resolvedPlaceholder =
     isAgentCreateMode
-      ? `Ask ${primaryAgent.name} how BuildKit works, what to build, or what to do next`
+      ? `Ask ${primaryAgent.name} how Lotus.build works, what to build, or what to do next`
       : placeholder;
   const submitAriaLabel = isAgentCreateMode ? `Start ${primaryAgent.name}` : "Start build";
 

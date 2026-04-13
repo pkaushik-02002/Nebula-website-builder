@@ -48,12 +48,12 @@ export const buildkitTestimonials = [
     role: "Indie Hacker",
   },
   {
-    text: "BuildKit is like having a senior developer on demand. It understands exactly what I want to build.",
+    text: "Lotus.build is like having a senior developer on demand. It understands exactly what I want to build.",
     name: "Marcus Johnson",
     role: "Startup Founder",
   },
   {
-    text: "We use BuildKit to prototype client projects. It's 10x faster than our previous workflow.",
+    text: "We use Lotus.build to prototype client projects. It's 10x faster than our previous workflow.",
     name: "Emily Rodriguez",
     role: "Agency Owner",
   },
@@ -67,15 +67,15 @@ export const buildkitTestimonials = [
 export const buildkitFaqs = [
   {
     q: "How do I create a new project?",
-    a: "From the home page, type your idea in the input and press Enter or click the build button. BuildKit generates a full-stack app from your description, then you can open the project to edit, preview, and deploy.",
+    a: "From the home page, type your idea in the input and press Enter or click the build button. Lotus.build generates a full-stack app from your description, then you can open the project to edit, preview, and deploy.",
   },
   {
-    q: "What can I build with BuildKit?",
-    a: "BuildKit helps people create websites and web applications including landing pages, dashboards, SaaS UIs, and e-commerce experiences from plain English prompts.",
+    q: "What can I build with Lotus.build?",
+    a: "Lotus.build helps people create websites and web applications including landing pages, dashboards, SaaS UIs, and e-commerce experiences from plain English prompts.",
   },
   {
     q: "How does the preview work?",
-    a: "After generation, BuildKit spins up a secure sandbox and runs the project so the user gets a live preview URL. Environment variables added in integrations can be injected into the preview.",
+    a: "After generation, Lotus.build spins up a secure sandbox and runs the project so the user gets a live preview URL. Environment variables added in integrations can be injected into the preview.",
   },
   {
     q: "How do I deploy my project?",
@@ -110,7 +110,7 @@ function serializePlanDetails() {
 export function getBuildKitKnowledge(section: "overview" | "features" | "use-cases" | "faq" | "pricing" | "testimonials" | "all" = "all") {
   const sections = {
     overview: [
-      "BuildKit is an AI-powered full-stack website and web app builder.",
+      "Lotus.build is an AI-powered full-stack website and web app builder.",
       "It helps founders, teams, and agencies go from idea to live site quickly.",
       "Core value proposition: describe your idea, generate a product, refine it live, preview it in a sandbox, and deploy it.",
     ].join("\n"),
@@ -140,9 +140,9 @@ export function getBuildKitKnowledge(section: "overview" | "features" | "use-cas
 
 export function buildBuildKitAgentPrompt() {
   return [
-    "You are My Agent, the BuildKit website assistant.",
-    "Your job is to help visitors understand BuildKit, choose the right plan, learn how the workflow works, and take the next best action inside the site.",
-    "Answer using only the BuildKit knowledge you have been given and the output of your tools.",
+    "You are My Agent, the Lotus.build website assistant.",
+    "Your job is to help visitors understand Lotus.build, choose the right plan, learn how the workflow works, and take the next best action inside the site.",
+    "Answer using only the Lotus.build knowledge you have been given and the output of your tools.",
     "If you are unsure, say so clearly and route the visitor to the most relevant page.",
     "Do not invent pricing, integrations, timelines, or guarantees.",
     "Keep responses concise, friendly, and helpful for non-technical visitors.",
