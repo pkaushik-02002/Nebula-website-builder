@@ -49,19 +49,19 @@ function buildPlanSteps(blueprint: ProjectBlueprint) {
 
   return [
     {
-      title: "Step 1: Foundation",
+      title: "Foundation",
       detail: `Set up core structure and navigation for version one. Initial surface: ${normalizeSentence(pages?.value, "Core screens and routes to be finalized")}`,
     },
     {
-      title: "Step 2: Core user flow",
+      title: "Core user flow",
       detail: `Implement the highest-impact journey first. Priority capabilities: ${normalizeSentence(features?.value, "Core feature flow to be defined")}`,
     },
     {
-      title: "Step 3: Systems and data",
+      title: "Systems and data",
       detail: `Integrate essential backend requirements for launch. Systems plan: ${normalizeSentence(systems?.value, "No backend dependencies confirmed yet")}`,
     },
     {
-      title: "Step 4: Content and visual polish",
+      title: "Content and visual polish",
       detail: `Apply content model and final presentation pass. Content: ${normalizeSentence(content?.value, "Content source still open")} Style: ${normalizeSentence(style?.value, "Visual direction still open")}`,
     },
   ]
@@ -113,41 +113,41 @@ export function CreationBlueprintPanel(props: {
       : "A living version-one plan shaped by the conversation."
 
   return (
-    <section className="overflow-hidden rounded-[2rem] border border-[#e7dfd3] bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(249,245,238,0.92))] shadow-[0_28px_70px_-48px_rgba(24,24,27,0.38)]">
-      <div className="border-b border-[#ece6db] px-6 pb-5 pt-6">
-        <div className="inline-flex rounded-full border border-[#e6ddcf] bg-white/80 px-3 py-1 text-[10px] font-medium uppercase tracking-[0.18em] text-zinc-500">
-          Live plan
-        </div>
-        <h2 className="mt-4 text-[1.4rem] font-semibold tracking-tight text-zinc-900">Version-one build plan</h2>
-        <p className="mt-2 text-sm leading-6 text-zinc-600">{introCopy}</p>
+    <section className="overflow-hidden rounded-2xl border border-zinc-200 bg-white">
+      <div className="border-b border-zinc-100 px-5 pb-4 pt-5">
+        <h2 className="text-base font-semibold tracking-tight text-zinc-900">Version-one build plan</h2>
+        <p className="mt-1 text-sm leading-6 text-zinc-500">{introCopy}</p>
       </div>
 
-      <div className="divide-y divide-[#eee8de] px-6 py-2">
+      <div className="divide-y divide-zinc-100 px-5 py-1">
         {visibleItems.map((item) => (
           <SummaryRow key={`${item.label}-${item.value}`} label={item.label} value={item.value} muted={item.muted} />
         ))}
       </div>
 
-      <div className="border-t border-[#eee8de] px-6 py-4">
+      <div className="border-t border-zinc-100 px-5 py-4">
         <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-zinc-500">Implementation sequence</p>
-        <div className="mt-3 space-y-3">
-          {planSteps.map((step) => (
-            <div key={step.title} className="rounded-xl border border-[#ece6db] bg-white/70 px-3 py-3">
-              <p className="text-xs font-semibold uppercase tracking-[0.08em] text-zinc-700">{step.title}</p>
-              <p className="mt-1 text-sm leading-6 text-zinc-700">{step.detail}</p>
-            </div>
+        <ol className="mt-3 space-y-3">
+          {planSteps.map((step, index) => (
+            <li key={step.title} className="flex gap-3">
+              <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-[10px] font-semibold text-zinc-500">
+                {index + 1}
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-zinc-700">{step.title}</p>
+                <p className="mt-0.5 text-sm leading-6 text-zinc-600">{step.detail}</p>
+              </div>
+            </li>
           ))}
-        </div>
+        </ol>
       </div>
 
-      <div className="border-t border-[#eee8de] px-6 py-2">
-        <SummaryRow
-          label="Needs your input"
-          value={blockingMessage || "Good to go - we can start building."}
-          muted={!blockingMessage}
-          multiline
-        />
-      </div>
+      {blockingMessage ? (
+        <div className="border-t border-zinc-100 px-5 py-3">
+          <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-zinc-500">Needs your input</p>
+          <p className="mt-1 text-sm leading-6 text-zinc-700">{blockingMessage}</p>
+        </div>
+      ) : null}
     </section>
   )
 }

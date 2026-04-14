@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import { ArrowLeft, Bot, Sparkles } from "lucide-react"
+import { ArrowLeft } from "lucide-react"
 
 import type { Message, PlanningStatus, ProjectBlueprint, ProjectCreationMode } from "@/app/project/[id]/types"
 import { CreationBlueprintPanel } from "@/components/project/creation-blueprint-panel"
@@ -29,7 +29,7 @@ function PlanningHeader(props: {
   const { projectLabel, onBack } = props
 
   return (
-    <header className="relative z-20 border-b border-zinc-200 bg-white/60 backdrop-blur-sm">
+    <header className="sticky top-0 z-20 border-b border-zinc-200 bg-[#f5f5f2]/80 backdrop-blur-md">
       <div className="mx-auto max-w-4xl px-4 py-3 sm:px-6 sm:py-4">
         <div className="flex items-center justify-between gap-4">
           <div className="flex min-w-0 items-center gap-3">
@@ -48,7 +48,13 @@ function PlanningHeader(props: {
             </div>
           </div>
 
-          <div className="text-xs font-medium uppercase tracking-[0.14em] text-zinc-400">Planning</div>
+          <div className="flex items-center gap-2 rounded-full border border-zinc-200 bg-white px-3 py-1.5">
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+            </span>
+            <span className="text-[11px] font-medium text-zinc-600">Agent Planning</span>
+          </div>
         </div>
       </div>
     </header>
@@ -59,16 +65,11 @@ function IntroMessage(props: { description: string; prompt: string }) {
   const { description, prompt } = props
 
   return (
-    <article className="mx-auto flex w-full max-w-2xl gap-4 px-4 sm:px-6">
-      <div className="mt-1 hidden h-10 w-10 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-amber-300 sm:flex">
-        <Sparkles className="h-4 w-4" />
-      </div>
-      <div className="flex-1">
-        <div className="mb-3 text-xs font-medium text-zinc-400">Lotus.build</div>
-        <div className="space-y-3">
-          <p className="text-base leading-7 text-zinc-800">{description}</p>
-          <p className="text-sm leading-6 text-zinc-500">{prompt}</p>
-        </div>
+    <article className="mx-auto w-full max-w-3xl px-4 sm:px-6">
+      <div className="mb-2 text-[11px] font-medium uppercase tracking-widest text-zinc-400">Lotus.build</div>
+      <div className="space-y-3">
+        <p className="text-base leading-7 text-zinc-800">{description}</p>
+        <p className="text-sm leading-6 text-zinc-500">{prompt}</p>
       </div>
     </article>
   )
@@ -78,24 +79,17 @@ function ChatMessage({ message }: { message: Message }) {
   const isUser = message.role === "user"
 
   return (
-    <article className={cn("mx-auto flex w-full max-w-2xl gap-4 px-4 sm:px-6", isUser ? "justify-end" : "justify-start")}>
-      {!isUser ? (
-        <div className="mt-1 hidden h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white ring-1 ring-zinc-200 sm:flex">
-          <Bot className="h-4 w-4 text-zinc-600" />
-        </div>
-      ) : null}
-
-      <div className={cn("flex-1 space-y-1 sm:max-w-xl", isUser ? "text-right" : "")}>
-        <div className="text-xs font-medium text-zinc-400">{isUser ? "You" : "Lotus.build"}</div>
-        <div
-          className={cn(
-            "inline-block rounded-2xl px-4 py-3 text-sm leading-6",
-            isUser ? "bg-zinc-900 text-white" : "bg-zinc-100 text-zinc-900"
-          )}
-        >
+    <article className={cn("mx-auto w-full max-w-3xl px-4 sm:px-6", isUser ? "flex justify-end" : "")}>
+      {isUser ? (
+        <div className="max-w-xl rounded-2xl bg-[#1f1f1f] px-4 py-3 text-sm leading-6 text-white">
           <p className="whitespace-pre-wrap">{message.content}</p>
         </div>
-      </div>
+      ) : (
+        <div>
+          <div className="mb-2 text-[11px] font-medium uppercase tracking-widest text-zinc-400">Lotus.build</div>
+          <p className="whitespace-pre-wrap text-sm leading-6 text-zinc-800">{message.content}</p>
+        </div>
+      )}
     </article>
   )
 }
@@ -114,11 +108,10 @@ function SuggestedReplies(props: {
   const { question, helper, guidedAnswerSet, selectedGuidedOptions, onToggleGuidedOption, onEnableCustomAnswer, isLoadingOptions, onSubmitSelection, isSubmitting } = props
 
   const hasSelection = selectedGuidedOptions.length > 0
-  const isMultiSelect = guidedAnswerSet.selectionMode === "multiple"
 
   return (
-    <div className="mx-auto w-full max-w-2xl space-y-4 px-4 sm:px-6">
-      <div className="space-y-2">
+    <div className="mx-auto w-full max-w-3xl space-y-4 px-4 sm:px-6">
+      <div className="space-y-1">
         <p className="text-sm font-medium text-zinc-900">{question || guidedAnswerSet.question}</p>
         {helper ? <p className="text-xs text-zinc-500">{helper}</p> : null}
       </div>
@@ -128,7 +121,7 @@ function SuggestedReplies(props: {
         </div>
       ) : (
         <div className="space-y-3">
-          <div className="space-y-2">
+          <div className="flex flex-wrap gap-2">
             {guidedAnswerSet.options.map((option) => {
               const selected = selectedGuidedOptions.includes(option.label)
               return (
@@ -137,36 +130,13 @@ function SuggestedReplies(props: {
                   type="button"
                   onClick={() => onToggleGuidedOption(option.label)}
                   className={cn(
-                    "group w-full rounded-lg border-2 p-3 text-left transition-all",
+                    "rounded-full border px-4 py-2 text-sm transition-all",
                     selected
-                      ? "border-zinc-900 bg-zinc-50"
-                      : "border-zinc-200 bg-white hover:border-zinc-300"
+                      ? "border-[#1f1f1f] bg-[#1f1f1f] text-white"
+                      : "border-zinc-200 bg-white text-zinc-700 hover:border-zinc-300 hover:text-zinc-900"
                   )}
                 >
-                  <div className="flex items-start gap-3">
-                    <div
-                      className={cn(
-                        "mt-0.5 h-5 w-5 flex-shrink-0 rounded-full border-2 transition-all",
-                        selected
-                          ? "border-zinc-900 bg-zinc-900"
-                          : "border-zinc-300 group-hover:border-zinc-400"
-                      )}
-                    >
-                      {selected && isMultiSelect ? (
-                        <svg className="h-full w-full p-0.5 text-white" fill="currentColor" viewBox="0 0 20 20">
-                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                        </svg>
-                      ) : selected && !isMultiSelect ? (
-                        <div className="h-full w-full rounded-full bg-white" />
-                      ) : null}
-                    </div>
-                    <span className={cn(
-                      "flex-1 text-sm font-medium transition-colors",
-                      selected ? "text-zinc-900" : "text-zinc-700 group-hover:text-zinc-900"
-                    )}>
-                      {option.label}
-                    </span>
-                  </div>
+                  {option.label}
                 </button>
               )
             })}
@@ -176,12 +146,9 @@ function SuggestedReplies(props: {
             <button
               type="button"
               onClick={onEnableCustomAnswer}
-              className="w-full rounded-lg border border-dashed border-zinc-300 px-3 py-3 text-left text-sm text-zinc-600 transition-colors hover:border-zinc-400 hover:bg-zinc-50 hover:text-zinc-700"
+              className="text-xs text-zinc-400 underline underline-offset-4 hover:text-zinc-700"
             >
-              <div className="flex items-center justify-center gap-2">
-                <span>✏️</span>
-                <span>Answer differently...</span>
-              </div>
+              Answer differently
             </button>
           ) : null}
 
@@ -190,9 +157,9 @@ function SuggestedReplies(props: {
               type="button"
               onClick={onSubmitSelection}
               disabled={isSubmitting}
-              className="w-full rounded-lg bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-black disabled:opacity-50 mt-2"
+              className="rounded-full bg-[#1f1f1f] px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-black disabled:opacity-50"
             >
-              {isSubmitting ? "Continuing..." : "Continue"}
+              {isSubmitting ? "Continuing..." : "Continue →"}
             </button>
           ) : null}
         </div>
@@ -212,8 +179,11 @@ function ChatComposer(props: {
   onSubmit: () => Promise<void>
   submitLabel: string
   canSubmit: boolean
+  showSkip?: boolean
+  onSkip?: () => Promise<void> | void
+  isDisabled?: boolean
 }) {
-  const { helper, draft, setDraft, placeholder, canEdit, isSubmitting, textareaRef, onSubmit, submitLabel, canSubmit } = props
+  const { draft, setDraft, placeholder, canEdit, isSubmitting, textareaRef, onSubmit, submitLabel, canSubmit, showSkip, onSkip, isDisabled } = props
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && canSubmit && canEdit && !isSubmitting) {
@@ -223,35 +193,39 @@ function ChatComposer(props: {
   }
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-20 bg-white/80 backdrop-blur-md">
-      <div className="border-t border-[#e7dfd4]">
-        <div className="mx-auto max-w-4xl px-4 py-3 sm:px-6 sm:py-4">
-          <div className="overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-lg">
-            <Textarea
-              ref={textareaRef}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder={placeholder}
-              className="min-h-[48px] max-h-[120px] resize-none border-0 bg-transparent px-4 py-3 text-sm leading-6 text-zinc-900 placeholder:text-zinc-400 shadow-none focus-visible:ring-0"
-              disabled={!canEdit || isSubmitting}
-            />
-            <div className="flex items-center justify-between gap-3 border-t border-zinc-100 bg-zinc-50 px-4 py-2.5">
-              <span className="text-xs text-zinc-400">{helper || "Chat with Lotus.build"}</span>
-              <div className="flex items-center gap-2">
-                <span className="hidden text-[10px] text-zinc-300 sm:block">Cmd/Ctrl + Enter</span>
-                <Button
-                  type="button"
-                  onClick={onSubmit}
-                  disabled={!canSubmit || !canEdit || isSubmitting}
-                  className="h-8 rounded-lg bg-zinc-900 px-3 text-xs font-medium text-white disabled:opacity-40"
-                >
-                  {isSubmitting ? "Sending..." : submitLabel}
-                </Button>
-              </div>
-            </div>
-          </div>
+    <div className="fixed inset-x-0 bottom-0 z-20 border-t border-zinc-200 bg-[#f5f5f2]/95 backdrop-blur">
+      <div className="mx-auto max-w-4xl px-4 py-3 sm:px-6 sm:py-4">
+        <div className="relative overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm">
+          <Textarea
+            ref={textareaRef}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={placeholder}
+            className="min-h-[52px] max-h-[120px] resize-none border-0 bg-transparent px-4 py-3.5 pr-20 text-sm leading-6 text-zinc-900 placeholder:text-zinc-400 shadow-none focus-visible:ring-0"
+            disabled={!canEdit || isSubmitting}
+          />
+          <Button
+            type="button"
+            onClick={onSubmit}
+            disabled={!canSubmit || !canEdit || isSubmitting}
+            className="absolute bottom-3 right-3 h-8 rounded-lg bg-zinc-900 px-3 text-xs font-medium text-white disabled:opacity-40"
+          >
+            {isSubmitting ? "..." : submitLabel}
+          </Button>
         </div>
+        {showSkip ? (
+          <div className="mt-2.5 flex justify-center">
+            <button
+              type="button"
+              onClick={() => void onSkip?.()}
+              disabled={isDisabled}
+              className="text-xs text-zinc-400 underline underline-offset-4 hover:text-zinc-700 disabled:opacity-50"
+            >
+              Skip plan and build now
+            </button>
+          </div>
+        ) : null}
       </div>
     </div>
   )
@@ -278,8 +252,6 @@ function ConversationThread(props: {
   canEdit: boolean
   onBuildFromPlan: () => Promise<void> | void
   onRefine: () => void
-  onSkip: () => Promise<void> | void
-  showSkip: boolean
   isDisabled: boolean
   composer: React.ReactNode
   scrollRef: React.RefObject<HTMLDivElement | null>
@@ -305,20 +277,18 @@ function ConversationThread(props: {
     canEdit,
     onBuildFromPlan,
     onRefine,
-    onSkip,
-    showSkip,
     isDisabled,
     composer,
     scrollRef,
   } = props
 
   return (
-    <div ref={scrollRef} className="relative flex-1 overflow-y-auto pb-32">
-      <div className="mx-auto flex max-w-4xl flex-col gap-6 px-4 py-6 sm:px-6">
+    <div ref={scrollRef} className="relative flex-1 overflow-y-auto bg-[#f5f5f2] pb-36">
+      <div className="mx-auto flex max-w-4xl flex-col gap-5 px-4 py-6 sm:px-6">
         <IntroMessage description={introDescription} prompt={prompt} />
 
         {messages.length > 0 ? (
-          <div className="border-t border-zinc-100" />
+          <div className="border-t border-zinc-200" />
         ) : null}
 
         {messages.map((message, index) => (
@@ -340,11 +310,11 @@ function ConversationThread(props: {
         ) : null}
 
         {showPlanCard ? (
-          <div className="mx-auto w-full max-w-2xl px-4 sm:px-6">
+          <div className="mx-auto w-full max-w-3xl px-4 sm:px-6">
             {isDraftingPlan ? (
-              <div className="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-4">
+              <div className="space-y-1">
                 <TextShimmer className="text-sm font-medium text-zinc-800">Drafting your plan in chat</TextShimmer>
-                <p className="mt-1 text-xs text-zinc-500">Converting your confirmed answers into a version-one implementation plan.</p>
+                <p className="text-xs text-zinc-500">Converting your confirmed answers into a version-one implementation plan.</p>
               </div>
             ) : (
               <div className="space-y-4">
@@ -370,19 +340,6 @@ function ConversationThread(props: {
                 </div>
               </div>
             )}
-          </div>
-        ) : null}
-
-        {showSkip ? (
-          <div className="mx-auto w-full max-w-2xl px-4 sm:px-6">
-            <button
-              type="button"
-              onClick={() => void onSkip()}
-              disabled={!canEdit || isDisabled}
-              className="text-xs text-zinc-500 underline decoration-zinc-300 underline-offset-4 transition-colors hover:text-zinc-800 disabled:opacity-50"
-            >
-              Skip plan and build now
-            </button>
           </div>
         ) : null}
       </div>
@@ -565,7 +522,7 @@ export function ProjectCreationStudio(props: {
   const canSubmitCurrentAnswer = blueprintVisible ? !!draft.trim() : !guidedAnswerSet ? !!draft.trim() : useCustomAnswer ? !!draft.trim() : !!buildGuidedAnswerDraft(guidedAnswerSet, selectedGuidedOptions)
 
   return (
-    <div className="min-h-screen bg-white text-zinc-900">
+    <div className="min-h-screen bg-[#f5f5f2] text-zinc-900">
       <div className="relative flex min-h-screen flex-col">
         <PlanningHeader
           projectLabel={projectLabel}
@@ -608,8 +565,6 @@ export function ProjectCreationStudio(props: {
           onRefine={() => {
             setTimeout(() => textareaRef.current?.focus(), 0)
           }}
-          onSkip={onSkip}
-          showSkip={!blueprintVisible}
           isDisabled={!canEdit || isSubmitting}
           composer={
             <ChatComposer
@@ -623,6 +578,9 @@ export function ProjectCreationStudio(props: {
               onSubmit={handleSubmit}
               submitLabel={blueprintVisible ? composerSubmitLabel : "Send"}
               canSubmit={canSubmitCurrentAnswer}
+              showSkip={!blueprintVisible}
+              onSkip={onSkip}
+              isDisabled={!canEdit || isSubmitting}
             />
           }
           scrollRef={scrollRef}
