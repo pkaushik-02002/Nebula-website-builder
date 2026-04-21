@@ -129,12 +129,19 @@ export interface ProjectFileTreeProps {
   selectedFile: GeneratedFile | null
   onSelectFile: (file: GeneratedFile) => void
   isGenerating?: boolean
+  className?: string
 }
 
-export function ProjectFileTree({ files, selectedFile, onSelectFile, isGenerating }: ProjectFileTreeProps) {
+export function ProjectFileTree({
+  files,
+  selectedFile,
+  onSelectFile,
+  isGenerating,
+  className,
+}: ProjectFileTreeProps) {
   const fileTree = buildFileTree(files)
   return (
-    <div className="custom-scrollbar w-56 flex-shrink-0 overflow-y-auto border-r border-zinc-200 bg-[#f8f8f5]">
+    <div className={cn("custom-scrollbar w-56 flex-shrink-0 overflow-y-auto border-r border-zinc-200 bg-[#f8f8f5]", className)}>
       <div className="p-2.5">
         <div className="flex items-center justify-between px-2 py-2.5">
           <span className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Files</span>

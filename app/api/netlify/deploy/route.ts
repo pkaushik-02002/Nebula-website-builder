@@ -156,22 +156,35 @@ async function zipDistFromSandbox(sandbox: Sandbox) {
   return zip.generateAsync({ type: "uint8array" })
 }
 
+async function getComputerFiles(computerId: string) {
+  const snap = await adminDb.collection("computers").doc(computerId).get()
+  if (!snap.exists) return null
+  const data = snap.data() as any
+  const files = Array.isArray(data?.files) ? data.files : null
+  return { data, files }
+}
+
 export async function POST(req: Request) {
   let projectId = ""
+  let computerId = ""
   let requestedSiteId: string | null = null
   let requestedSiteName: string | null = null
 
   try {
     const body = await req.json()
     projectId = String(body?.projectId || "")
+    computerId = String(body?.computerId || "")
     requestedSiteId = body?.siteId ? String(body.siteId) : null
     requestedSiteName = body?.siteName ? String(body.siteName) : null
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 })
   }
 
-  if (!projectId) {
-    return NextResponse.json({ error: "Missing projectId" }, { status: 400 })
+  const sourceId = computerId || projectId
+  const isComputer = !!computerId
+
+  if (!sourceId) {
+    return NextResponse.json({ error: "Missing projectId or computerId" }, { status: 400 })
   }
 
   const encoder = new TextEncoder()
@@ -190,9 +203,11 @@ export async function POST(req: Request) {
           return
         }
 
-        const project = await getProjectFiles(projectId)
+        const project = isComputer
+          ? await getComputerFiles(computerId)
+          : await getProjectFiles(projectId)
         if (!project || !project.files) {
-          send({ type: "error", error: "Project not found or missing files" })
+          send({ type: "error", error: "Project not found or has no files yet" })
           controller.close()
           return
         }
@@ -346,7 +361,6 @@ export async function POST(req: Request) {
         let siteUrl: string | null = project.data?.netlifySiteUrl || null
         let adminUrl: string | null = project.data?.netlifyAdminUrl || null
 
-        // Helper to slugify a human-friendly site name into a Netlify-safe subdomain
         const slugifySiteName = (name: string) =>
           (name || "")
             .toLowerCase()
@@ -356,7 +370,8 @@ export async function POST(req: Request) {
             .slice(0, 60)
 
         if (!siteId) {
-          const fallbackName = `project-${projectId.toLowerCase().slice(0, 12)}`
+          const prefix = isComputer ? "computer" : "project"
+          const fallbackName = `${prefix}-${sourceId.toLowerCase().slice(0, 12)}`
           const rawName = (requestedSiteName || "").trim()
           const safeName = slugifySiteName(rawName) || fallbackName
 
@@ -432,7 +447,8 @@ export async function POST(req: Request) {
         const deployId = deploy?.id || deploy?.deploy_id || null
         const deployUrl = deploy?.deploy_ssl_url || deploy?.ssl_url || deploy?.deploy_url || null
 
-        await adminDb.collection("projects").doc(projectId).set(
+        const collection = isComputer ? "computers" : "projects"
+        await adminDb.collection(collection).doc(sourceId).set(
           {
             netlifySiteId: siteId,
             netlifySiteUrl: siteUrl,

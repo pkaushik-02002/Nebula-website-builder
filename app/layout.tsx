@@ -1,9 +1,9 @@
+// Om Namo Narayana. Om Ganesha Namah.
 import type React from "react"
 import type { Metadata } from "next"
 import { Manrope } from "next/font/google"
-import { Analytics } from "@vercel/analytics/next"
 import { AuthProvider } from "@/contexts/auth-context"
-import "@21st-sdk/react/styles.css"
+import { CookieConsentProvider } from "@/components/providers/cookie-consent-provider"
 import "./globals.css"
 
 const manrope = Manrope({
@@ -149,9 +149,10 @@ export default function RootLayout({
       </head>
       <body className={`${manrope.variable} font-sans antialiased bg-[#f5f5f2] text-[#1f1f1f] overflow-x-hidden`}>
         <AuthProvider>
-          {children}
+          <CookieConsentProvider>
+            {children}
+          </CookieConsentProvider>
         </AuthProvider>
-        <Analytics />
       </body>
     </html>
   )

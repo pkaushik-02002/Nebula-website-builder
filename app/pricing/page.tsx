@@ -17,7 +17,6 @@ import {
   type PlanId,
 } from "@/lib/plans"
 import { cn } from "@/lib/utils"
-import { getAgentRunLimitForPlan } from "@/lib/agent-quotas"
 import {
   Select,
   SelectContent,
@@ -113,16 +112,6 @@ export default function PricingPage() {
     : 0
   const remaining = userData
     ? Math.max(0, userData.tokenUsage?.remaining ?? tokensLimit - tokensUsed)
-    : 0
-  const agentRunLimit = userData ? getAgentRunLimitForPlan(userData.planId, userData.agentRunLimit) : 0
-  const agentUsed = userData ? Math.max(0, Number(userData.agentUsage?.used ?? 0)) : 0
-  const agentRemaining = userData
-    ? Math.max(
-        0,
-        Number.isFinite(Number(userData.agentUsage?.remaining))
-          ? Number(userData.agentUsage?.remaining)
-          : agentRunLimit - agentUsed
-      )
     : 0
   const normalizeFeatureCopy = (feature: string) => {
     const f = feature.toLowerCase()
@@ -240,9 +229,6 @@ export default function PricingPage() {
                   ? `Renews ${new Date(userData.tokenUsage.periodEnd).toLocaleDateString()} · `
                   : ""}
                 Usage refreshes each billing period
-              </p>
-              <p className="mt-1 text-[11px] text-zinc-500">
-                Agents: {agentRemaining.toLocaleString()} of {agentRunLimit.toLocaleString()} runs remaining this period
               </p>
             </div>
 

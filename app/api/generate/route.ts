@@ -1,19 +1,13 @@
 import OpenAI from "openai"
-import { AgentClient } from "@21st-sdk/node"
 import { adminAuth, adminDb } from "@/lib/firebase-admin"
 import { Timestamp } from "firebase-admin/firestore"
 import { DEFAULT_PLANS } from "@/lib/firebase"
-import { buildkitAgents } from "@/lib/buildkit-agents"
-import { getAgentRunLimitForPlan, resolveAgentUsageWindow } from "@/lib/agent-quotas"
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 const nvidia = new OpenAI({
   apiKey: process.env.NVIDIA_API_KEY || process.env.NGC_API_KEY,
   baseURL: "https://integrate.api.nvidia.com/v1",
 })
-const anClient = process.env.API_KEY_21ST
-  ? new AgentClient({ apiKey: process.env.API_KEY_21ST })
-  : null
 
 const DEFAULT_MODEL = "GPT-4-1 Mini"
 const OPENAI_MODEL_MAP: Record<string, string> = {
@@ -60,16 +54,7 @@ type ProjectFileInput = {
   content: string
 }
 
-type AgentStreamParseResult = {
-  content: string
-  streamedLength: number
-}
-
 type Provider = "openai" | "nvidia"
-
-type RuntimeSelection =
-  | { runtime: "builder" }
-  | { runtime: "agent"; agentSlug: string; agentModel?: string }
 
 type StreamState = {
   usageInfo: any
@@ -284,83 +269,6 @@ function selectRelevantFiles(existingFiles: ProjectFileInput[], prompt: string) 
   return dedupeFilesByPath(dependencyExpanded).slice(0, FILE_SELECTION_LIMIT * 2)
 }
 
-function parse21stUiMessageSSE(raw: string): AgentStreamParseResult {
-  const lines = raw.split(/\r?\n/)
-  let content = ""
-
-  for (const line of lines) {
-    if (!line.startsWith("data:")) continue
-    const payload = line.slice(5).trim()
-    if (!payload || payload === "[DONE]") continue
-
-    try {
-      const event = JSON.parse(payload) as Record<string, unknown>
-      const type = typeof event.type === "string" ? event.type : ""
-
-      if (type === "text-delta" && typeof event.delta === "string") {
-        content += event.delta
-        continue
-      }
-
-      if (type === "text" && typeof event.text === "string") {
-        content += event.text
-        continue
-      }
-
-      if (type === "message-delta" && typeof event.delta === "string") {
-        content += event.delta
-        continue
-      }
-
-      if (type === "response.output_text.delta" && typeof event.delta === "string") {
-        content += event.delta
-        continue
-      }
-    } catch {
-      // ignore malformed non-JSON events
-    }
-  }
-
-  return { content, streamedLength: content.length }
-}
-
-async function generateWith21stAgent(params: {
-  agentSlug: string
-  model?: string
-  systemPrompt: string
-  userMessageContent: string
-}): Promise<AgentStreamParseResult> {
-  if (!anClient) {
-    throw new Error("21st agent API key is not configured")
-  }
-
-  const result = await anClient.threads.run({
-    agent: params.agentSlug,
-    messages: [
-      {
-        role: "user",
-        parts: [{ type: "text", text: params.userMessageContent }],
-      },
-    ],
-    options: {
-      ...(params.model ? { model: params.model } : {}),
-      systemPrompt: {
-        type: "preset",
-        preset: "claude_code",
-        append: params.systemPrompt,
-      },
-      maxTurns: 6,
-    },
-  })
-
-  const raw = await result.response.text()
-  const parsed = parse21stUiMessageSSE(raw)
-  if (!parsed.content.trim()) {
-    throw new Error("21st agent returned empty content")
-  }
-  return parsed
-}
-
 function isOpenSourceNvidiaModel(modelId: string): boolean {
   const normalized = modelId.toLowerCase()
   return OPEN_SOURCE_MODEL_PATTERNS.some((pattern) => normalized.includes(pattern))
@@ -430,40 +338,6 @@ async function resolveModel(model: string) {
     client: openai,
     selectedModel: OPENAI_MODEL_MAP[DEFAULT_MODEL],
     provider: "openai" as const,
-  }
-}
-
-function resolveGenerationRuntime(params: {
-  creationMode: "build" | "agent"
-  agentSlug?: string
-  model: string
-}): RuntimeSelection {
-  if (params.creationMode !== "agent") {
-    return { runtime: "builder" }
-  }
-
-  const defaultAgentSlug: string = buildkitAgents[0]?.slug || "my-agent"
-  const knownAgentSlugs: Set<string> = new Set(buildkitAgents.map((agent) => agent.slug as string))
-  const candidateSlug = (params.agentSlug || "").trim()
-
-  let resolvedSlug = defaultAgentSlug
-  if (!candidateSlug) {
-    console.warn("[generate] Agent runtime selected with missing agentSlug; defaulting to primary agent.", {
-      defaultAgentSlug,
-    })
-  } else if (!knownAgentSlugs.has(candidateSlug)) {
-    console.warn("[generate] Agent runtime selected with invalid agentSlug; defaulting to primary agent.", {
-      requestedAgentSlug: candidateSlug,
-      defaultAgentSlug,
-    })
-  } else {
-    resolvedSlug = candidateSlug
-  }
-
-  return {
-    runtime: "agent",
-    agentSlug: resolvedSlug,
-    agentModel: CLAUDE_MODEL_MAP[params.model],
   }
 }
 
@@ -779,46 +653,6 @@ async function runBuilderRuntime(params: {
   await streamWithResolvedProvider(params)
 }
 
-async function runAgentRuntime(params: {
-  agentSlug: string
-  agentModel?: string
-  client: OpenAI
-  provider: Provider
-  selectedModel: string
-  systemPrompt: string
-  userMessageContent: string
-  existingFiles?: { path: string; content: string }[]
-  controller: ReadableStreamDefaultController<Uint8Array>
-  encoder: TextEncoder
-  state: StreamState
-}) {
-  // TODO(agent-runtime): introduce explicit clarification and setup-checkpoint stages
-  // once corresponding persisted state + UI wiring are in place.
-  try {
-    const agentResult = await generateWith21stAgent({
-      agentSlug: params.agentSlug,
-      model: params.agentModel,
-      systemPrompt: params.systemPrompt,
-      userMessageContent: params.userMessageContent,
-    })
-    params.state.streamedLength = agentResult.streamedLength
-    params.controller.enqueue(params.encoder.encode(agentResult.content))
-  } catch (agentError) {
-    console.error("21st agent generation failed, falling back to default provider:", agentError)
-    await streamWithResolvedProvider({
-      client: params.client,
-      provider: params.provider,
-      selectedModel: params.selectedModel,
-      systemPrompt: params.systemPrompt,
-      userMessageContent: params.userMessageContent,
-      existingFiles: params.existingFiles,
-      controller: params.controller,
-      encoder: params.encoder,
-      state: params.state,
-    })
-  }
-}
-
 export async function GET() {
   const nvidiaModels = await getNvidiaModels()
   return Response.json({
@@ -833,8 +667,6 @@ export async function POST(req: Request) {
     model?: string
     idToken?: string
     existingFiles?: { path: string; content: string }[]
-    creationMode?: "build" | "agent"
-    agentSlug?: string
     cloneContext?: { title: string; description: string; markdown: string; sourceUrl: string }
   } | null
   if (!body || typeof body !== "object") {
@@ -845,14 +677,7 @@ export async function POST(req: Request) {
     model = DEFAULT_MODEL,
     idToken,
     existingFiles,
-    creationMode = "build",
-    agentSlug,
   } = body
-  const runtimeSelection = resolveGenerationRuntime({
-    creationMode,
-    agentSlug,
-    model,
-  })
 
   // authenticate user via Firebase ID token (body) or Authorization Bearer token (header)
   const authHeader = req.headers.get("authorization") || req.headers.get("Authorization")
@@ -883,7 +708,6 @@ export async function POST(req: Request) {
     const planId = userData?.planId || 'free'
     planIdForUsage = planId
     const planTokensPerMonth = userData?.tokensLimit != null ? Number(userData.tokensLimit) : (DEFAULT_PLANS[planId as keyof typeof DEFAULT_PLANS]?.tokensPerMonth || DEFAULT_PLANS.free.tokensPerMonth)
-    const agentRunLimit = getAgentRunLimitForPlan(planId, userData?.agentRunLimit)
 
     const periodEnd = getPeriodEndDate(userData?.tokenUsage?.periodEnd)
     const now = new Date()
@@ -895,13 +719,6 @@ export async function POST(req: Request) {
         tokenUsage: {
           used: 0,
           remaining: planTokensPerMonth,
-          periodStart: Timestamp.fromDate(now),
-          periodEnd: Timestamp.fromDate(nextPeriodEnd),
-        },
-        agentRunLimit,
-        agentUsage: {
-          used: 0,
-          remaining: agentRunLimit,
           periodStart: Timestamp.fromDate(now),
           periodEnd: Timestamp.fromDate(nextPeriodEnd),
         },
@@ -921,32 +738,8 @@ export async function POST(req: Request) {
     remaining = Math.max(0, Number(remaining))
 
     console.log('Token check - User:', uid, 'Plan:', planId, 'Plan Tokens:', planTokensPerMonth, 'Remaining:', remaining, 'TokenUsage:', userData?.tokenUsage)
-    if (runtimeSelection.runtime !== "agent" && remaining <= 0) {
+    if (remaining <= 0) {
       return new Response(JSON.stringify({ error: 'Insufficient tokens' }), { status: 402 })
-    }
-
-    const fallbackPeriodEnd = shouldReset ? getFirstDayOfNextMonth(now) : (periodEnd || getFirstDayOfNextMonth(now))
-    const agentUsageWindow = resolveAgentUsageWindow({
-      rawUsage: shouldReset ? { used: 0, remaining: agentRunLimit, periodStart: now, periodEnd: fallbackPeriodEnd } : userData?.agentUsage,
-      limit: agentRunLimit,
-      fallbackPeriodStart: now,
-      fallbackPeriodEnd,
-    })
-    if (runtimeSelection.runtime === "agent" && agentUsageWindow.remaining <= 0) {
-      return new Response(
-        JSON.stringify({
-          error: "Agents limit reached",
-          code: "AGENT_LIMIT_REACHED",
-          fallbackMode: "build",
-          agent: {
-            remaining: 0,
-            limit: agentRunLimit,
-            planId,
-            periodEnd: agentUsageWindow.periodEnd.toISOString(),
-          },
-        }),
-        { status: 429 }
-      )
     }
   } catch (e) {
     console.error('Token check failed', e)
@@ -1165,33 +958,17 @@ OPEN-SOURCE MODEL RELIABILITY RULES (MANDATORY):
   const stream = new ReadableStream({
     async start(controller) {
       try {
-        if (runtimeSelection.runtime === "agent") {
-          await runAgentRuntime({
-            agentSlug: runtimeSelection.agentSlug,
-            agentModel: runtimeSelection.agentModel,
-            client,
-            provider,
-            selectedModel,
-            systemPrompt: finalSystemPrompt,
-            userMessageContent,
-            existingFiles,
-            controller,
-            encoder,
-            state: streamState,
-          })
-        } else {
-          await runBuilderRuntime({
-            client,
-            provider,
-            selectedModel,
-            systemPrompt: finalSystemPrompt,
-            userMessageContent,
-            existingFiles,
-            controller,
-            encoder,
-            state: streamState,
-          })
-        }
+        await runBuilderRuntime({
+          client,
+          provider,
+          selectedModel,
+          systemPrompt: finalSystemPrompt,
+          userMessageContent,
+          existingFiles,
+          controller,
+          encoder,
+          state: streamState,
+        })
 
         // Realistic token count: API usage when present, else ~4 chars per token (OpenAI-style)
         const promptLength = userMessageContent.length
@@ -1203,19 +980,19 @@ OPEN-SOURCE MODEL RELIABILITY RULES (MANDATORY):
 
         // when stream finishes, attempt to deduct tokens in a transaction
         try {
-          if ((runtimeSelection.runtime !== "agent" && tokensToCharge > 0) || runtimeSelection.runtime === "agent") {
+          if (tokensToCharge > 0) {
               const userRef = adminDb.collection('users').doc(uid)
               await adminDb.runTransaction(async (tx) => {
                 const snap = await tx.get(userRef)
                 if (!snap.exists) throw new Error('user-not-found')
                 const data = snap.data() as any
-                
+
                 // Get user's plan token limit
                 const planId = data?.planId || 'free'
                 const planTokensPerMonth = data?.tokensLimit != null ? Number(data.tokensLimit) : (DEFAULT_PLANS[planId as keyof typeof DEFAULT_PLANS]?.tokensPerMonth || DEFAULT_PLANS.free.tokensPerMonth)
-                
+
                 let remaining = data?.tokenUsage?.remaining
-                
+
                 // Migration: if tokenUsage doesn't exist but tokensLimit/tokensUsed does, use those
                 if (remaining === undefined || remaining === null) {
                   if (data?.tokensLimit && data?.tokensUsed !== undefined) {
@@ -1226,11 +1003,10 @@ OPEN-SOURCE MODEL RELIABILITY RULES (MANDATORY):
                 }
                 // Never use negative remaining (robust against bad data)
                 remaining = Math.max(0, Number(remaining))
-                
+
                 console.log('Transaction - User Plan:', planId, 'Plan Tokens:', planTokensPerMonth, 'Charging tokens:', tokensToCharge, 'Remaining before:', remaining)
-                
+
                 // Always deduct available credits for a completed generation.
-                // If actual usage is higher than remaining, consume remaining and clamp to 0.
                 if (tokensToCharge > planTokensPerMonth) {
                   console.warn(`Generation used ${tokensToCharge} tokens while ${planId} plan monthly allowance is ${planTokensPerMonth}.`)
                 }
@@ -1242,26 +1018,14 @@ OPEN-SOURCE MODEL RELIABILITY RULES (MANDATORY):
                 const newUsed = currentUsed + Math.max(0, actualCharge)
                 const newRemaining = Math.max(0, remaining - Math.max(0, actualCharge))
                 console.log('Transaction - New tokens - Used:', newUsed, 'Remaining:', newRemaining)
-                const updatePayload: Record<string, unknown> = {}
-                if (runtimeSelection.runtime !== "agent" && tokensToCharge > 0) {
-                  updatePayload['tokenUsage.used'] = newUsed
-                  updatePayload['tokenUsage.remaining'] = newRemaining
-                }
-                if (runtimeSelection.runtime === "agent") {
-                  const agentRunLimit = getAgentRunLimitForPlan(planIdForUsage, data?.agentRunLimit)
-                  const currentAgentUsed = Math.max(0, Number(data?.agentUsage?.used ?? 0))
-                  const currentAgentRemaining = Math.max(0, Number(data?.agentUsage?.remaining ?? agentRunLimit))
-                  updatePayload["agentRunLimit"] = agentRunLimit
-                  updatePayload["agentUsage.used"] = currentAgentUsed + 1
-                  updatePayload["agentUsage.remaining"] = Math.max(0, currentAgentRemaining - 1)
-                }
-                tx.update(userRef, updatePayload)
+                tx.update(userRef, {
+                  'tokenUsage.used': newUsed,
+                  'tokenUsage.remaining': newRemaining,
+                })
               })
           }
         } catch (e) {
           console.error('Failed to charge tokens after generation:', e)
-          // note: stream already delivered; cannot retract, but we surface server log
-          // The generation already succeeded, so we log the error but don't crash
         }
 
         controller.close()

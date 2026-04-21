@@ -5,14 +5,13 @@ import { usePathname, useRouter } from "next/navigation"
 import { collection, addDoc, serverTimestamp } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { useAuth } from "@/contexts/auth-context"
-import { getAgentRunLimitForPlan } from "@/lib/agent-quotas";
-import { promptSuggestsSupabaseBackend } from "@/lib/project-blueprint";
+
 const PENDING_CREATE_KEY = "buildkit_pending_create"
 
 export function CreateAfterLogin() {
   const pathname = usePathname()
   const router = useRouter()
-  const { user, userData, loading } = useAuth()
+  const { user, loading } = useAuth()
   const handledRef = useRef(false)
 
   useEffect(() => {
@@ -23,8 +22,7 @@ export function CreateAfterLogin() {
     let data: {
       prompt: string
       model: string
-      creationMode?: "build" | "agent"
-      agentSlug?: string
+      buildMode?: "build" | "agents"
     }
     try {
       data = JSON.parse(raw)
@@ -39,30 +37,36 @@ export function CreateAfterLogin() {
 
     handledRef.current = true
     sessionStorage.removeItem(PENDING_CREATE_KEY)
-    const agentLimit = getAgentRunLimitForPlan(userData?.planId, userData?.agentRunLimit)
-    const agentRemaining = Math.max(
-      0,
-      Number.isFinite(Number(userData?.agentUsage?.remaining))
-        ? Number(userData?.agentUsage?.remaining)
-        : agentLimit - Number(userData?.agentUsage?.used ?? 0)
-    )
-    const resolvedCreationMode: "build" | "agent" =
-      data.creationMode === "agent" && agentRemaining <= 0 ? "build" : (data.creationMode || "build")
+
+    if (data.buildMode === "agents") {
+      user.getIdToken().then((idToken) => {
+        return fetch("/api/computer/create", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${idToken}`,
+          },
+          body: JSON.stringify({ prompt: data.prompt.trim(), referenceUrls: [] }),
+        })
+      }).then(async (res) => {
+        const json = await res.json()
+        if (!res.ok || !json?.computerId) throw new Error(json?.error ?? "Failed to create")
+        router.replace(`/computer/${json.computerId}?autostart=1`)
+      }).catch((err) => {
+        console.error("CreateAfterLogin: failed to create computer", err)
+        handledRef.current = false
+      })
+      return
+    }
 
     const projectData: Record<string, unknown> = {
       prompt: data.prompt.trim(),
       model: data.model || "GPT-4-1 Mini",
       status: "pending",
-      creationMode: resolvedCreationMode,
-      suggestsBackend: promptSuggestsSupabaseBackend(data.prompt.trim()),
       createdAt: serverTimestamp(),
       messages: [],
       ownerId: user.uid,
       visibility: "private",
-    }
-
-    if (resolvedCreationMode === "agent" && data.agentSlug) {
-      projectData.agentSlug = data.agentSlug
     }
 
     addDoc(collection(db, "projects"), projectData)
@@ -73,7 +77,7 @@ export function CreateAfterLogin() {
         console.error("CreateAfterLogin: failed to create project", err)
         handledRef.current = false
       })
-  }, [pathname, user, userData, loading, router])
+  }, [pathname, user, loading, router])
 
   return null
 }

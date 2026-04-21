@@ -12,16 +12,8 @@ import {
 } from "firebase/auth"
 import { doc, getDoc, setDoc, updateDoc, serverTimestamp, onSnapshot, Timestamp, collection } from "firebase/firestore"
 import { auth, db, googleProvider, githubProvider, type UserPlan, PLAN_TOKEN_LIMITS, DEFAULT_PLANS } from "@/lib/firebase"
-import { getAgentRunLimitForPlan } from "@/lib/agent-quotas"
 
 interface TokenUsage {
-  used: number
-  remaining: number
-  periodStart: Date
-  periodEnd: Date
-}
-
-interface AgentUsage {
   used: number
   remaining: number
   periodStart: Date
@@ -36,9 +28,7 @@ interface UserData {
   planId: string
   planName?: string
   tokenUsage: TokenUsage
-  agentUsage: AgentUsage
   tokensLimit: number
-  agentRunLimit: number
   createdAt: Date
   currentWorkspaceId?: string
 }
@@ -89,7 +79,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const now = new Date()
       const planId = 'free'
       const plan = DEFAULT_PLANS[planId as UserPlan]
-      const agentRunLimit = getAgentRunLimitForPlan(planId)
       const initial = {
         uid: firebaseUser.uid,
         email: firebaseUser.email,
@@ -99,13 +88,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         tokenUsage: {
           used: 0,
           remaining: plan.tokensPerMonth,
-          periodStart: serverTimestamp(),
-          periodEnd: serverTimestamp(),
-        },
-        agentRunLimit,
-        agentUsage: {
-          used: 0,
-          remaining: agentRunLimit,
           periodStart: serverTimestamp(),
           periodEnd: serverTimestamp(),
         },
@@ -159,8 +141,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             // Prefer Firestore values (set by Stripe webhook / API) over defaults
             let planName = data.planName || DEFAULT_PLANS[planId as UserPlan]?.name || planId
             let tokensLimit = data.tokensLimit != null ? Number(data.tokensLimit) : (DEFAULT_PLANS[planId as UserPlan]?.tokensPerMonth ?? PLAN_TOKEN_LIMITS.free)
-            const agentRunLimit = getAgentRunLimitForPlan(planId, data.agentRunLimit)
-
             // Optionally override from plans collection
             try {
               const planRef = doc(db, 'plans', planId)
@@ -177,20 +157,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             const tokenUsage = data.tokenUsage || { used: data.tokensUsed || 0, remaining: tokensLimit - (data.tokensUsed || 0), periodStart: new Date(), periodEnd: new Date() }
             const tokenPeriodStart = tokenUsage.periodStart?.toDate ? tokenUsage.periodStart.toDate() : new Date(tokenUsage.periodStart)
             const tokenPeriodEnd = tokenUsage.periodEnd?.toDate ? tokenUsage.periodEnd.toDate() : new Date(tokenUsage.periodEnd)
-            const agentUsageRaw = data.agentUsage || {}
-            const agentUsed = Math.max(0, Number(agentUsageRaw.used ?? 0))
-            const agentRemaining = Math.max(
-              0,
-              Number.isFinite(Number(agentUsageRaw.remaining))
-                ? Number(agentUsageRaw.remaining)
-                : agentRunLimit - agentUsed
-            )
-            const agentPeriodStart = agentUsageRaw.periodStart?.toDate
-              ? agentUsageRaw.periodStart.toDate()
-              : tokenPeriodStart
-            const agentPeriodEnd = agentUsageRaw.periodEnd?.toDate
-              ? agentUsageRaw.periodEnd.toDate()
-              : tokenPeriodEnd
 
             setUserData({
               uid: firebaseUser.uid,
@@ -205,14 +171,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 periodStart: tokenPeriodStart,
                 periodEnd: tokenPeriodEnd,
               },
-              agentUsage: {
-                used: agentUsed,
-                remaining: agentRemaining,
-                periodStart: agentPeriodStart,
-                periodEnd: agentPeriodEnd,
-              },
               tokensLimit,
-              agentRunLimit,
               createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date(),
               currentWorkspaceId: data.currentWorkspaceId || null,
             })

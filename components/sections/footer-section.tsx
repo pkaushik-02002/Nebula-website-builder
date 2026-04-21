@@ -1,4 +1,6 @@
 import Link from "next/link"
+import { CookiePreferencesButton } from "@/components/legal/cookie-preferences-button"
+import { LEGAL_CONTACT_HREF } from "@/lib/legal-content"
 
 export function FooterSection() {
   return (
@@ -19,6 +21,7 @@ export function FooterSection() {
                 <Link href="/" className="block hover:text-zinc-900">Home</Link>
                 <Link href="/pricing" className="block hover:text-zinc-900">Pricing</Link>
                 <Link href="/projects" className="block hover:text-zinc-900">Projects</Link>
+                <Link href="/computer/new" className="block hover:text-zinc-900">Computer</Link>
                 <Link href="/help" className="block hover:text-zinc-900">Help</Link>
               </div>
             </div>
@@ -27,26 +30,27 @@ export function FooterSection() {
               <div className="mt-3 space-y-2 text-sm text-zinc-600">
                 <Link href="/help" className="block hover:text-zinc-900">About</Link>
                 <Link href="/settings" className="block hover:text-zinc-900">Account</Link>
-                <Link href="#" className="block hover:text-zinc-900">Careers</Link>
-                <Link href="#" className="block hover:text-zinc-900">Contact</Link>
+                <a href={LEGAL_CONTACT_HREF} className="block hover:text-zinc-900">Contact</a>
               </div>
             </div>
             <div>
               <p className="text-sm font-medium text-zinc-900">Legal</p>
               <div className="mt-3 space-y-2 text-sm text-zinc-600">
-                <Link href="#" className="block hover:text-zinc-900">Terms</Link>
-                <Link href="#" className="block hover:text-zinc-900">Privacy</Link>
-                <Link href="#" className="block hover:text-zinc-900">Security</Link>
+                <Link href="/terms" className="block hover:text-zinc-900">Terms</Link>
+                <Link href="/privacy" className="block hover:text-zinc-900">Privacy</Link>
+                <Link href="/cookies" className="block hover:text-zinc-900">Cookies</Link>
+                <CookiePreferencesButton className="block hover:text-zinc-900">
+                  Cookie settings
+                </CookiePreferencesButton>
               </div>
             </div>
           </div>
         </div>
         <div className="mt-10 flex flex-col items-start justify-between gap-3 border-t border-zinc-200 pt-5 text-xs text-zinc-500 sm:flex-row sm:items-center">
-          <p>© {new Date().getFullYear()} Lotus.build. All rights reserved.</p>
+          <p>Copyright {new Date().getFullYear()} Lotus.build. All rights reserved.</p>
           <p>Made for founders building real companies.</p>
         </div>
       </div>
     </footer>
   )
 }
-

@@ -8,38 +8,44 @@ export type PlanId = "free" | "pro" | "team"
 export interface PlanDisplayConfig {
   description: string
   recommended?: boolean
+  agentRunsPerPeriod: number
   features: string[]
+}
+
+function createPlanFeatures(tokenLabel: string, agentRunsPerPeriod: number, extras: string[]) {
+  return [
+    tokenLabel,
+    `${agentRunsPerPeriod} agent runs per period`,
+    ...extras,
+  ]
 }
 
 export const PLAN_DISPLAY: Record<PlanId, PlanDisplayConfig> = {
   free: {
     description: "Perfect for trying Lotus.build before going live.",
-    features: [
-      "10,000 credits/month",
-      "5 agent runs per period",
+    agentRunsPerPeriod: 5,
+    features: createPlanFeatures("10,000 credits/month", 5, [
       "Community support",
       "Public projects",
       "Export to GitHub",
-    ],
+    ]),
   },
   pro: {
     description: "For founders shipping production sites with AI speed.",
     recommended: true,
-    features: [
-      "120,000 credits/month",
-      "60 agent runs per period",
+    agentRunsPerPeriod: 60,
+    features: createPlanFeatures("120,000 credits/month", 60, [
       "Premium templates + visual edit",
       "Priority support",
-    ],
+    ]),
   },
   team: {
     description: "Agency-grade scale for teams shipping many client sites.",
-    features: [
-      "500,000 credits/month",
-      "200 agent runs per period",
+    agentRunsPerPeriod: 200,
+    features: createPlanFeatures("500,000 credits/month", 200, [
       "Client handoff + white-label",
       "Priority support",
-    ],
+    ]),
   },
 }
 
@@ -120,6 +126,10 @@ export const DEFAULT_PLANS_FALLBACK: PlanForApi[] = [
 export function planIdForDisplay(id: string): PlanId {
   const lower = id.toLowerCase()
   if (lower === "free" || lower === "hobby" || lower === "starter") return "free"
-  if (lower === "team" || lower === "business" || lower === "elite") return "team"
+  if (lower === "team" || lower === "agency" || lower === "business" || lower === "elite" || lower === "enterprise") return "team"
   return "pro"
+}
+
+export function getAgentRunLimitForPlan(planId: string): number {
+  return PLAN_DISPLAY[planIdForDisplay(planId)].agentRunsPerPeriod
 }

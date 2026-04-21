@@ -1,5 +1,10 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  serverExternalPackages: [
+    "@browserbasehq/stagehand",
+    "@browserbasehq/sdk",
+    "@anthropic-ai/claude-agent-sdk",
+  ],
   typescript: {
     ignoreBuildErrors: true,
   },

@@ -25,7 +25,17 @@ async function getProjectWithVercel(projectId: string) {
   const files = Array.isArray(data?.files) ? data.files : null
   const token = typeof data?.vercelToken === "string" ? data.vercelToken : null
   const name = toVercelProjectName(projectId)
-  return { data, files, token, name }
+  return { data, files, token, name, teamId: null as string | null }
+}
+
+async function getComputerWithVercel(computerId: string) {
+  const snap = await adminDb.collection("computers").doc(computerId).get()
+  if (!snap.exists) return null
+  const data = snap.data() as any
+  const files = Array.isArray(data?.files) ? data.files : null
+  const token = typeof data?.vercelToken === "string" ? data.vercelToken : null
+  const name = toVercelProjectName(computerId)
+  return { data, files, token, name, teamId: null as string | null }
 }
 
 function normalizeSourceImports(files: any[]) {
@@ -46,16 +56,21 @@ function normalizeSourceImports(files: any[]) {
 
 export async function POST(req: Request) {
   let projectId = ""
+  let computerId = ""
 
   try {
     const body = await req.json()
     projectId = String(body?.projectId || "")
+    computerId = String(body?.computerId || "")
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 })
   }
 
-  if (!projectId) {
-    return NextResponse.json({ error: "Missing projectId" }, { status: 400 })
+  const isComputer = !!computerId
+  const sourceId = computerId || projectId
+
+  if (!sourceId) {
+    return NextResponse.json({ error: "Missing projectId or computerId" }, { status: 400 })
   }
 
   const encoder = new TextEncoder()
@@ -66,7 +81,9 @@ export async function POST(req: Request) {
 
       try {
         const uid = await requireUserUid(req)
-        const project = await getProjectWithVercel(projectId)
+        const project = isComputer
+          ? await getComputerWithVercel(computerId)
+          : await getProjectWithVercel(projectId)
 
         if (!project) {
           send({ type: "error", error: "Project not found" })
@@ -82,7 +99,7 @@ export async function POST(req: Request) {
         }
 
         if (!project.token) {
-          send({ type: "error", error: "Vercel not connected for this project" })
+          send({ type: "error", error: "Vercel not connected" })
           controller.close()
           return
         }

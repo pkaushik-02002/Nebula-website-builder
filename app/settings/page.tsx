@@ -9,6 +9,7 @@ import { useAuth } from "@/contexts/auth-context"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Input } from "@/components/ui/input"
 import { db } from "@/lib/firebase"
+import { LEGAL_CONTACT_EMAIL } from "@/lib/legal-content"
 import {
   Activity,
   AlertTriangle,
@@ -20,7 +21,6 @@ import {
   Coins,
   CreditCard,
   FolderOpen,
-  Layers,
   Loader2,
   LogOut,
   Mail,
@@ -33,7 +33,6 @@ import {
   Zap,
 } from "lucide-react"
 import { ProtectedRoute } from "@/components/auth/protected-route"
-import { getAgentRunLimitForPlan } from "@/lib/agent-quotas"
 
 type ProjectStatus = "pending" | "generating" | "complete" | "error"
 
@@ -134,9 +133,6 @@ function SettingsContent() {
   const daysLeft = periodEnd ? Math.max(0, Math.ceil((periodEnd.getTime() - Date.now()) / 86400000)) : 0
   const cycleDays = periodStart && periodEnd ? Math.max(1, Math.ceil((periodEnd.getTime() - periodStart.getTime()) / 86400000)) : 30
   const dailyAvg = Math.max(0, Math.round((userData.tokenUsage.used || 0) / cycleDays))
-  const agentRunLimit = getAgentRunLimitForPlan(userData.planId, userData.agentRunLimit)
-  const agentUsed = Math.max(0, Number(userData.agentUsage?.used ?? 0))
-  const agentRemaining = Math.max(0, Number.isFinite(Number(userData.agentUsage?.remaining)) ? Number(userData.agentUsage?.remaining) : agentRunLimit - agentUsed)
   const createdAt = userData.createdAt ? new Date(userData.createdAt) : null
   const isFreePlan = !userData.planId || userData.planId === "free"
 
@@ -160,7 +156,7 @@ function SettingsContent() {
       if (err?.code === "auth/requires-recent-login") {
         setDeleteError("For security, please sign out and sign back in before deleting your account.")
       } else {
-        setDeleteError("Failed to delete account. Please try again or contact support.")
+        setDeleteError(`Failed to delete account. Please try again or contact ${LEGAL_CONTACT_EMAIL}.`)
       }
       setDeleteLoading(false)
     }
@@ -307,38 +303,6 @@ function SettingsContent() {
                   <p className="text-[11px] uppercase tracking-wide text-zinc-400">Days left</p>
                   <p className="mt-1 text-sm font-semibold text-zinc-800">{daysLeft}</p>
                 </div>
-              </div>
-            </div>
-
-            {/* Agent usage */}
-            <div className="rounded-2xl border border-zinc-200 bg-white p-5 sm:p-6">
-              <div className="mb-4 flex items-center gap-2.5">
-                <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-zinc-100">
-                  <Layers className="h-4 w-4 text-zinc-600" />
-                </div>
-                <div>
-                  <h2 className="text-sm font-semibold text-zinc-900">Agent runs</h2>
-                  <p className="text-xs text-zinc-500">
-                    {userData.agentUsage?.periodEnd
-                      ? `Resets ${new Date(userData.agentUsage.periodEnd).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`
-                      : "Resets each billing period"}
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center justify-between">
-                <div>
-                  <span className="text-2xl font-bold text-zinc-900">{agentUsed}</span>
-                  <span className="ml-1.5 text-sm text-zinc-500">of {agentRunLimit} used</span>
-                </div>
-                <span className="rounded-full border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-xs font-medium text-zinc-600">
-                  {agentRemaining} remaining
-                </span>
-              </div>
-              <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-zinc-100">
-                <div
-                  className="h-full rounded-full bg-zinc-800 transition-all"
-                  style={{ width: `${agentRunLimit > 0 ? Math.min(100, Math.round((agentUsed / agentRunLimit) * 100)) : 0}%` }}
-                />
               </div>
             </div>
 
@@ -505,7 +469,7 @@ function SettingsContent() {
               <div>
                 <h2 className="text-sm font-semibold text-zinc-900">Delete account</h2>
                 <p className="mt-0.5 text-xs text-zinc-500">
-                  Permanently delete your account, all projects, and associated data. This cannot be undone.
+                  Delete your login and account profile. This action is permanent and may not automatically remove every related project, workspace, deployment, or integration record.
                 </p>
               </div>
             </div>
@@ -545,14 +509,13 @@ function SettingsContent() {
             {/* Warning list */}
             <div className="mb-5 rounded-xl border border-red-100 bg-red-50 p-4">
               <p className="mb-2.5 text-xs font-semibold uppercase tracking-wide text-red-600">
-                You will permanently lose:
+                This action removes:
               </p>
               <ul className="space-y-1.5 text-sm text-red-700">
                 {[
-                  "Your account and profile",
-                  "All projects and generated code",
-                  "Token and billing history",
-                  "All workspaces and integrations",
+                  "Your Lotus.build sign-in access",
+                  "Your user profile record for this account",
+                  "Direct access to account-level settings tied to this login",
                 ].map((item) => (
                   <li key={item} className="flex items-center gap-2">
                     <XCircle className="h-3.5 w-3.5 shrink-0 text-red-400" />
@@ -560,6 +523,9 @@ function SettingsContent() {
                   </li>
                 ))}
               </ul>
+              <p className="mt-3 text-xs leading-relaxed text-red-600">
+                Related projects, workspaces, deployment records, connected-service metadata, billing records, or operational logs may remain until separately deleted or removed through retention processes.
+              </p>
             </div>
 
             {/* Confirmation input */}

@@ -284,7 +284,15 @@ export default function SignupPage() {
               </p>
 
               <p className="mt-6 text-center text-xs leading-relaxed text-zinc-500 lg:text-left">
-                By creating an account, you agree to our Terms of Service and Privacy Policy.
+                By creating an account, you agree to our{" "}
+                <Link href="/terms" className="font-medium text-zinc-700 hover:text-zinc-900">
+                  Terms and Conditions
+                </Link>{" "}
+                and{" "}
+                <Link href="/privacy" className="font-medium text-zinc-700 hover:text-zinc-900">
+                  Privacy Policy
+                </Link>
+                .
               </p>
             </div>
           </div>

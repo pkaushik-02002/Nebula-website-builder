@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "Bash(npx tsc:*)",
-      "Bash(grep -rn \"BuildKit\\\\|buildkit\" /c/Users/Preet/Desktop/Nebula-website-builder --include=\"*.json\" ! -path \"*/node_modules/*\" ! -path \"*/.next/*\" ! -path \"*/.git/*\")"
+      "Bash(grep -rn \"BuildKit\\\\|buildkit\" /c/Users/Preet/Desktop/Nebula-website-builder --include=\"*.json\" ! -path \"*/node_modules/*\" ! -path \"*/.next/*\" ! -path \"*/.git/*\")",
+      "Bash(grep -E \"\\\\.ts$\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(d.get\\('version','?'\\)\\)\")",
+      "Bash(node -e \"const p=require\\('C:/Users/Preet/Desktop/Lotus.Build/node_modules/@anthropic-ai/sdk/package.json'\\); console.log\\(p.version\\)\")",
+      "Bash(node *)"
     ]
   }
 }

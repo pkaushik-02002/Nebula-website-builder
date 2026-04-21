@@ -87,34 +87,16 @@ import { toast } from "@/hooks/use-toast"
 import { useIsLg } from "@/hooks/use-is-lg"
 import { motion, AnimatePresence } from "framer-motion"
 import { applyPatch } from "diff"
-import type { GeneratedFile, Message, PlanningStatus, Project, ProjectBlueprint, ProjectVisibility } from "./types"
+import type { GeneratedFile, Message, Project, ProjectVisibility } from "./types"
 import { extractAgentMessage } from "./utils"
-import { generateDynamicTimeline } from "@/lib/generate-agent-timeline"
-import { ProjectErrorBoundary, ChatMessage, ResponsivePreview, BrowserNavigator, ProjectCreationStudio, AgentTimelinePanel } from "@/components/project"
-import type { AgentTimelineItem } from "@/components/project/agent-timeline-panel"
-import { DynamicAgentTimeline } from "@/components/project/dynamic-agent-timeline"
+import { ProjectErrorBoundary, ChatMessage, ResponsivePreview, BrowserNavigator } from "@/components/project"
 import { useTypewriter } from "@/components/project/useTypewriter"
-import type { ThinkingStep } from "@/components/project/agent-thinking-stream"
-import { completeThinkingStep } from "@/lib/extract-thinking-steps"
 import { WebsiteSettingsPanel } from "@/components/project/website-settings-panel"
 import { SupabaseSetupModal } from "@/components/project/SupabaseSetupModal"
 import { SupabaseProjectSelector } from "@/components/project/SupabaseProjectSelector"
 import { SupabaseCreateProjectModal } from "@/components/project/SupabaseCreateProjectModal"
 import { VisualEditDesignPanel, type DesignSnapshot } from "@/components/project/visual-edit-design-panel"
 import type { VisualEditSectionItem, VisualEditStructureCommand } from "@/components/project/visual-edit-structure"
-import {
-  buildPlanningAssistantReply,
-  buildPlanNarrative,
-  createInitialBlueprint,
-  createPlanningMessages,
-  promptSuggestsSupabaseBackend,
-  blueprintToText,
-  updateBlueprintFromReply,
-} from "@/lib/project-blueprint"
-import { buildkitAgents } from "@/lib/buildkit-agents"
-import { hasGenerationMeta, parseGenerationMeta } from "@/lib/generation-meta"
-import { resolveTerminalAgentPhase } from "@/lib/agent-runtime"
-import { getAgentRunLimitForPlan } from "@/lib/agent-quotas"
 import { normalizeProject } from "@/lib/project-shape"
 
 // Persists across Strict Mode remounts so only one sandbox run can update logs
@@ -137,11 +119,7 @@ function ProjectContent() {
   const { user, userData, hasTokens, remainingTokens, updateTokensUsed, getOptionalAuthHeader, workspaces, switchWorkspace, loading: authLoading } = useAuth()
 
   const [project, setProject] = useState<Project | null>(null)
-  const [resolvedBlueprint, setResolvedBlueprint] = useState<ProjectBlueprint | null>(null)
   const [loading, setLoading] = useState(true)
-  const [isPlanningReplyPending, setIsPlanningReplyPending] = useState(false)
-  const [creationStudioExited, setCreationStudioExited] = useState(false)
-  const [planningStudioOpenManual, setPlanningStudioOpenManual] = useState(false)
   const [activeTab, setActiveTab] = useState<"preview" | "code">("preview")
   const [chatInput, setChatInput] = useState("")
   const [isGenerating, setIsGenerating] = useState(false)
@@ -164,7 +142,6 @@ function ProjectContent() {
   const displayedLastMsg = useTypewriter(lastAssistantMsg, 18, isGenerating)
   const [backendOrchestrationStage, setBackendOrchestrationStage] = useState<BackendOrchestrationStage>("idle")
   const [reasoningSteps, setReasoningSteps] = useState<string[]>([])
-  const [thinkingSteps, setThinkingSteps] = useState<ThinkingStep[]>([])
   const abortControllerRef = useRef<AbortController | null>(null)
   const sandboxAbortRef = useRef<AbortController | null>(null)
   const sandboxRunIdRef = useRef(0)
@@ -310,39 +287,6 @@ function ProjectContent() {
       setIsTimelineCollapsed(false)
     }
   }, [isSandboxLoading])
-
-  // Load and resolve blueprint asynchronously
-  useEffect(() => {
-    if (!project) {
-      setResolvedBlueprint(null)
-      return
-    }
-
-    if (project.blueprint) {
-      setResolvedBlueprint(project.blueprint)
-      return
-    }
-
-    // Need to create blueprint asynchronously
-    const initBlueprint = async () => {
-      try {
-        const bp = await createInitialBlueprint(project.prompt)
-        setResolvedBlueprint(bp)
-      } catch (error) {
-        console.error("Failed to create blueprint:", error)
-        // Use a minimal fallback blueprint
-        setResolvedBlueprint({
-          summary: project.prompt,
-          readiness: 0,
-          sections: [],
-          openQuestions: [],
-          assumptions: [],
-        })
-      }
-    }
-
-    initBlueprint()
-  }, [project])
 
   // Check if user has Supabase OAuth connection when setup modal is opened
   useEffect(() => {
@@ -658,31 +602,6 @@ function ProjectContent() {
 
     return { ok: false as const, error: "Sandbox verification ended without a result", logsTail }
   }, [getAuthHeader])
-
-  const agentTimeline = useMemo<AgentTimelineItem[]>(() => {
-    const timelineCreationMode = project?.creationMode || "build"
-    const timelinePlanningStatus: PlanningStatus = project?.planningStatus || "draft"
-
-    return generateDynamicTimeline({
-      creationMode: timelineCreationMode,
-      planningStatus: timelinePlanningStatus,
-      currentGeneratingFile,
-      agentStatus,
-      reasoningSteps,
-      thinkingSteps,
-      suggestsBackend: project?.suggestsBackend,
-      backendSetupStatus,
-    })
-  }, [
-    project?.creationMode,
-    project?.planningStatus,
-    currentGeneratingFile,
-    agentStatus,
-    reasoningSteps,
-    thinkingSteps,
-    project?.suggestsBackend,
-    backendSetupStatus,
-  ])
 
   const generatedFileCount = generatingFiles.length
 
@@ -1297,29 +1216,10 @@ function ProjectContent() {
 
   const projectUrl = typeof window !== "undefined" ? `${window.location.origin}/project/${projectId}` : ""
   const canEdit = !!user && !!project && (!project.ownerId || project.ownerId === user.uid || (Array.isArray(project.editorIds) && project.editorIds.includes(user.uid)))
-  const projectNeedsSupabase = !!project && !project.supabaseProjectRef && (project.suggestsBackend || promptSuggestsSupabaseBackend(project.prompt || ""))
+  const projectNeedsSupabase = !!project && !project.supabaseProjectRef && project.suggestsBackend
   const showSupabaseChatPrompt = canEdit && projectNeedsSupabase &&
     !suggestBackendDismissed && project.status === "complete" && !isGenerating
-  const creationMode = project?.creationMode || "build"
-  const isBuildTokenBlocked = remainingTokens <= 0 && creationMode !== "agent"
-  const activeAgent = creationMode === "agent"
-    ? buildkitAgents.find((agent) => agent.slug === project?.agentSlug) || buildkitAgents[0]
-    : null
-  const planningStatus: PlanningStatus = project?.planningStatus || "draft"
-  const planningMessages = Array.isArray(project?.messages) ? project.messages : []
-  const shouldShowCreationStudio =
-    !!project &&
-    creationMode === "agent" &&
-    (
-      planningStudioOpenManual ||
-      (
-        project.status === "pending" &&
-        !creationStudioExited &&
-        planningStatus !== "approved" &&
-        planningStatus !== "skipped"
-      )
-    ) &&
-    !isGenerating
+  const isBuildTokenBlocked = remainingTokens <= 0
 
   const handleShare = () => {
     setShareVisibility(project?.visibility ?? "private")
@@ -2109,57 +2009,14 @@ function ProjectContent() {
   useEffect(() => {
     pendingGenerationStartedRef.current = null
     generationGuardRef.current = null
-    setCreationStudioExited(false)
-    setPlanningStudioOpenManual(false)
   }, [projectId])
 
   useEffect(() => {
-    if (!project || project.status !== "pending" || !canEdit) return
-
-    const needsBlueprint = !project.blueprint
-    const needsPlanningMessage = !project.messages || project.messages.length === 0
-    if (!needsBlueprint && !needsPlanningMessage && project.planningStatus) return
-
-    const initBlueprint = async () => {
-      const nextBlueprint = project.blueprint || await createInitialBlueprint(project.prompt)
-      const nextMessages = await createPlanningMessages(project.prompt, project.messages || [], nextBlueprint)
-      const inferredStatus = buildPlanningAssistantReply(nextBlueprint, undefined, project.messages || []).planningStatus
-      const projectRef = doc(db, "projects", projectId)
-
-      updateDoc(projectRef, {
-        blueprint: nextBlueprint,
-        messages: nextMessages,
-        planningStatus: project.planningStatus || inferredStatus,
-      }).catch(() => {})
-
-      setProject((prev) =>
-        prev
-          ? {
-              ...prev,
-              blueprint: nextBlueprint,
-              messages: nextMessages,
-              planningStatus: prev.planningStatus || inferredStatus,
-            }
-          : prev
-      )
-    }
-
-    initBlueprint()
-  }, [project, canEdit, projectId])
-
-  // Start generation on mount:
-  // - build mode: generate directly from prompt (no default planning gate)
-  // - agent mode: only after explicit plan approval/skip
-  useEffect(() => {
     if (!project || project.status !== "pending" || isGenerating) return
-    if (project.creationMode === "agent") {
-      if (project.planningStatus !== "approved" && project.planningStatus !== "skipped") return
-    }
     if (pendingGenerationStartedRef.current === projectId) return
     pendingGenerationStartedRef.current = projectId
-    setCreationStudioExited(true)
     generateCode(project.prompt, project.model)
-  }, [project?.status, projectId, isGenerating, project?.prompt, project?.model, project?.planningStatus, project?.creationMode])
+  }, [project?.status, projectId, isGenerating, project?.prompt, project?.model])
 
   /** Merge model output (diffs or full files) into existing project; applies patches when content is unified diff. */
   const mergeWithExistingFiles = (
@@ -2316,64 +2173,11 @@ function ProjectContent() {
     const controller = new AbortController()
     abortControllerRef.current = controller
 
-    const updateThinkingPhase = (
-      phase: ThinkingStep["phase"],
-      payload: {
-        title: string
-        description: string
-        details?: string[]
-        completePrevious?: ThinkingStep["phase"][]
-      }
-    ) => {
-      if (creationMode !== "agent") return
-      setThinkingSteps((prev) => {
-        const completeSet = new Set(payload.completePrevious || [])
-        const completed = prev.map((step) =>
-          completeSet.has(step.phase) && step.status === "active"
-            ? completeThinkingStep(step)
-            : step
-        )
-        const existingIndex = completed.findIndex((step) => step.phase === phase)
-        if (existingIndex >= 0) {
-          const next = [...completed]
-          next[existingIndex] = {
-            ...next[existingIndex],
-            title: payload.title,
-            description: payload.description,
-            status: "active",
-            details: payload.details,
-            timestamp: Date.now(),
-          }
-          return next
-        }
-        return completed.concat({
-          id: `${phase}-${Date.now()}`,
-          phase,
-          title: payload.title,
-          description: payload.description,
-          status: "active",
-          details: payload.details,
-          timestamp: Date.now(),
-        })
-      })
-    }
-
     setIsGenerating(true)
     setBackendOrchestrationStage("generating")
     setGeneratingFiles([])
     setAgentStatus("Analyzing your request...")
     setReasoningSteps(["Analyzing your request and understanding scope."])
-    
-    // For agent mode: Initialize thinking steps with analysis phase
-    if (creationMode === "agent") {
-      updateThinkingPhase("analysis", {
-        title: "Understanding requirements",
-        description: "Analyzing your project brief and gathering context",
-        details: ["Reading project brief", "Identifying core features", "Scoping implementation"],
-      })
-    } else {
-      setThinkingSteps([])
-    }
 
     // Track if we've auto-selected a file during this generation
     let hasAutoSelectedFile = false
@@ -2385,16 +2189,6 @@ function ProjectContent() {
     try {
       setAgentStatus("Generating application structure...")
       setReasoningSteps(prev => [...prev, "Planning application structure and components."])
-      
-      // For agent mode: Transition to planning phase
-      if (creationMode === "agent") {
-        updateThinkingPhase("planning", {
-          title: "Designing implementation approach",
-          description: "Mapping components, data flow, and delivery sequence",
-          details: ["Defining components", "Mapping data flow", "Sequencing user journeys"],
-          completePrevious: ["analysis"],
-        })
-      }
 
       // include Firebase ID token so server can authenticate and charge tokens
       const idToken = await user?.getIdToken()
@@ -2403,20 +2197,11 @@ function ProjectContent() {
       }
 
       const runFollowUpGeneration = async (followUpPrompt: string, baseFiles: GeneratedFile[]) => {
-        const followUpBody: {
-          prompt: string
-          model: string
-          idToken: string
-          existingFiles: { path: string; content: string }[]
-          creationMode?: "build" | "agent"
-          agentSlug?: string
-        } = {
+        const followUpBody = {
           prompt: followUpPrompt,
           model: model || "GPT-4-1 Mini",
           idToken,
           existingFiles: baseFiles.map((file) => ({ path: file.path, content: file.content })),
-          creationMode: project.creationMode || "build",
-          agentSlug: project.creationMode === "agent" ? project.agentSlug : undefined,
         }
 
         const followUpResponse = await fetch("/api/generate", {
@@ -2448,31 +2233,16 @@ function ProjectContent() {
         return mergeWithExistingFiles(baseFiles, followUpBlocks)
       }
 
-      const hasBlueprintPlan = project.planningStatus === "approved" || project.planningStatus === "plan-generated"
-      const planDescription = hasBlueprintPlan && project.blueprint ? `Approved plan:\n${blueprintToText(project.blueprint)}` : ""
-      const hasDBHint = promptSuggestsSupabaseBackend(prompt)
-      const generationPrompt = [
-        prompt,
-        planDescription,
-        hasDBHint ? "The user intent indicates a database-backed web app with auth and storage needs. Prioritize Supabase integration if relevant." : "",
-      ]
-        .filter(Boolean)
-        .join("\n\n")
-
       const body: {
         prompt: string
         model: string
         idToken: string
         existingFiles?: { path: string; content: string }[]
-        creationMode?: "build" | "agent"
-        agentSlug?: string
         cloneContext?: { title: string; description: string; markdown: string; sourceUrl: string }
       } = {
-        prompt: generationPrompt,
+        prompt,
         model: model || "GPT-4-1 Mini",
         idToken,
-        creationMode: project.creationMode || "build",
-        agentSlug: project.creationMode === "agent" ? project.agentSlug : undefined,
         ...(cloneContext ? { cloneContext } : {}),
       }
       if (project.files && project.files.length > 0) {
@@ -2489,20 +2259,6 @@ function ProjectContent() {
         const errorData = await response.json().catch(() => ({}))
         if (response.status === 402) {
           setTokenLimitModalOpen(true)
-        }
-        if (response.status === 429 && errorData?.code === "AGENT_LIMIT_REACHED") {
-          const fallbackMessage = "Agents limit reached. Switched to Builder mode. Upgrade for more agent runs or wait for reset."
-          await updateDoc(projectRef, {
-            status: "pending",
-            creationMode: "build",
-            agentSlug: deleteField(),
-          })
-          setProject((prev) => (prev ? { ...prev, status: "pending", creationMode: "build", agentSlug: undefined } : prev))
-          toast({
-            title: "Agents limit reached",
-            description: fallbackMessage,
-          })
-          return
         }
         throw new Error(errorData.error || `Generation failed: ${response.status}`)
       }
@@ -2556,17 +2312,6 @@ function ProjectContent() {
           setReasoningSteps((prev) =>
             prev.includes("Creating files...") ? prev : [...prev, "Creating files..."]
           )
-          
-          // For agent mode: update thinking steps with generation phase
-          if (creationMode === "agent") {
-            updateThinkingPhase("generation", {
-              title: "Generating files",
-              description: `Creating application code (${parsedBlocks.length} files)`,
-              details: [`Writing: ${newFile.path}`],
-              completePrevious: ["planning"],
-            })
-          }
-          
           lastFileCount = parsedBlocks.length
         }
 
@@ -2600,43 +2345,14 @@ function ProjectContent() {
         finalFiles = [...finalBlocks]
       }
       
-      const generationMeta = parseGenerationMeta(fullContent)
-      const shouldPersistGenerationMeta = hasGenerationMeta(generationMeta)
-      const shouldPersistAgentRuntime = (project.creationMode || "build") === "agent"
-      const agentRuntime = shouldPersistAgentRuntime
-        ? {
-            mode: "agent" as const,
-            phase: resolveTerminalAgentPhase({
-              suggestedPhase: generationMeta.agentPhase,
-              blockedReason: generationMeta.blockedReason,
-              setupRequirementCount: generationMeta.setupRequirements.length,
-            }),
-            setupRequirements: generationMeta.setupRequirements,
-            ...(generationMeta.blockedReason ? { blockedReason: generationMeta.blockedReason } : {}),
-            updatedAt: new Date().toISOString(),
-          }
-        : undefined
-
       if (usesNvidiaVerificationGate(model)) {
         setAgentStatus("Verifying generated app in sandbox...")
         setReasoningSteps(prev => [...prev, "Verifying generated output in sandbox."])
-        updateThinkingPhase("validation", {
-          title: "Validating output",
-          description: "Running sandbox verification checks on generated code",
-          details: ["Booting sandbox", "Running install/build checks"],
-          completePrevious: ["generation"],
-        })
 
         const firstVerification = await verifyFilesInSandbox(finalFiles)
         if (!firstVerification.ok) {
           setAgentStatus("Repairing issues found during verification...")
           setReasoningSteps(prev => [...prev, "Repairing build issues before delivery."])
-          updateThinkingPhase("validation", {
-            title: "Repairing verification failures",
-            description: "Fixing issues discovered by sandbox checks",
-            details: ["Applying targeted fixes", "Preparing re-verification"],
-            completePrevious: ["generation"],
-          })
 
           const authHeader = await getAuthHeader()
           const repairRes = await fetch("/api/error/fix", {
@@ -2663,12 +2379,6 @@ function ProjectContent() {
 
           setAgentStatus("Re-verifying repaired app in sandbox...")
           setReasoningSteps(prev => [...prev, "Re-verifying repaired output in sandbox."])
-          updateThinkingPhase("validation", {
-            title: "Re-validating repaired output",
-            description: "Running sandbox checks again after repair",
-            details: ["Re-running build checks", "Confirming preview stability"],
-            completePrevious: ["generation"],
-          })
           const secondVerification = await verifyFilesInSandbox(finalFiles)
           if (!secondVerification.ok) {
             throw new Error(secondVerification.error || "Repaired output still failed sandbox verification")
@@ -2692,9 +2402,7 @@ function ProjectContent() {
       await updateDoc(projectRef, {
         status: "complete",
         files: finalFiles,
-        ...(hasDBHint || generationMeta.suggestsBackend ? { suggestsBackend: true } : {}),
-        ...(shouldPersistGenerationMeta ? { generationMeta } : {}),
-        ...(agentRuntime ? { agentRuntime } : {}),
+        ...(suggestsBackend ? { suggestsBackend: true } : {}),
         messages: nextMessages,
       })
       setProject((prev) =>
@@ -2703,9 +2411,7 @@ function ProjectContent() {
               ...prev,
               status: "complete",
               files: finalFiles,
-              ...(hasDBHint || generationMeta.suggestsBackend ? { suggestsBackend: true } : {}),
-              ...(shouldPersistGenerationMeta ? { generationMeta } : {}),
-              ...(agentRuntime ? { agentRuntime } : {}),
+              ...(suggestsBackend ? { suggestsBackend: true } : {}),
               messages: nextMessages,
             }
           : prev
@@ -2791,7 +2497,7 @@ function ProjectContent() {
       }
 
       // Show Supabase setup modal if backend is needed and not yet dismissed
-      if (!didAutoSetupBackend && generationMeta.suggestsBackend) {
+      if (!didAutoSetupBackend && suggestsBackend) {
         if (project?.supabaseProjectRef) {
           try {
             await runSupabaseProvisioning(projectId)
@@ -2830,17 +2536,6 @@ function ProjectContent() {
       setCurrentGeneratingFile("")
       setAgentStatus("")
       setReasoningSteps([])
-      
-      // For agent mode: mark any active reasoning phases as complete
-      if (creationMode === "agent") {
-        setThinkingSteps((prev) =>
-          prev.map((s) =>
-            (s.phase === "planning" || s.phase === "generation" || s.phase === "validation") && s.status === "active"
-              ? completeThinkingStep(s)
-              : s
-          )
-        )
-      }
     }
   }
 
@@ -3514,135 +3209,6 @@ function ProjectContent() {
     return getSelectionBadgeValue(raw)
   }, [getSelectionBadgeValue])
 
-  const handlePlanningSubmit = useCallback(async (value: string) => {
-    if (!project || !resolvedBlueprint || !canEdit) return
-
-    setIsPlanningReplyPending(true)
-    const nextBlueprint = updateBlueprintFromReply(resolvedBlueprint, value)
-    const assistant = buildPlanningAssistantReply(nextBlueprint, value, project.messages || [])
-    const nextMessages = [
-      ...(project.messages || []),
-      { role: "user" as const, content: value, timestamp: new Date().toISOString() },
-      { role: "assistant" as const, content: assistant.content, timestamp: new Date().toISOString() },
-    ]
-
-    const projectRef = doc(db, "projects", projectId)
-    try {
-      await updateDoc(projectRef, {
-        blueprint: nextBlueprint,
-        messages: nextMessages,
-        planningStatus: assistant.planningStatus,
-      })
-      setProject((prev) =>
-        prev
-          ? {
-              ...prev,
-              blueprint: nextBlueprint,
-              messages: nextMessages,
-              planningStatus: assistant.planningStatus,
-            }
-          : prev
-      )
-    } finally {
-      setIsPlanningReplyPending(false)
-    }
-  }, [project, resolvedBlueprint, canEdit, projectId])
-
-  const handleGeneratePlan = useCallback(async () => {
-    if (!project || !resolvedBlueprint || !canEdit) return
-    const projectRef = doc(db, "projects", projectId)
-    const plannedMessages = [
-      ...(project.messages || []),
-      {
-        role: "assistant" as const,
-        content: buildPlanNarrative(resolvedBlueprint),
-        timestamp: new Date().toISOString(),
-      },
-    ]
-
-    await updateDoc(projectRef, {
-      blueprint: resolvedBlueprint,
-      planningStatus: "plan-generated",
-      messages: plannedMessages,
-    })
-    setProject((prev) =>
-      prev
-        ? {
-            ...prev,
-            blueprint: resolvedBlueprint,
-            planningStatus: "plan-generated",
-            messages: plannedMessages,
-          }
-        : prev
-    )
-  }, [project, resolvedBlueprint, canEdit, projectId])
-
-  const handleBuildFromPlan = useCallback(async () => {
-    if (!project || !resolvedBlueprint || !canEdit) return
-    const projectRef = doc(db, "projects", projectId)
-    const approvedMessages = [
-      ...(project.messages || []),
-      {
-        role: "assistant" as const,
-        content: "Plan approved. I'm moving into generation now and will use the reviewed plan as the working brief.",
-        timestamp: new Date().toISOString(),
-      },
-    ]
-
-    setCreationStudioExited(true)
-    await updateDoc(projectRef, {
-      blueprint: resolvedBlueprint,
-      planningStatus: "approved",
-      messages: approvedMessages,
-    })
-    setProject((prev) =>
-      prev
-        ? {
-            ...prev,
-            blueprint: resolvedBlueprint,
-            planningStatus: "approved",
-            messages: approvedMessages,
-          }
-        : prev
-    )
-    pendingGenerationStartedRef.current = projectId
-    await generateCode(project.prompt, project.model)
-  }, [project, resolvedBlueprint, canEdit, projectId, generateCode])
-
-  const handleSkipPlanAndBuild = useCallback(async () => {
-    if (!project || !resolvedBlueprint || !canEdit) return
-    const projectRef = doc(db, "projects", projectId)
-    const skippedMessages = [
-      ...(project.messages || []),
-      {
-        role: "assistant" as const,
-        content: "Skipping the full planning pass. I’ll build now using the current brief and the visible assumptions in the blueprint.",
-        timestamp: new Date().toISOString(),
-      },
-    ]
-
-    setCreationStudioExited(true)
-    await updateDoc(projectRef, {
-      blueprint: resolvedBlueprint,
-      planningStatus: "skipped",
-      messages: skippedMessages,
-    })
-    setProject((prev) =>
-      prev
-        ? {
-            ...prev,
-            blueprint: resolvedBlueprint,
-            planningStatus: "skipped",
-            messages: skippedMessages,
-          }
-        : prev
-    )
-    pendingGenerationStartedRef.current = projectId
-    const planBody = blueprintToText(resolvedBlueprint)
-    const effectivePrompt = `${project.prompt}\n\nPlan (skipped approval path, using current assumptions):\n${planBody}`
-    await generateCode(effectivePrompt, project.model)
-  }, [project, resolvedBlueprint, canEdit, projectId, generateCode])
-
   const quickActionChips = [
     "Improve headline",
     "Add pricing section",
@@ -3713,20 +3279,6 @@ function ProjectContent() {
   // Prefer explicit project name; fall back to prompt-derived title
   const displayProjectName = project?.name || project?.prompt?.split(' ').slice(0, 3).join(' ') || 'Untitled Project'
 
-  // Calculate tokens limit (never negative remaining)
-  const remainingDisplay = userData ? Math.max(0, userData.tokenUsage.remaining ?? 0) : 0
-  const tokensLimit = userData ? userData.tokenUsage.used + remainingDisplay : 0
-  const agentRunLimit = userData ? getAgentRunLimitForPlan(userData.planId, userData.agentRunLimit) : 0
-  const agentUsed = userData ? Math.max(0, Number(userData.agentUsage?.used ?? 0)) : 0
-  const agentRemaining = userData
-    ? Math.max(
-        0,
-        Number.isFinite(Number(userData.agentUsage?.remaining))
-          ? Number(userData.agentUsage?.remaining)
-          : agentRunLimit - agentUsed
-      )
-    : 0
-
   if (authLoading || loading) {
     return (
       <div className="min-h-screen bg-[#f5f5f2] flex items-center justify-center">
@@ -3787,34 +3339,6 @@ function ProjectContent() {
     )
   }
 
-  if (shouldShowCreationStudio && resolvedBlueprint) {
-    return (
-      <ProjectCreationStudio
-        projectName={project.name || project.prompt?.split(" ").slice(0, 3).join(" ") || "Untitled Project"}
-        prompt={project.prompt}
-        messages={planningMessages}
-        blueprint={resolvedBlueprint}
-        planningStatus={planningStatus}
-        creationMode={creationMode}
-        agentName={activeAgent?.name || null}
-        canEdit={canEdit}
-        isSubmitting={isPlanningReplyPending}
-        getOptionalAuthHeader={getOptionalAuthHeader}
-        onSubmit={handlePlanningSubmit}
-        onGeneratePlan={handleGeneratePlan}
-        onBuildFromPlan={handleBuildFromPlan}
-        onSkip={handleSkipPlanAndBuild}
-        onBack={() => {
-          if (planningStudioOpenManual) {
-            setPlanningStudioOpenManual(false)
-            return
-          }
-          router.push("/projects")
-        }}
-      />
-    )
-  }
-
   return (
     <div className="min-h-screen bg-[#f1eee8] text-[#1f1f1f]">
       <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(ellipse_82%_54%_at_50%_-10%,rgba(214,203,186,0.3),transparent)]" />
@@ -3842,22 +3366,6 @@ function ProjectContent() {
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-2">
-            {creationMode === "agent" ? (
-              <div className="flex items-center gap-2">
-                <span className="hidden rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-[11px] text-zinc-600 sm:inline-flex">
-                  Agents {agentRemaining}/{agentRunLimit}
-                </span>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="h-9 rounded-lg border-zinc-300 bg-white px-3 text-zinc-700 hover:bg-zinc-100"
-                  onClick={() => setPlanningStudioOpenManual(true)}
-                >
-                  Plan mode
-                </Button>
-              </div>
-            ) : null}
             <Button type="button" size="sm" variant="outline" className="hidden h-9 rounded-lg border-zinc-300 bg-white px-3 text-zinc-700 hover:bg-zinc-100 lg:inline-flex" onClick={() => setWebsiteSettingsOpen(true)}>
               Website Settings
             </Button>
@@ -4414,7 +3922,7 @@ function ProjectContent() {
                         <div className="flex items-center gap-2">
                           <div className="inline-flex w-fit items-center gap-2 rounded-full border border-[#e7dfd2] bg-[#f7f3ec] px-3 py-1 text-[11px] font-medium uppercase tracking-[0.18em] text-zinc-600">
                             <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-                            {creationMode === "agent" ? "Agent Session" : "Agent Run Live"}
+                            Agent Run Live
                           </div>
                         </div>
                         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -4430,16 +3938,6 @@ function ProjectContent() {
                       </div>
                     </div>
 
-                    <DynamicAgentTimeline
-                      timelineSteps={agentTimeline}
-                      thinkingSteps={thinkingSteps}
-                      generatedFileCount={generatedFileCount}
-                      currentGeneratingFile={currentGeneratingFile}
-                      isStreaming={isGenerating}
-                      agentStatus={agentStatus}
-                      mode={creationMode === "agent" ? "agent" : "build"}
-                      showThinking={creationMode === "agent"}
-                    />
                   </div>
                 )}
                 {(isSandboxLoading || (buildSteps.some(s => s.status !== "idle") && !allBuildSuccess) || buildError) && (

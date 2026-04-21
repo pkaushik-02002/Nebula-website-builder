@@ -26,7 +26,7 @@ import {
 
 const navLinks = [
   { href: "/#features", label: "Features" },
-  { href: "/teams", label: "Teams" },
+  { href: "/computer/new", label: "Computer" },
   { href: "/pricing", label: "Pricing" },
 ]
 

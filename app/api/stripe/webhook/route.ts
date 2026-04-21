@@ -2,7 +2,6 @@ import { NextRequest } from "next/server"
 import Stripe from "stripe"
 import { adminDb } from "@/lib/firebase-admin"
 import { Timestamp } from "firebase-admin/firestore"
-import { getAgentRunLimitForPlan } from "@/lib/agent-quotas"
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!)
 const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET!
@@ -106,13 +105,6 @@ async function setUserPlan(uid: string, planId: string, tokensPerMonth: number, 
     typeof existingUsage.remaining === "number"
       ? existingUsage.remaining
       : Math.max(0, tokensPerMonth - used)
-  const existingAgentUsage = data?.agentUsage || {}
-  let agentUsed = typeof existingAgentUsage.used === "number" ? existingAgentUsage.used : 0
-  const agentRunLimit = getAgentRunLimitForPlan(planId, data?.agentRunLimit)
-  let agentRemaining =
-    typeof existingAgentUsage.remaining === "number"
-      ? existingAgentUsage.remaining
-      : Math.max(0, agentRunLimit - agentUsed)
 
   let periodStartRaw = existingUsage.periodStart
   let periodEndRaw = existingUsage.periodEnd
@@ -137,8 +129,6 @@ async function setUserPlan(uid: string, planId: string, tokensPerMonth: number, 
   if (planChanged) {
     used = 0
     remaining = tokensPerMonth
-    agentUsed = 0
-    agentRemaining = agentRunLimit
   }
 
   const planName = planId.charAt(0).toUpperCase() + planId.slice(1)
@@ -147,17 +137,10 @@ async function setUserPlan(uid: string, planId: string, tokensPerMonth: number, 
     planId,
     planName,
     tokensLimit: tokensPerMonth,
-    agentRunLimit,
     ...(stripeSubscriptionId ? { stripeSubscriptionId } : {}),
     tokenUsage: {
       used,
       remaining: Math.max(0, remaining),
-      periodStart: Timestamp.fromDate(planChanged ? now : periodStart),
-      periodEnd: Timestamp.fromDate(planChanged ? getFirstDayOfNextMonth(now) : periodEnd),
-    },
-    agentUsage: {
-      used: Math.max(0, agentUsed),
-      remaining: Math.max(0, agentRemaining),
       periodStart: Timestamp.fromDate(planChanged ? now : periodStart),
       periodEnd: Timestamp.fromDate(planChanged ? getFirstDayOfNextMonth(now) : periodEnd),
     },

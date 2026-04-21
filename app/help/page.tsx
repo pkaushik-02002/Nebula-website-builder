@@ -6,6 +6,7 @@ import { FooterSection } from "@/components/sections/footer-section"
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
 import { Button } from "@/components/ui/button"
 import { buildkitFaqs } from "@/lib/buildkit-site-content"
+import { LEGAL_CONTACT_EMAIL, LEGAL_CONTACT_HREF } from "@/lib/legal-content"
 import {
   ArrowLeft,
   HelpCircle,
@@ -65,7 +66,7 @@ export default function HelpPage() {
 
           <section className="grid gap-4 sm:grid-cols-2 sm:gap-6">
             <Link
-              href="mailto:support@buildkit.example.com"
+              href={LEGAL_CONTACT_HREF}
               className="group rounded-2xl border border-zinc-200 bg-white p-5 transition-colors hover:border-zinc-300 hover:bg-zinc-100 sm:p-6"
             >
               <div className="mb-3 flex items-center gap-3">
@@ -75,7 +76,7 @@ export default function HelpPage() {
                 <h3 className="font-heading font-semibold text-zinc-900">Email support</h3>
               </div>
               <p className="text-sm text-zinc-500">
-                Send us an email and we&apos;ll get back within 24 hours.
+                Reach us at {LEGAL_CONTACT_EMAIL} and we&apos;ll respond as soon as we can.
               </p>
             </Link>
             <Link
