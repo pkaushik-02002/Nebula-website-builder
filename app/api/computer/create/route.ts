@@ -57,6 +57,7 @@ export async function POST(req: Request) {
     actions: [],
     collaboratorIds: [],
     collaborators: [],
+    pendingInvites: [],
     currentVersionId: null,
     versionCount: 0,
     researchSources: [],

@@ -810,6 +810,7 @@ export default function ComputerPage() {
   const [inviteEmail, setInviteEmail] = useState("")
   const [isInviting, setIsInviting] = useState(false)
   const [inviteError, setInviteError] = useState<string | null>(null)
+  const [inviteNotice, setInviteNotice] = useState<string | null>(null)
   const [copiedShareLink, setCopiedShareLink] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [versions, setVersions] = useState<Array<Omit<ComputerVersion, "files">>>([])
@@ -1030,6 +1031,7 @@ export default function ComputerPage() {
 
     setIsInviting(true)
     setInviteError(null)
+    setInviteNotice(null)
     try {
       const token = await user.getIdToken()
       const response = await fetch(`/api/computer/${id}/share`, {
@@ -1040,6 +1042,13 @@ export default function ComputerPage() {
       const payload = await response.json().catch(() => null)
       if (!response.ok) {
         throw new Error(payload?.error ?? "Failed to invite collaborator")
+      }
+      if (payload?.alreadyCollaborator) {
+        setInviteNotice("They already have access to this computer.")
+      } else if (payload?.emailSent === false) {
+        setInviteError(payload?.emailError ?? "Invite saved, but the email could not be sent.")
+      } else {
+        setInviteNotice("Invite email sent.")
       }
       setInviteEmail("")
     } catch (err: any) {
@@ -2414,6 +2423,11 @@ export default function ComputerPage() {
               {inviteError ? (
                 <p className="mt-2 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-[12px] text-red-700">
                   {inviteError}
+                </p>
+              ) : null}
+              {inviteNotice ? (
+                <p className="mt-2 rounded-xl border border-green-100 bg-green-50 px-3 py-2 text-[12px] text-green-700">
+                  {inviteNotice}
                 </p>
               ) : null}
 

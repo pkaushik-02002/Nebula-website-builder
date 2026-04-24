@@ -1,7 +1,9 @@
 import { FieldValue } from "firebase-admin/firestore"
 import { nanoid } from "nanoid"
+
 import { adminAuth, adminDb } from "@/lib/firebase-admin"
 import { getComputerForUser } from "@/lib/computer-access"
+import { createComputerInvite } from "@/lib/computer-invites"
 import { requireUserUid } from "@/lib/server-auth"
 import type { ComputerCollaborator } from "@/lib/computer-types"
 
@@ -42,11 +44,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   }
 
   const invitedUser = await adminAuth.getUserByEmail(email).catch(() => null)
-  if (!invitedUser) {
-    return Response.json({ error: "No Lotus account found for that email yet" }, { status: 404 })
-  }
-
-  if (invitedUser.uid === uid) {
+  if (invitedUser?.uid === uid) {
     return Response.json({ error: "You already own this computer" }, { status: 400 })
   }
 
@@ -56,35 +54,55 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       })
     : []
 
-  const existingCollaborator = existingCollaborators.find((collaborator) => collaborator.uid === invitedUser.uid)
-  const collaborator: ComputerCollaborator = existingCollaborator ?? {
-    uid: invitedUser.uid,
-    email: invitedUser.email ?? email,
-    displayName: invitedUser.displayName ?? invitedUser.email ?? email,
-    photoURL: invitedUser.photoURL ?? null,
-    invitedAt: new Date().toISOString(),
-    invitedBy: uid,
+  const existingCollaborator = invitedUser
+    ? existingCollaborators.find((collaborator) => collaborator.uid === invitedUser.uid)
+    : null
+
+  if (existingCollaborator) {
+    return Response.json({
+      invited: false,
+      alreadyCollaborator: true,
+      emailSent: false,
+    })
   }
+
+  const inviter = await adminAuth.getUser(uid).catch(() => null)
+  const invite = await createComputerInvite({
+    computerId: id,
+    computerName: typeof data.name === "string" ? data.name : "lotus.build computer",
+    email,
+    invitedByUid: uid,
+    invitedByName: inviter?.displayName || inviter?.email || null,
+    invitedUserUid: invitedUser?.uid ?? null,
+  })
 
   const action = {
     id: nanoid(),
     timestamp: new Date().toISOString(),
     type: "message" as const,
     actor: "system" as const,
-    content: `${collaborator.displayName ?? collaborator.email ?? "A collaborator"} joined this computer.`,
+    content: `Invitation sent to ${email}.`,
   }
 
   const updates: Record<string, unknown> = {
-    collaboratorIds: FieldValue.arrayUnion(invitedUser.uid),
+    pendingInvites: FieldValue.arrayUnion({
+      inviteId: invite.inviteId,
+      email,
+      invitedUserUid: invitedUser?.uid ?? null,
+      invitedAt: new Date().toISOString(),
+      invitedBy: uid,
+      emailSent: invite.emailSent,
+    }),
+    actions: FieldValue.arrayUnion(action),
     updatedAt: FieldValue.serverTimestamp(),
-  }
-
-  if (!existingCollaborator) {
-    updates.collaborators = FieldValue.arrayUnion(collaborator)
-    updates.actions = FieldValue.arrayUnion(action)
   }
 
   await adminDb.collection("computers").doc(id).update(updates)
 
-  return Response.json({ collaborator })
+  return Response.json({
+    invited: true,
+    inviteId: invite.inviteId,
+    emailSent: invite.emailSent,
+    emailError: invite.emailError,
+  })
 }

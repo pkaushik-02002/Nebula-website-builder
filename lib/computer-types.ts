@@ -86,6 +86,15 @@ export interface ComputerCollaborator {
   invitedBy?: string
 }
 
+export interface ComputerPendingInvite {
+  inviteId: string
+  email: string
+  invitedUserUid?: string | null
+  invitedAt: string
+  invitedBy: string
+  emailSent: boolean
+}
+
 export interface ComputerVersion {
   id: string
   versionNumber: number
@@ -116,6 +125,7 @@ export interface Computer {
   ownerId: string
   collaboratorIds?: string[]
   collaborators?: ComputerCollaborator[]
+  pendingInvites?: ComputerPendingInvite[]
   currentVersionId?: string | null
   versionCount?: number
   name: string
