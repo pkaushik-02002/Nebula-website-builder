@@ -22,7 +22,7 @@ function createPlanFeatures(tokenLabel: string, agentRunsPerPeriod: number, extr
 
 export const PLAN_DISPLAY: Record<PlanId, PlanDisplayConfig> = {
   free: {
-    description: "Perfect for trying Lotus.build before going live.",
+    description: "Perfect for trying lotus.build before going live.",
     agentRunsPerPeriod: 5,
     features: createPlanFeatures("10,000 credits/month", 5, [
       "Community support",

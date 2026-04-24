@@ -5,11 +5,11 @@ import { FooterSection } from "@/components/sections/footer-section"
 import { AnimatedAIInput } from "@/components/ui/animated-ai-input"
 import { Blocks, ShieldCheck, Sparkles, Gauge } from "lucide-react"
 import {
-  buildkitFeatureItems,
-  buildkitMetrics,
-  buildkitTestimonials,
-  buildkitUseCases,
-} from "@/lib/buildkit-site-content"
+  lotusFeatureItems,
+  lotusMetrics,
+  lotusTestimonials,
+  lotusUseCases,
+} from "@/lib/lotus-site-content"
 
 const featureIcons = [Sparkles, Blocks, Gauge, ShieldCheck]
 
@@ -64,7 +64,7 @@ export default function Home() {
 
         <section id="features" className="relative px-4 py-10 sm:px-6 sm:py-12 lg:px-8">
           <div className="mx-auto grid max-w-6xl grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {buildkitFeatureItems.map((item, idx) => {
+            {lotusFeatureItems.map((item, idx) => {
               const Icon = featureIcons[idx] ?? Sparkles
 
               return (
@@ -87,7 +87,7 @@ export default function Home() {
 
         <section className="relative mt-6 bg-[linear-gradient(180deg,#ecece6_0%,#e6e5dd_100%)] px-4 py-12 sm:px-6 lg:px-8">
           <div className="mx-auto grid max-w-6xl grid-cols-2 gap-6 text-center md:grid-cols-4">
-            {buildkitMetrics.map((metric) => (
+            {lotusMetrics.map((metric) => (
               <div key={metric.label}>
                 <p className="font-display text-4xl font-bold text-zinc-900 sm:text-5xl">{metric.value}</p>
                 <p className="mt-2 text-xs uppercase tracking-[0.14em] text-zinc-600">{metric.label}</p>
@@ -98,7 +98,7 @@ export default function Home() {
 
         <section className="bg-[#ecece6] px-4 py-12 sm:px-6 lg:px-8">
           <div className="mx-auto grid max-w-6xl gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {buildkitUseCases.map((useCase) => (
+            {lotusUseCases.map((useCase) => (
               <article key={useCase.title} className="rounded-2xl bg-white/70 p-6">
                 <h3 className="text-lg font-semibold text-zinc-900">{useCase.title}</h3>
                 <p className="mt-2 text-sm text-zinc-600">{useCase.description}</p>
@@ -115,7 +115,7 @@ export default function Home() {
             </div>
 
             <div className="flex gap-4 overflow-x-auto pb-2 [scrollbar-width:thin] [&::-webkit-scrollbar]:h-1 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-zinc-300/80 hover:[&::-webkit-scrollbar-thumb]:bg-zinc-400/80">
-              {buildkitTestimonials.map((testimonial, idx) => (
+              {lotusTestimonials.map((testimonial, idx) => (
                 <blockquote
                   key={idx}
                   className="w-[300px] shrink-0 rounded-2xl border border-zinc-200 bg-white/80 p-5"

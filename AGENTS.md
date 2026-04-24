@@ -1,538 +1,389 @@
-# AGENTS.md
+# AGENTS.md — lotus.build
 
-## Purpose
-
-This repository is a production-quality AI website/app builder called **BuildKit / Nebula Website Builder**.
-
-Agents working in this repo must behave like **senior product engineers**, not junior code generators.
-
-That means:
-- do not hallucinate product behavior
-- do not invent requirements
-- do not hardcode flows that should be state-driven
-- do not add static lists, repeated mapping logic, or brittle `if/else` trees when the behavior should be derived from data/state
-- do not duplicate UI, business logic, copy, or derived state
-- do not create internal-tool dashboards for founder-facing flows
-- do not make architectural changes unless required by the task
-
-When something is unclear, **ask concise clarifying questions first** rather than guessing.
+Full context for Claude Code. Read this before touching any file.
 
 ---
 
-## Product overview
+## Project identity
 
-BuildKit / Nebula Website Builder is an AI website/app builder.
-
-High-level architecture:
-- Firestore `projects` documents hold project state
-- `/api/generate` performs AI code generation and iterative edits
-- `/api/sandbox` handles preview runtime through E2B
-- `projectId` is the Firestore document ID in `projects`
-- existing project edits are full-context regenerations using:
-  - original prompt
-  - current user request
-  - current file set
-- the project builder UI lives in `app/project/[id]/page.tsx`
-- the landing page assistant is separate from project code generation
-
-Two AI systems exist:
-1. **Main builder AI**
-   - code generation/editing
-   - driven by `/api/generate`
-2. **Website assistant**
-   - landing-page assistant
-   - separate from the builder generation flow
-
-These must not be conflated.
+**Product**: lotus.build — autonomous AI website and app builder
+**Repo path**: `C:/Users/Preet/Desktop/Nebula-website-builder`
+**Deployment**: https://lotus-build.vercel.app/
+**Two products in one repo**: `/project/[id]` (build mode) and `/computer/[id]` (autonomous agent mode)
 
 ---
 
-## Non-negotiable architectural rules
+## Stack
 
-Preserve these unless the task explicitly requires otherwise:
-
-- `projectId` is the Firestore doc ID in `projects`
-- project generation remains driven by `/api/generate`
-- preview/runtime remains driven by `/api/sandbox`
-- post-approval build flow must reuse the existing generation pipeline where possible
-- do not rewrite server routes when the task is clearly UI/UX-only
-- do not create parallel systems when existing ones can be extended cleanly
-- do not fork the builder into duplicate versions for different states unless unavoidable
-
-When changing UI behavior, prefer **front-end orchestration changes** over backend rewrites.
-
----
-
-## Working style expected from agents
-
-Before changing code:
-
-1. inspect the current implementation
-2. summarize the existing structure that matters
-3. identify what should be preserved
-4. identify the minimal safe refactor strategy
-5. only then implement
-
-Do not jump straight into code without first understanding the current structure.
-
-For non-trivial tasks:
-- explain the intended hierarchy/state flow first
-- keep implementation scoped
-- do not mix refactor + redesign + behavior change unless requested
+| Layer | Choice |
+|---|---|
+| Framework | Next.js 16 (App Router) |
+| UI | React 19, TypeScript strict |
+| Styling | Tailwind v4 |
+| Animation | Framer Motion |
+| Auth | Firebase Auth |
+| Database | Firestore (client + admin) |
+| Storage | Firebase Storage |
+| AI generation | Anthropic SDK (`claude-sonnet-4-5`) |
+| Sandbox | E2B Code Interpreter (`@e2b/code-interpreter`) |
+| Browser agent | Browserbase + Stagehand |
+| Web scraping | Firecrawl |
+| Payments | Stripe |
+| Icons | lucide-react only |
+| Fonts | Google Fonts via `@import` in CSS |
 
 ---
 
-## Clarification rule
+## Absolute rules (never violate)
 
-If a request has ambiguity around:
-- user flow
-- approval semantics
-- button meaning
-- state transitions
-- whether something should be shown or hidden
-- whether logic should be UI-only vs backend-backed
-
-ask a **small number of high-value clarifying questions** first.
-
-Do not assume the missing behavior.
-
-Examples of good clarification:
-- “Should this button mean approve-and-generate-plan, or approve-and-build?”
-- “Should this summary appear before requirements are complete, or only after approval?”
-- “Should this remain local UI state, or be persisted to the project document?”
-
-Examples of bad behavior:
-- inventing a flow
-- hardcoding one interpretation
-- implementing both paths without reason
-- adding speculative state fields
+- **No mock/demo/dummy/placeholder data** — ever. All data is dynamic.
+- **Full code only** — never return partial files, truncated implementations, or skeleton stubs.
+- **No speculative redesigns** — only surgical, file-level patches unless a full rewrite is explicitly requested.
+- **No new dependencies** unless explicitly asked. Check existing deps first.
+- **Never touch** `node_modules`, `.next`, `.git`, `dist`, `build`.
+- **Preserve all auth, ownership, rate-limit, and Firestore security logic** in every edit.
+- **lucide-react for all icons** — never `react-icons`, `heroicons`, or emoji in UI.
+- **TypeScript strict** — no `any` casts unless absolutely unavoidable, and always annotate why.
+- **Callout risks explicitly** — if a change touches authz, Firestore rules, webhook security, workspace isolation, or quota logic, flag it before editing.
 
 ---
 
-## UI / UX philosophy
+## Coding style
 
-This product is aimed at users including **non-technical founders**, not only developers.
-
-Founder-facing UI must feel:
-- calm
-- clear
-- premium
-- focused
-- modern
-- restrained
-- intelligent
-
-It must **not** feel like:
-- an internal tool
-- an agent control room
-- a dashboard full of metrics/chips/cards
-- a Jira-style planning interface
-- a cluttered SaaS template
-- a raw IDE too early in the flow
-
-### Design rules
-- prefer one primary surface and one supporting surface
-- reduce container count
-- avoid deeply nested cards
-- avoid repeated bordered panels inside bordered panels
-- rely more on spacing, typography, and hierarchy than decorative boxes
-- keep the number of simultaneously visible concepts low
-- do not surface technical jargon to non-technical users
-
-### Copy rules
-Do not use internal/product-designer copy in the UI.
-
-Avoid copy like:
-- “source of truth”
-- “agent conversation”
-- “highest-impact unknowns”
-- “readiness 78%”
-- “planning artifact”
-- “control panel”
-- “state machine”
-
-Prefer simple, natural copy like:
-- “What we’re building”
-- “What still needs your input”
-- “Before I build”
-- “Pages included”
-- “Style direction”
-- “One thing to confirm”
+- Minimal, readable, typed. Config/state-driven over prop-drilling.
+- Functions: short, single-purpose. Helpers extracted to top of file.
+- No commented-out code in final output.
+- Imports: absolute paths via `@/` alias. Group: external → internal → types.
+- `cn()` from `@/lib/utils` for all className merging.
+- CSS custom properties for color tokens. Never hardcode brand colors inline.
+- Framer Motion for all transitions — no raw CSS `transition` on interactive elements.
 
 ---
 
-## Pre-build planning flow rules
+## Colour theme (both products)
 
-For new/pending projects, the default behavior is **requirements-first**.
+This is the canonical theme. Never use dark backgrounds, purple gradients, or generic grays.
 
-The assistant must not rush into generation from a vague prompt.
+```
+bg-[#f0ece4]          primary page background
+bg-[#faf9f6]          sidebar / panel background
+bg-[rgba(252,250,246,0.96)]  elevated card surfaces
+bg-[#f7f5f1]          tab content / inset background
+bg-white              pure white surfaces
 
-### Intended default flow
-1. AI asks clarifying questions
-2. user answers
-3. no blueprint/plan is shown yet unless explicitly required by the product spec
-4. once enough context exists, the user approves the answers
-5. then the system generates the plan/blueprint
-6. after that, the user can refine the plan
-7. only then should the user build from the plan
+border-[#e0dbd1]      default border
+border-[#e4dfd5]      sidebar border
+border-[#ede8e0]      divider / inner border
 
-### Important
-Do not silently collapse:
-- answering questions
-- generating the plan
-- approving the plan
-- building the project
+text-[#1c1c1c]        primary text
+text-zinc-600         secondary text
+text-zinc-500         muted text
+text-zinc-400         placeholder / label text
+text-[#7a6244]        warm accent (CTAs, links, active)
+text-[#8a7556]        icon accent
+text-[#a89578]        uppercase label accent
 
-These are distinct states unless explicitly designed otherwise.
+shadow-[0_1px_3px_rgba(0,0,0,0.06),0_8px_32px_-12px_rgba(0,0,0,0.12)]  card
+shadow-[0_16px_48px_-24px_rgba(0,0,0,0.22)]  sidebar
+```
 
-### Skip behavior
-If the product includes a `Skip plan` path:
-- it must be explicit
-- it must not be the default
-- it may move faster, but should not silently replace the default careful flow
-
----
-
-## Maintainability rules
-
-Agents must write maintainable code.
-
-### Never do this
-- add brittle one-off `if/else` chains for content generation when the same logic should be derived from configuration, schema, or state
-- hardcode UI options that should come from structured data
-- duplicate type definitions
-- duplicate transformation logic in multiple components
-- store derived state that can be computed cheaply from canonical state
-- repeat the same strings/copy in many places
-- add ad hoc helper logic inside large components if it belongs in a shared utility
-- patch by copy-pasting near-identical code blocks
-- add “temporary” logic that becomes permanent clutter
-
-### Prefer this instead
-- config-driven structures
-- data-first rendering
-- pure utility functions for transformations
-- canonical source of truth
-- derived selectors/helpers
-- reusable components with clear responsibilities
-- discriminated unions / typed state where appropriate
-- single-purpose utilities in `lib/*` when logic is shared
-- minimal public API surfaces between components
-
-### Strong rule
-If you find yourself writing long chains like:
-- `if key === "pages" ...`
-- `if key === "systems" ...`
-- `if type === "x" ... else if type === "y" ...`
-- static options with many manual branches
-
-stop and ask:
-**should this be represented as data/config instead?**
-
-In most cases here, the answer is yes.
+Status pills follow semantic colours (sky=researching, indigo=planning, amber=building, etc.) but all other UI is warm beige.
 
 ---
 
-## State management rules
+## Architecture map
 
-Before adding state, ask:
+### Build product — `/project/[id]`
 
-1. Is this canonical state or derived state?
-2. Should this live locally in the component?
-3. Should this be lifted?
-4. Should this be computed from existing `project`/`blueprint`/messages instead of stored?
-5. Is this UI state or business state?
+| File | Responsibility |
+|---|---|
+| `app/project/[id]/page.tsx` | Main workspace: chat panel, preview iframe, visual edit |
+| `app/api/generate/route.ts` | AI code generation + edits. Streams `===FILE:path===` blocks. Calls NVIDIA / Anthropic. |
+| `app/api/sandbox/route.ts` | E2B sandbox: Vite/Next detection, port 3000, `allowedHosts` patch, visual edit injection |
+| `lib/3d-prompt-injection.ts` | Detects 3D mode from prompt (`r3f`, `gsap`, `css3d`, `spline`, `none`). Returns system prompt injection. |
+| `lib/lotus-site-content.ts` | `buildLotusAgentPrompt()` — elite full-stack generation prompt. Zero placeholders. Real copy. |
+| `components/project/dynamic-agent-timeline.tsx` | Cursor-style flowing log stream for build mode |
+| `components/project/useTypewriter.ts` | Character-by-character streaming hook |
+| `components/preview/build-timeline.tsx` | Build timeline shown in chat panel |
 
-Do not store duplicated state if it can be derived.
+**Generate route stream protocol:**
+```
+===FILE: path/to/file.tsx===
+[complete file content]
+===END_FILE===
+```
+followed by `===META:===` block for dependencies.
 
-Examples:
-- visibility flags that can be derived from planning status should not also become independent truth unless needed for animation/transition control
-- labels like “plan ready” should be computed, not manually synchronized in many places
-- duplicate copies of blueprint/summary/open questions should not exist in component state if the source object already owns them
-
----
-
-## Component design rules
-
-Components must be:
-- single-purpose
-- composable
-- easy to reason about
-- low-noise
-- appropriately typed
-
-### Prefer
-- smaller presentational components
-- extracted render helpers only when they improve clarity
-- moving business logic out of UI components into utilities/hooks where appropriate
-
-### Avoid
-- giant components that contain UI, domain logic, copy rules, parsing, transformation, and orchestration all mixed together
-- helper functions embedded in components when they are reused or domain-specific
-- local utility logic duplicated across similar files
+**Sandbox route key facts:**
+- Single recheck loop (not double) — saves 5+ sec
+- `LOG_POLL_INTERVAL_MS`: 800
+- `PORT_CLEANUP_WAIT_MS`: 2000
+- Inline delays: 500ms (not 3000ms)
 
 ---
 
-## Domain modeling rules
+### Computer product — `/computer/[id]`
 
-When product structure exists, represent it explicitly.
+| File | Responsibility |
+|---|---|
+| `app/computer/[id]/page.tsx` | Full autonomous agent UI — sidebar feed, 4-tab viewport (Browser/Preview/Code/Research) |
+| `app/computer/new/page.tsx` | New computer creation form |
+| `app/api/computer/create/route.ts` | Create Firestore doc, run intake analysis |
+| `app/api/computer/[id]/route.ts` | PATCH handler: `stop`, `message`, `interrupt`, `approve_plan`, `update_permissions` |
+| `app/api/computer/[id]/run/route.ts` | SSE run endpoint — calls `runComputerOrchestrator` |
+| `lib/computer-agent/orchestrator.ts` | **The brain.** Intake phase + `runBuildAgent` (real Claude tool-use loop) |
+| `lib/computer-agent/tools.ts` | 8 tools: `browserbase_research`, `browserbase_navigate`, `plan_project`, `generate_files`, `run_sandbox`, `verify_preview`, `fix_errors`, `deploy_site` |
+| `lib/computer-agent/intake.ts` | `analyzeComputerBrief()` — intent classification, clarification questions, reference URL extraction |
+| `lib/computer-agent/browserbase-session.ts` | `ComputerBrowserSession` — lazy Stagehand init, live view URL, page management |
+| `lib/computer-agent/reference-resolver.ts` | Resolves brand names to official URLs via Firecrawl search |
+| `lib/computer-agent/reference-urls.ts` | URL extraction + normalisation helpers |
+| `lib/computer-types.ts` | All Computer* types |
 
-If the system has concepts like:
-- planning stages
-- blueprint sections
-- question states
-- approval states
-- action availability
+**Orchestrator architecture (critical):**
 
-prefer:
-- typed models
-- config objects
-- explicit maps
-- reusable selectors
+The orchestrator has **two phases**:
 
-Avoid informal scattered logic spread across the component tree.
+1. **Intake phase** (hardcoded, correct): `analyzeComputerBrief` → clarification or plan approval gate
+2. **Build phase** (agentic loop, `runBuildAgent`): Real Claude tool-use loop. Claude decides every tool call. Never hardcode the sequence.
 
----
+`runBuildAgent` loop contract:
+- Claude receives system prompt + tools + initial message with approved plan
+- Each turn: Claude emits text (→ `thinking` action) then tool_use blocks
+- Each tool_use: emit `tool_call` action → execute tool → persist artifacts → emit `tool_result` action → update step
+- Feed tool results back as `user` message with `tool_result` blocks
+- Loop until `stop_reason === "end_turn"` or `MAX_TURNS` (28)
+- Never hardcode which tools run or in which order
 
-## Hardcoding and static data rules
+**Firestore document shape (`computers/{id}`):**
+```typescript
+{
+  uid: string
+  name: string
+  prompt: string
+  status: ComputerStatus        // idle|researching|planning|building|verifying|fixing|deploying|complete|error
+  planningStatus: string        // draft|needs-input|ready-for-approval|approved
+  plan: ComputerPlan | null
+  clarificationQuestions: ComputerClarificationQuestion[]
+  permissions: { requirePlanApproval: boolean }
+  steps: ComputerStep[]
+  actions: ComputerAction[]
+  files: GeneratedFile[]
+  currentGeneratingFile: string | null
+  researchSources: ComputerResearchSource[]
+  referenceUrls: string[]
+  sandboxUrl: string | null
+  sandboxId: string | null
+  browserbaseSessionId: string | null
+  browserbaseLiveViewUrl: string | null
+  deployUrl: string | null
+  createdAt: Timestamp
+  updatedAt: Timestamp
+}
+```
 
-Do not hardcode static option lists inside UI components unless they are:
-- truly fixed product copy
-- tiny and local
-- not domain data
-- not likely to be reused
-- clearly not part of application behavior
-
-If options, labels, section definitions, or behavior mappings are part of the product model, move them into:
-- `lib/*`
-- typed config files
-- shared constants near the domain model
-
-### Example anti-pattern
-A component containing a large static list of options plus custom `if/else` formatting branches.
-
-### Preferred pattern
-A structured config map with typed metadata:
-- key
-- label
-- selection mode
-- helper copy
-- formatter
-- parser
-- option derivation strategy
-
----
-
-## Duplication rules
-
-Agents must actively look for duplication before finalizing code.
-
-Check for duplication in:
-- copy
-- derived state
-- formatting logic
-- data normalization
-- section definitions
-- status labeling
-- button logic
-- mobile/desktop rendering branches
-
-If the same rule appears in two places, consider centralizing it.
-
-Do not solve a problem once in the component and again in `lib/*` with slightly different logic.
+**File streaming in `generate_files`:**
+Files are persisted to Firestore one-by-one via `FieldValue.arrayUnion` as they complete streaming — UI sees them arrive in real-time via `onSnapshot`. Do not batch.
 
 ---
 
-## Senior engineering bar
+## Shared components
 
-Changes in this repo should feel like they were written by a senior engineer.
+| Component | Location | Usage |
+|---|---|---|
+| `AnimatedAIInput` | `components/ui/animated-ai-input.tsx` | All chat inputs — build mode and computer mode |
+| `TextShimmer` | `components/prompt-kit/text-shimmer.tsx` | Active steps, thinking labels, running state |
+| `ProjectFileTree` | `components/project/file-tree.tsx` | File tree in both `/project` and `/computer` code tab |
+| `Editor` | `@monaco-editor/react` | Code viewer (read-only, vs-light theme, JetBrains Mono) |
+| `Dialog`, `Switch`, `Input` | `components/ui/` | shadcn/ui primitives |
 
-That means:
-- clear separation of concerns
-- explicit tradeoffs
-- minimal moving parts
-- no accidental complexity
-- no “just make it work” patches
-- no speculative abstractions
-- no junior-style hardcoded decision trees when the domain can be modeled cleanly
-
-A solution is **not acceptable** just because it works.
-It must also be:
-- understandable
-- maintainable
-- extensible
-- consistent with the architecture
-
----
-
-## Visual/theme rules
-
-Use the existing BuildKit theme and visual language.
-
-Do not invent a new palette.
-
-Keep the UI aligned with the existing brand:
-- off-white / ivory backgrounds
-- deep charcoal foreground
-- light neutral borders / muted surfaces
-- premium minimal aesthetic
-
-Avoid:
-- neon AI colors
-- generic dashboard chromes
-- visually loud gradients
-- excessive glassmorphism
-- over-styled cards everywhere
-
-Use subtle motion only where it improves clarity.
+**AnimatedAIInput props used:**
+```typescript
+mode="chat" | "build"
+compact?: boolean
+surface="code" | "default"
+placeholder: string
+isLoading: boolean
+onStop: () => void
+onSubmit: (value: string) => void
+```
 
 ---
 
-## File and folder expectations
+## Key patterns
 
-When refactoring builder UI, prefer clean component extraction under:
-- `components/project/*`
+### Firestore real-time sync
+```typescript
+// Always merge optimistic user actions to prevent flicker on snapshot
+setComputer((prev) => {
+  const incoming = { id: snapshot.id, ...data } as Computer
+  if (!prev) return incoming
+  const serverIds = new Set(incoming.actions?.map(a => a.id))
+  const optimistic = (prev.actions || []).filter(
+    a => a.actor === "user" && !serverIds.has(a.id)
+  )
+  return { ...incoming, actions: [...(incoming.actions || []), ...optimistic] }
+})
+```
 
-When extracting domain logic, prefer:
-- `lib/*`
-- typed helpers/selectors near the relevant domain
+### SSE stream consumption
+```typescript
+const reader = response.body.getReader()
+const decoder = new TextDecoder()
+let buffer = ""
+while (true) {
+  const { done, value } = await reader.read()
+  if (done) break
+  buffer += decoder.decode(value, { stream: true })
+  const parts = buffer.split("\n\n")
+  buffer = parts.pop() ?? ""
+  for (const part of parts) {
+    if (!part.trim().startsWith("data: ")) continue
+    const event = JSON.parse(part.trim().slice(6))
+    // handle event
+  }
+}
+```
 
-Do not create random utility files without clear ownership.
+NDJSON variant (deploy logs) uses `\n` delimiter and skips `data: ` prefix.
 
----
+### Auth pattern (API routes)
+```typescript
+const authHeader = request.headers.get("Authorization")
+const idToken = authHeader?.replace("Bearer ", "")
+const decoded = await adminAuth.verifyIdToken(idToken)
+const uid = decoded.uid
+```
 
-## PR / patch expectations for agents
+### Firestore admin updates
+```typescript
+await adminDb.collection("computers").doc(computerId).update({
+  status: "building",
+  updatedAt: FieldValue.serverTimestamp(),
+})
+```
 
-For meaningful tasks, the agent should structure its response as:
-
-1. **Current structure**
-   - what exists now
-   - what matters
-2. **Problems**
-   - what is wrong / risky / cluttered / duplicated
-3. **Refactor plan**
-   - minimal safe path
-4. **Implementation**
-   - code changes
-5. **Why this is better**
-   - maintainability / UX / clarity
-
-Do not dump code without explaining the structure first.
-
----
-
-## When asked for UI changes
-
-Agents must be careful not to:
-- redesign unrelated areas
-- introduce duplicate interaction systems
-- add dashboards where a simple flow is needed
-- surface too much state at once
-- make founder-facing flows too technical
-
-For any first-run or pre-build experience, optimize for:
-1. what we are building
-2. what still needs user input
-3. what the user should do next
-
-If an element does not clearly support one of those goals, it is probably unnecessary.
-
----
-
-## When asked for logic changes
-
-Agents must:
-- identify the canonical source of truth
-- avoid deriving from text heuristics if a stronger model already exists
-- avoid encoding product behavior in fragile string parsing if a typed state/config solution is possible
-- avoid mixing parsing logic into UI components
-
-If the logic involves:
-- blueprint sections
-- planning states
-- guided options
-- question sequencing
-- plan/build transitions
-
-prefer robust typed config/state-driven design over scattered conditional logic.
+Always use `FieldValue.serverTimestamp()` for `updatedAt`. Never `new Date()`.
 
 ---
 
-## Do not guess from prompt text when a product state should exist
+## Feed action types
 
-Heuristic text parsing should be a last resort, not the default architecture.
+```typescript
+type ComputerAction = {
+  id: string
+  timestamp: string
+  type: "thinking" | "tool_call" | "tool_result" | "decision" | "message"
+  actor: "user" | "agent" | "system"
+  content: string
+  toolName?: string
+  toolInput?: Record<string, unknown>
+  toolOutput?: string  // JSON string
+}
+```
 
-If the app needs structured information such as:
-- target audience
-- pages
-- features
-- style
-- integrations
-- approval state
-- question completion state
-
-prefer an explicit structured model over repeatedly parsing freeform prompt strings.
-
-If you must use heuristics temporarily:
-- isolate them clearly
-- keep them small
-- do not spread them across the codebase
-- mark them as transitional if appropriate
-- avoid pretending they are a durable domain model
-
----
-
-## Code review checklist for agents
-
-Before finalizing, check:
-
-### Product / UX
-- Is the flow correct?
-- Did I assume anything not explicitly confirmed?
-- Is the UI calm and founder-friendly?
-- Did I avoid clutter and duplicate information?
-- Is the next action obvious?
-
-### Architecture
-- Did I preserve core route/data assumptions?
-- Did I avoid unnecessary backend changes?
-- Did I avoid duplicate systems?
-
-### Maintainability
-- Did I introduce hardcoded lists that should be config-driven?
-- Did I write brittle `if/else` trees where structured mappings would be better?
-- Did I duplicate logic or copy?
-- Did I store derived state unnecessarily?
-- Is the code easy to extend?
-
-### Components
-- Are responsibilities clear?
-- Is domain logic separated from UI where needed?
-- Did I avoid giant mixed-responsibility components?
-
-If any answer is weak, revise before finalizing.
+Rendering rules in `ActionCard`:
+- `actor === "user"` → right-aligned dark bubble (`bg-[#1f1f1f]`)
+- `actor === "system"` → centred pill
+- `type === "thinking"` → quiet zinc text, shimmer if latest
+- `type === "tool_call"` → monospace inline with dot + tool name
+- `type === "tool_result"` → check icon + human summary via `prettyResult()`
+- `type === "decision"` → bold zinc-900 text
+- `tool_result` where `toolName === "plan_project"` → full plan card layout
 
 ---
 
-## Preferred agent behavior summary
+## File generation format (both products)
 
-Be:
-- careful
-- explicit
-- minimal
-- senior
-- maintainable
-- product-minded
+```
+===FILE: src/App.tsx===
+[complete file content — never truncated]
+===END_FILE===
+```
 
-Do not be:
-- speculative
-- assumption-heavy
-- dashboard-happy
-- duplicate-prone
-- junior-style
-- hardcode-first
+Parser: `parseFileBlocks(text)` in `lib/computer-agent/tools.ts`.
+Always generate in order: `package.json` → `vite.config.ts` → `index.html` → `src/main.tsx` → `src/App.tsx` → `src/index.css` → components → config files.
 
-When unsure, ask.
-When possible, simplify.
-When implementing, preserve architecture.
-When designing, prioritize clarity over cleverness.
+---
+
+## Generation quality rules
+
+These apply to all code generated for users (both products):
+
+- Zero placeholder content. Every word from research or inferred from domain.
+- Real business copy — sounds like the actual business wrote it.
+- Google Fonts `@import` pairing: display font + body font.
+- CSS custom properties for brand palette. Never generic gray-only.
+- Framer Motion: entrance animations, stagger lists, scroll reveals.
+- Every interactive element: hover state, focus state, transition.
+- Mobile-first: 320px, 768px, 1280px breakpoints.
+- Images: `picsum.photos` or `source.unsplash.com` with descriptive seeds.
+- `lucide-react` for icons. Never FontAwesome, react-icons, or SVG inline dumps.
+- 3D: use `@react-three/fiber` + `@react-three/drei` only when plan explicitly calls for it.
+
+---
+
+## Environment variables
+
+```bash
+ANTHROPIC_API_KEY
+E2B_API_KEY
+BROWSERBASE_API_KEY
+BROWSERBASE_PROJECT_ID
+FIRECRAWL_API_KEY
+NEXT_PUBLIC_FIREBASE_*     # client-side Firebase config
+FIREBASE_ADMIN_*           # service account for admin SDK
+STRIPE_SECRET_KEY
+STRIPE_WEBHOOK_SECRET
+```
+
+Never log, expose, or echo env vars. Never pass `ANTHROPIC_API_KEY` in client-side code.
+
+---
+
+## Deploy integrations
+
+**Netlify** (`/api/netlify/`):
+- OAuth flow: `oauth/start` → callback → token stored per-uid in Firestore
+- Deploy: `POST /api/netlify/deploy` with `{ computerId, siteId?, siteName }` or `{ projectId, siteId?, siteName }`
+- Status: `GET /api/netlify/status`
+
+**Vercel** (`/api/vercel/`):
+- Token-based (personal access token stored per-uid + computerId)
+- Deploy: `POST /api/vercel/deploy` with `{ computerId }`
+- Status: `GET /api/vercel/status?projectId={computerId}`
+
+Both deploy routes stream NDJSON: `{ type: "step"|"log"|"error"|"success", ... }`.
+
+---
+
+## What NOT to do
+
+- Do not call `startRun()` again inside the computer orchestrator — it's called by the run route.
+- Do not write steps manually before tools execute — steps derive from real tool calls.
+- Do not use `setTimeout` for polling in orchestrator — use the E2B sandbox polling loop already in `runSandbox`.
+- Do not skip `persistArtifacts` after any tool call — this is how Firestore stays in sync.
+- Do not add bouncing dot loaders — use `TextShimmer` from `@/components/prompt-kit/text-shimmer` for all active/loading states.
+- Do not add `expandedActions` state for tool results — they render as single-line summaries via `prettyResult()`.
+- Do not add dark mode, dark backgrounds, or purple/blue accent colours to any UI.
+- Do not use `font-serif` italic in the computer page — only the `/computer/new` page uses it for the headline.
+
+---
+
+## Prompt style for Claude Code
+
+Write prompts that are:
+- Token-efficient. Dense, no filler.
+- File-level specific: always name the exact file and line range.
+- Constraint-led: start with what NOT to change.
+- No narration: run tools, show result, stop.
+- Max 3-6 word sentences in prompts.
+- Specify exact import paths, not just component names.
+
+Example structure:
+```
+Read: [files]
+Goal: [one sentence]
+KEEP UNCHANGED: [list]
+CHANGE: [exact description with line anchors if possible]
+CONSTRAINTS: [hard limits]
+```

@@ -289,7 +289,7 @@ export default function ProjectsPage() {
         <header className="sticky top-0 z-30 border-b border-zinc-200/80 bg-[#f5f5f2]/80 backdrop-blur-md">
           <div className="mx-auto grid w-full max-w-5xl grid-cols-[auto_1fr_auto] items-center gap-4 px-4 py-3 sm:px-6">
             <Link href="/" className="shrink-0 text-[15px] font-semibold text-zinc-900">
-              Lotus.build
+              lotus.build
             </Link>
 
             <div className="relative">

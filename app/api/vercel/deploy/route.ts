@@ -10,12 +10,12 @@ function jsonLine(obj: any) {
 
 /** Vercel: project names must be lowercase, letters/digits/._-, no sequence '---', max 100 chars */
 function toVercelProjectName(projectId: string): string {
-  const base = `buildkit-${projectId}`
+  const base = `lotus-build-${projectId}`
     .toLowerCase()
     .replace(/[^a-z0-9._-]/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "")
-  return (base || "buildkit-project").slice(0, 100)
+  return (base || "lotus-build-project").slice(0, 100)
 }
 
 async function getProjectWithVercel(projectId: string) {
@@ -155,9 +155,10 @@ export async function POST(req: Request) {
           ? `https://vercel.com/dashboard/deployments/${deploymentId}`
           : null
 
-        await adminDb.collection("projects").doc(projectId).set(
+        await adminDb.collection(isComputer ? "computers" : "projects").doc(sourceId).set(
           {
             vercelDeployUrl: siteUrl || deployUrl,
+            deployUrl: siteUrl || deployUrl,
             vercelDeploymentId: deploymentId,
             vercelUpdatedAt: new Date(),
           },

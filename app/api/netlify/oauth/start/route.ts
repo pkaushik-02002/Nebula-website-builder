@@ -10,6 +10,7 @@ export async function GET(req: Request) {
 
     const url = new URL(req.url)
     const projectId = url.searchParams.get("projectId") || ""
+    const computerId = url.searchParams.get("computerId") || ""
 
     const clientId = process.env.NETLIFY_CLIENT_ID
     const redirectUri = process.env.NETLIFY_REDIRECT_URI
@@ -29,6 +30,7 @@ export async function GET(req: Request) {
       {
         uid,
         projectId,
+        computerId,
         createdAt: new Date(),
       },
       { merge: true }

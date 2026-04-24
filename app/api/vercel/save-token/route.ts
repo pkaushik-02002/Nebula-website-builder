@@ -9,16 +9,19 @@ export async function POST(req: Request) {
     const uid = await requireUserUid(req)
     const body = await req.json().catch(() => ({}))
     const projectId = String(body?.projectId ?? "").trim()
+    const computerId = String(body?.computerId ?? "").trim()
+    const sourceId = computerId || projectId
+    const collection = computerId ? "computers" : "projects"
     const token = typeof body?.token === "string" ? body.token.trim() : ""
 
-    if (!projectId) {
-      return NextResponse.json({ error: "Missing projectId" }, { status: 400 })
+    if (!sourceId) {
+      return NextResponse.json({ error: "Missing projectId or computerId" }, { status: 400 })
     }
     if (!token) {
       return NextResponse.json({ error: "Missing token" }, { status: 400 })
     }
 
-    const snap = await adminDb.collection("projects").doc(projectId).get()
+    const snap = await adminDb.collection(collection).doc(sourceId).get()
     if (!snap.exists) {
       return NextResponse.json({ error: "Project not found" }, { status: 404 })
     }
@@ -29,7 +32,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
 
-    await adminDb.collection("projects").doc(projectId).update({
+    await adminDb.collection(collection).doc(sourceId).update({
       vercelToken: token,
       vercelConnectedAt: new Date(),
     })

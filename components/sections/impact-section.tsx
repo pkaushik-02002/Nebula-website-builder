@@ -13,7 +13,7 @@ export function ImpactSection() {
           <p className="text-sm font-medium text-zinc-500 uppercase tracking-wider mb-4">By the numbers</p>
           <h2 className="font-display text-3xl md:text-4xl font-bold text-zinc-900 mb-4">Powering the next generation</h2>
           <p className="text-zinc-500 max-w-lg mx-auto text-balance">
-            Builders around the world are creating amazing apps with Lotus.build.
+            Builders around the world are creating amazing apps with lotus.build.
           </p>
         </div>
 

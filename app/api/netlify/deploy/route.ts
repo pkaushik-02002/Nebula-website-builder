@@ -212,6 +212,13 @@ export async function POST(req: Request) {
           return
         }
 
+        const ownerId = project.data?.ownerId ?? project.data?.userId
+        if (ownerId && ownerId !== uid) {
+          send({ type: "error", error: "Forbidden" })
+          controller.close()
+          return
+        }
+
         project.files = normalizeSourceImports(project.files)
 
         // Ensure netlify.toml exists for clarity/portability (even though we're deploying dist output directly)
@@ -455,6 +462,7 @@ export async function POST(req: Request) {
             netlifyAdminUrl: adminUrl,
             netlifyDeployId: deployId,
             netlifyDeployUrl: deployUrl,
+            deployUrl: deployUrl || siteUrl,
             netlifyUpdatedAt: new Date(),
           },
           { merge: true }

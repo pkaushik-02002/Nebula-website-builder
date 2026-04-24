@@ -74,11 +74,11 @@ function CookieConsentBanner(props: {
               Privacy choices
             </p>
             <h2 className="mt-2 text-xl font-semibold tracking-tight text-zinc-900 sm:text-2xl">
-              Essential storage keeps Lotus.build working. Optional analytics stays off unless you allow it.
+              Essential storage keeps lotus.build working. Optional analytics stays off unless you allow it.
             </h2>
             <p className="mt-3 text-sm leading-6 text-zinc-600 sm:text-[15px]">
               We use first-party cookies and browser storage for sign-in, build handoffs, and interface
-              preferences. If you opt in, Lotus.build also loads privacy-friendly Vercel Web Analytics.
+              preferences. If you opt in, lotus.build also loads privacy-friendly Vercel Web Analytics.
               You can review the current register in our{" "}
               <Link href="/cookies" className="font-medium text-zinc-800 underline underline-offset-4">
                 Cookie Policy

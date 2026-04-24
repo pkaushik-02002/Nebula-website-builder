@@ -9,7 +9,7 @@ import { db } from "@/lib/firebase"
 import { useAuth } from "@/contexts/auth-context"
 import { cn } from "@/lib/utils"
 import { ProjectFileTree, getLanguageFromPath } from "@/components/project/file-tree"
-import { AnimatedAIInput } from "@/components/ui/animated-ai-input"
+import { AnimatedAIInput, type MentionOption } from "@/components/ui/animated-ai-input"
 import { Input } from "@/components/ui/input"
 import {
   Dialog,
@@ -26,22 +26,31 @@ import type {
   ComputerClarificationQuestion,
   ComputerPlan,
   ComputerStep,
+  ComputerVersion,
 } from "@/lib/computer-types"
 import type { GeneratedFile } from "@/app/project/[id]/types"
 import {
   AlertCircle,
   BookOpen,
   Check,
+  Clock,
   Code2,
+  Copy,
   Cpu,
+  Database,
   ExternalLink,
   Globe,
   Menu,
   Monitor,
-  Play,
+  RotateCcw,
   Rocket,
   ShieldCheck,
+  Share2,
   Sparkles,
+  Smartphone,
+  Tablet,
+  UserPlus,
+  Users,
   X,
 } from "lucide-react"
 import { TextShimmer } from "@/components/prompt-kit/text-shimmer"
@@ -71,9 +80,22 @@ const STATUS_CONFIG: Record<string, { pill: string; dot: string }> = {
 }
 
 type Tab = "browser" | "preview" | "code" | "research"
+type PreviewDevice = "desktop" | "tablet" | "mobile"
+
+const PREVIEW_DEVICES: Array<{
+  id: PreviewDevice
+  label: string
+  width: string
+  icon: ReactNode
+}> = [
+  { id: "desktop", label: "Desktop", width: "100%", icon: <Monitor className="h-3.5 w-3.5" /> },
+  { id: "tablet", label: "Tablet", width: "768px", icon: <Tablet className="h-3.5 w-3.5" /> },
+  { id: "mobile", label: "Mobile", width: "390px", icon: <Smartphone className="h-3.5 w-3.5" /> },
+]
 
 let lastAutostartKey: string | null = null
 let lastAutoPreviewSandboxUrl: string | null = null
+let lastAutoSandboxKey: string | null = null
 
 function PulseDot({ color }: { color: string }) {
   return (
@@ -82,10 +104,6 @@ function PulseDot({ color }: { color: string }) {
       <span className={cn("relative inline-flex h-1.5 w-1.5 rounded-full", color)} />
     </span>
   )
-}
-
-function FeedLabel({ children }: { children: ReactNode }) {
-  return <span className="font-mono text-[9px] font-semibold uppercase tracking-[0.12em] text-zinc-400">{children}</span>
 }
 
 function SidebarStatPill({ label, value }: { label: string; value: ReactNode }) {
@@ -97,66 +115,6 @@ function SidebarStatPill({ label, value }: { label: string; value: ReactNode }) 
   )
 }
 
-function FeedTimelineCard({
-  label,
-  meta,
-  accentClassName,
-  shellClassName,
-  bodyClassName,
-  children,
-}: {
-  label: string
-  meta?: ReactNode
-  accentClassName: string
-  shellClassName?: string
-  bodyClassName?: string
-  children: ReactNode
-}) {
-  return (
-    <div className="relative max-w-[92%] pl-7">
-      <span className={cn("absolute left-[10px] top-4 h-2.5 w-2.5 rounded-full ring-[5px] ring-[#fcfaf6]", accentClassName)} />
-      <div
-        className={cn(
-          "overflow-hidden rounded-[1.25rem] border bg-white/95 shadow-[0_18px_36px_-30px_rgba(0,0,0,0.28)]",
-          shellClassName
-        )}
-      >
-        <div className="flex items-center gap-2 border-b border-black/5 px-3.5 py-2.5">
-          <FeedLabel>{label}</FeedLabel>
-          {meta ? <span className="truncate text-[10px] font-medium text-zinc-500">{meta}</span> : null}
-        </div>
-        <div className={cn("px-3.5 py-3", bodyClassName)}>{children}</div>
-      </div>
-    </div>
-  )
-}
-
-function summarizeFilesForDisplay(value: unknown): { count: number; paths: string[] } | null {
-  if (!Array.isArray(value)) return null
-
-  const paths = value.flatMap((item): string[] => {
-    if (!item || typeof item !== "object") return []
-    const path = (item as { path?: unknown }).path
-    return typeof path === "string" ? [path] : []
-  })
-
-  return paths.length > 0 ? { count: paths.length, paths } : null
-}
-
-function sanitizeToolPayloadForDisplay<T>(value: T): T {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return value
-
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>).map(([key, entryValue]) => {
-      if (key === "files") {
-        const summary = summarizeFilesForDisplay(entryValue)
-        if (summary) return [key, summary]
-      }
-
-      return [key, entryValue]
-    })
-  ) as T
-}
 
 function humanizeTool(name?: string) {
   const map: Record<string, string> = {
@@ -189,6 +147,13 @@ function prettyResult(action: ComputerAction): string {
       case "generate_files": {
         const path = out.path as string | undefined
         if (path) return `Wrote ${path}`
+        const backend = out.backend as { status?: string; schemaApplied?: boolean } | undefined
+        if (backend?.status === "success") {
+          return backend.schemaApplied ? "Files generated + Supabase schema applied" : "Files generated + Supabase wired"
+        }
+        if (backend?.status === "approval-required") return "Files generated; Supabase approval needed"
+        if (backend?.status === "oauth-required") return "Files generated; Supabase connection needed"
+        if (backend?.status === "error") return "Files generated; backend setup needs attention"
         const files = out.files
         if (Array.isArray(files)) return `${files.length} files generated`
         if (files && typeof files === "object" && typeof (files as { count?: number }).count === "number")
@@ -209,19 +174,140 @@ function prettyResult(action: ComputerAction): string {
   }
 }
 
+function LotusThinkingBadge({ label }: { label: string }) {
+  const outerPetals = [
+    { rotate: -40, delay: 0 },
+    { rotate: 0,   delay: 0.22 },
+    { rotate: 40,  delay: 0.44 },
+  ]
+  const innerPetals = [
+    { rotate: -20, delay: 0.11 },
+    { rotate: 20,  delay: 0.33 },
+  ]
+
+  return (
+    <div className="flex items-center gap-2.5 py-2">
+      <svg viewBox="0 0 22 22" width="20" height="20" className="shrink-0 overflow-visible">
+        {outerPetals.map(({ rotate, delay }, i) => (
+          <g key={`op-${i}`} transform={`rotate(${rotate}, 11, 14)`}>
+            <motion.ellipse
+              cx="11" cy="8.5" rx="2.5" ry="5.5"
+              fill="#d4b090"
+              animate={{ opacity: [0.35, 1, 0.35] }}
+              transition={{ duration: 1.8, repeat: Infinity, delay, ease: "easeInOut" }}
+            />
+          </g>
+        ))}
+        {innerPetals.map(({ rotate, delay }, i) => (
+          <g key={`ip-${i}`} transform={`rotate(${rotate}, 11, 14)`}>
+            <motion.ellipse
+              cx="11" cy="9.5" rx="1.7" ry="4"
+              fill="#b8906a"
+              animate={{ opacity: [0.45, 1, 0.45] }}
+              transition={{ duration: 1.8, repeat: Infinity, delay, ease: "easeInOut" }}
+            />
+          </g>
+        ))}
+        <motion.circle
+          cx="11" cy="14" r="2.2"
+          fill="#9a7050"
+          animate={{ opacity: [0.65, 1, 0.65] }}
+          transition={{ duration: 1.8, repeat: Infinity, ease: "easeInOut" }}
+        />
+        <path
+          d="M4 17.5 Q7.5 16 11 17.5 Q14.5 19 18 17.5"
+          stroke="#c8a878"
+          strokeWidth="0.8"
+          fill="none"
+          strokeLinecap="round"
+          opacity="0.55"
+        />
+      </svg>
+
+      <span
+        className="animate-shimmer bg-[length:200%_100%] bg-clip-text text-transparent text-[12.5px] font-medium tracking-wide"
+        style={{
+          animationDuration: "2s",
+          backgroundImage: "linear-gradient(to right, #6a5240, #d4a060, #c8905a, #d4a060, #6a5240)",
+        }}
+      >
+        {label}
+      </span>
+    </div>
+  )
+}
+
+function planCardFromOutput(toolOutput: string | undefined) {
+  if (!toolOutput) return null
+  try {
+    const p = JSON.parse(toolOutput)
+    if (!p || typeof p !== "object") return null
+    return p as {
+      domain?: string
+      summary?: string
+      pages?: string[]
+      features?: string[]
+      techChoices?: Record<string, string> | string[]
+      assumptions?: string[]
+      tone?: string
+    }
+  } catch {
+    return null
+  }
+}
+
+function backendFromAction(action: ComputerAction): { status?: string; reason?: string; schemaApplied?: boolean } | null {
+  if (action.type !== "tool_result" || action.toolName !== "generate_files" || !action.toolOutput) return null
+
+  try {
+    const parsed = JSON.parse(action.toolOutput) as { backend?: { status?: string; reason?: string; schemaApplied?: boolean } }
+    return parsed.backend ?? null
+  } catch {
+    return null
+  }
+}
+
+function mentionValueFromName(value: string): string {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/@.*$/, "")
+    .replace(/[^a-z0-9._-]+/g, "")
+
+  return normalized || "collaborator"
+}
+
 function ActionCard({
   action,
   isLatest,
+  currentUserId,
+  onApprove,
+  onApproveBackend,
+  isApproving,
+  isApprovingBackend,
 }: {
   action: ComputerAction
   isLatest?: boolean
+  currentUserId?: string
+  onApprove?: () => void
+  onApproveBackend?: () => void
+  isApproving?: boolean
+  isApprovingBackend?: boolean
 }) {
   if (action.actor === "user") {
+    const showAuthor = !!action.authorName && action.authorUid !== currentUserId
     return (
-      <div className="flex justify-end">
-        <div className="max-w-[84%]">
-          <div className="rounded-2xl bg-[#1f1f1f] px-3.5 py-3">
-            <p className="whitespace-pre-wrap text-[13px] leading-[1.6] text-white">{action.content}</p>
+      <div className="flex justify-end py-1">
+        <div className="max-w-[82%]">
+          {showAuthor ? (
+            <p className="mb-1 px-1 text-right text-[10px] font-medium text-zinc-400">
+              {action.authorName}
+            </p>
+          ) : null}
+          <div className="rounded-2xl rounded-br-[5px] bg-[#1c1c1c] px-3.5 py-2.5 shadow-[0_1px_3px_rgba(0,0,0,0.15)]">
+          <p className="whitespace-pre-wrap text-[13px] leading-[1.65] text-white">
+            {action.content}
+          </p>
           </div>
         </div>
       </div>
@@ -230,103 +316,108 @@ function ActionCard({
 
   if (action.actor === "system") {
     return (
-      <div className="flex justify-center py-0.5">
-        <span className="rounded-full border border-[#e6e0d6] bg-[linear-gradient(180deg,rgba(255,255,255,0.95),rgba(247,243,237,0.98))] px-3 py-1.5 text-[10px] font-medium text-zinc-500 shadow-[0_10px_22px_-24px_rgba(0,0,0,0.28)]">
+      <div className="flex justify-center py-2">
+        <span className="text-[11px] leading-relaxed text-zinc-400">
           {action.content}
         </span>
       </div>
     )
   }
 
-  if (action.type === "thinking") {
-    return (
-      <div>
-        {isLatest ? (
-          <TextShimmer className="text-[13px] leading-6 text-zinc-700" duration={2}>
-            {action.content}
-          </TextShimmer>
-        ) : (
-          <p className="px-1 py-1 text-[13px] leading-6 text-zinc-600">{action.content}</p>
-        )}
-      </div>
-    )
-  }
-
   if (action.type === "tool_call") {
+    const label = humanizeTool(action.toolName)
+    const meta =
+      (action.toolInput?.url as string | undefined) ??
+      (action.toolInput?.path as string | undefined) ??
+      (action.toolInput?.sandboxUrl as string | undefined) ??
+      null
+
     return (
-      <div className="flex items-center gap-2 py-1.5 pl-1">
-        <span className="h-1 w-1 rounded-full bg-zinc-400" />
+      <div className="flex items-baseline gap-2.5 py-[3px]">
         {isLatest ? (
-          <TextShimmer className="font-mono text-[11px] text-zinc-500" duration={2}>
-            {humanizeTool(action.toolName)}
+          <TextShimmer warm className="shrink-0 font-mono text-[11.5px]" duration={1.4}>
+            →
           </TextShimmer>
         ) : (
-          <span className="font-mono text-[11px] text-zinc-500">
-            {humanizeTool(action.toolName)}
+          <span className="shrink-0 font-mono text-[11.5px] text-zinc-300">→</span>
+        )}
+        {isLatest ? (
+          <TextShimmer warm className="font-mono text-[11.5px]" duration={1.4}>
+            {label}
+          </TextShimmer>
+        ) : (
+          <span className="font-mono text-[11.5px] text-zinc-400">{label}</span>
+        )}
+        {meta && (
+          <span className="min-w-0 truncate font-mono text-[10.5px] text-zinc-300">
+            {meta.replace(/^https?:\/\//, "")}
           </span>
         )}
-        {action.toolInput?.url ? (
-          <span className="font-mono text-[11px] text-zinc-400 truncate">{String(action.toolInput.url)}</span>
-        ) : action.toolInput?.path ? (
-          <span className="font-mono text-[11px] text-zinc-400 truncate">{String(action.toolInput.path)}</span>
-        ) : null}
       </div>
     )
   }
 
   if (action.type === "tool_result" && action.toolName === "plan_project") {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let plan: any = null
-    try { plan = JSON.parse(action.toolOutput || "{}") } catch {}
+    const plan = planCardFromOutput(action.toolOutput)
     if (!plan) return null
 
+    const techValues = plan.techChoices
+      ? Array.isArray(plan.techChoices)
+        ? plan.techChoices as string[]
+        : Object.values(plan.techChoices).filter(Boolean)
+      : []
+
     return (
-      <div className="my-2 rounded-2xl border border-zinc-200 bg-white p-4">
-        <p className="mb-3 text-[10px] font-medium uppercase tracking-[0.16em] text-zinc-400">Plan</p>
+      <div className="my-2 rounded-xl border border-zinc-100 bg-white px-3.5 py-3 shadow-[0_1px_4px_rgba(0,0,0,0.05)]">
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-[9px] font-semibold uppercase tracking-[0.2em] text-zinc-400">Plan</span>
+          <span className="h-px flex-1 bg-zinc-100" />
+        </div>
 
-        {plan.domain && (
-          <div className="mb-3">
-            <p className="text-[10px] uppercase tracking-wider text-zinc-400">Domain</p>
-            <p className="mt-0.5 text-[13px] text-zinc-800">{plan.domain}</p>
+        {(plan.summary || plan.domain) && (
+          <p className="text-[12.5px] font-semibold leading-snug text-zinc-900">
+            {plan.summary ?? plan.domain}
+          </p>
+        )}
+
+        {techValues.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-1">
+            {techValues.map((t) => (
+              <span
+                key={t}
+                className="rounded-md bg-zinc-50 px-1.5 py-0.5 font-mono text-[10px] text-zinc-400"
+              >
+                {t}
+              </span>
+            ))}
           </div>
         )}
 
-        {Array.isArray(plan.pages) && plan.pages.length > 0 && (
-          <div className="mb-3">
-            <p className="mb-1.5 text-[10px] uppercase tracking-wider text-zinc-400">Pages</p>
-            <div className="flex flex-wrap gap-1.5">
-              {plan.pages.map((p: string) => (
-                <span key={p} className="rounded-md bg-zinc-100 px-2 py-0.5 font-mono text-[11px] text-zinc-700">{p}</span>
-              ))}
-            </div>
+        {plan.pages?.length ? (
+          <div className="mt-2 flex flex-wrap gap-1">
+            {plan.pages.slice(0, 6).map((p) => (
+              <span
+                key={p}
+                className="rounded-full border border-zinc-100 px-2 py-0.5 text-[10.5px] text-zinc-500"
+              >
+                {p}
+              </span>
+            ))}
           </div>
-        )}
+        ) : null}
 
-        {Array.isArray(plan.features) && plan.features.length > 0 && (
-          <div className="mb-3">
-            <p className="mb-1.5 text-[10px] uppercase tracking-wider text-zinc-400">Features</p>
-            <ul className="space-y-1">
-              {plan.features.map((f: string, i: number) => (
-                <li key={i} className="flex items-start gap-2 text-[12px] text-zinc-700">
-                  <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-zinc-400" />
-                  {f}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {plan.techChoices && (
-          <div>
-            <p className="mb-1.5 text-[10px] uppercase tracking-wider text-zinc-400">Stack</p>
-            <div className="flex flex-wrap gap-1.5">
-              {(Array.isArray(plan.techChoices)
-                ? plan.techChoices as string[]
-                : Object.values(plan.techChoices as Record<string, string>).filter(Boolean)
-              ).map((t: string, i: number) => (
-                <span key={i} className="rounded-md border border-zinc-200 px-2 py-0.5 font-mono text-[11px] text-zinc-600">{t}</span>
-              ))}
-            </div>
+        {onApprove && (
+          <div className="mt-3 flex items-center gap-2 border-t border-zinc-50 pt-3">
+            <button
+              type="button"
+              onClick={onApprove}
+              disabled={isApproving}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-zinc-900 px-3 text-[11.5px] font-semibold text-white transition-opacity hover:opacity-85 disabled:opacity-40"
+            >
+              <Check className="h-3 w-3" strokeWidth={2.5} />
+              {isApproving ? "Approving…" : "Approve plan"}
+            </button>
+            <p className="text-[11px] text-zinc-400">or send changes below</p>
           </div>
         )}
       </div>
@@ -334,36 +425,104 @@ function ActionCard({
   }
 
   if (action.type === "tool_result") {
+    const backend = backendFromAction(action)
+    if (backend?.status === "approval-required" || backend?.status === "oauth-required") {
+      return (
+        <div className="my-2 rounded-xl border border-[#e0dbd1] bg-white px-3.5 py-3 shadow-[0_1px_4px_rgba(0,0,0,0.05)]">
+          <div className="flex items-start gap-3">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[#e6ded2] bg-[#faf9f6] text-[#7a6244]">
+              <Database className="h-4 w-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-[12.5px] font-semibold text-zinc-900">Supabase backend needed</p>
+              <p className="mt-1 text-[11.5px] leading-relaxed text-zinc-500">
+                {backend.reason || "This app needs persistent data, auth, or server-backed features."}
+              </p>
+              {onApproveBackend ? (
+                <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-zinc-50 pt-3">
+                  <button
+                    type="button"
+                    onClick={onApproveBackend}
+                    disabled={isApprovingBackend}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#1c1c1c] px-3 text-[11.5px] font-semibold text-white transition-opacity hover:opacity-85 disabled:opacity-40"
+                  >
+                    <Database className="h-3 w-3" />
+                    {isApprovingBackend ? "Connecting..." : "Connect Supabase"}
+                  </button>
+                  <p className="text-[11px] text-zinc-400">or send changes below</p>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      )
+    }
+
+    const summary = prettyResult(action)
+    const isErr = summary.toLowerCase().startsWith("error")
+
     return (
-      <div className="flex items-center gap-2 py-1 pl-1">
-        <Check className="h-3 w-3 text-zinc-400" />
-        <span className="text-[12px] text-zinc-600">{prettyResult(action)}</span>
+      <div className="flex items-baseline gap-2.5 py-[3px]">
+        <Check
+          className={cn(
+            "mt-[1px] h-3 w-3 shrink-0",
+            isErr ? "text-red-400" : "text-zinc-300"
+          )}
+          strokeWidth={2.5}
+        />
+        <span
+          className={cn(
+            "text-[11.5px] leading-relaxed",
+            isErr ? "text-red-600" : "text-zinc-500"
+          )}
+        >
+          {summary}
+        </span>
       </div>
+    )
+  }
+
+  if (action.type === "thinking") {
+    if (!action.content?.trim()) return null
+    if (isLatest) {
+      return (
+        <div className="py-1.5">
+          <TextShimmer warm className="text-[13px] leading-[1.65]" duration={2}>
+            {action.content}
+          </TextShimmer>
+        </div>
+      )
+    }
+    return (
+      <p className="py-1 text-[13px] leading-[1.65] text-zinc-400">
+        {action.content}
+      </p>
     )
   }
 
   if (action.type === "decision") {
-    return (
-      <div>
-        {isLatest && action.actor === "agent" ? (
-          <TextShimmer className="text-[13px] leading-6 text-zinc-700" duration={2}>
+    if (!action.content?.trim()) return null
+    if (isLatest && action.actor === "agent") {
+      return (
+        <div className="py-1.5">
+          <TextShimmer warm className="text-[13px] leading-[1.65]" duration={2}>
             {action.content}
           </TextShimmer>
-        ) : (
-          <p className="px-1 py-1 text-[13px] font-medium leading-6 text-zinc-900">{action.content}</p>
-        )}
-      </div>
+        </div>
+      )
+    }
+    return (
+      <p className="py-1.5 text-[13px] font-medium leading-[1.65] text-zinc-900">
+        {action.content}
+      </p>
     )
   }
 
+  if (!action.content?.trim()) return null
   return (
-    <FeedTimelineCard
-      label="agent"
-      accentClassName="bg-[#6f665d]"
-      shellClassName="border-[#e4ddd2] bg-[linear-gradient(180deg,rgba(255,255,255,0.99),rgba(250,247,242,0.97))]"
-    >
-      <p className="whitespace-pre-wrap text-[13px] leading-[1.7] text-zinc-700">{action.content}</p>
-    </FeedTimelineCard>
+    <p className="py-1 text-[13px] leading-[1.65] text-zinc-700">
+      {action.content}
+    </p>
   )
 }
 
@@ -429,22 +588,6 @@ function buildClarificationReply(
   ].join("\n\n")
 }
 
-function PlanChipRow({ items }: { items: string[] }) {
-  if (items.length === 0) return null
-
-  return (
-    <div className="mt-2 flex flex-wrap gap-1.5">
-      {items.slice(0, 6).map((item) => (
-        <span
-          key={item}
-          className="rounded-full border border-zinc-200 bg-white px-2.5 py-1 text-[10px] font-medium text-zinc-600"
-        >
-          {item}
-        </span>
-      ))}
-    </div>
-  )
-}
 
 function ClarificationPanel({
   questions,
@@ -570,111 +713,10 @@ function ClarificationPanel({
   )
 }
 
-function PlanningPanel({
-  plan,
-  planningStatus,
-  requirePlanApproval,
-  isApproving,
-  onApprove,
-  onOpenPermissions,
-}: {
-  plan: ComputerPlan | null | undefined
-  planningStatus: Computer["planningStatus"]
-  requirePlanApproval: boolean
-  isApproving: boolean
-  onApprove: () => void
-  onOpenPermissions: () => void
-}) {
-  if (!plan) return null
-
-  if (plan.intent === "website-clone") return null
-
-  const isReadyForApproval = planningStatus === "ready-for-approval" && requirePlanApproval
-  const isApproved = planningStatus === "approved" || !requirePlanApproval
-
-  return (
-    <div className="shrink-0 border-b border-[#ede8e0] bg-[#f7f5ef] px-4 py-4">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500">Plan</p>
-          <p className="mt-1 text-[13px] font-semibold text-zinc-900">{plan.summary}</p>
-        </div>
-        <button
-          type="button"
-          onClick={onOpenPermissions}
-          className="inline-flex h-8 items-center gap-1 rounded-lg border border-zinc-200 bg-white px-2.5 text-[11px] font-medium text-zinc-600 transition-colors hover:bg-zinc-50"
-        >
-          <ShieldCheck className="h-3.5 w-3.5" />
-          Permissions
-        </button>
-      </div>
-
-      <div className="mt-3 grid gap-3 sm:grid-cols-2">
-        <div className="rounded-xl border border-zinc-200 bg-white p-3">
-          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-400">Pages</p>
-          <PlanChipRow items={plan.pages} />
-        </div>
-        <div className="rounded-xl border border-zinc-200 bg-white p-3">
-          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-400">Features</p>
-          <PlanChipRow items={plan.features} />
-        </div>
-      </div>
-
-      <div className="mt-3 rounded-xl border border-zinc-200 bg-white p-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="rounded-full border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-zinc-600">
-            {plan.buildScope === "frontend-only" ? "Frontend only" : "Full stack"}
-          </span>
-          <span className="rounded-full border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-zinc-600">
-            {plan.techChoices.framework}
-          </span>
-          {plan.sourceUrls.length > 0 ? (
-            <span className="rounded-full border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-zinc-600">
-              {plan.sourceUrls.length} reference{plan.sourceUrls.length === 1 ? "" : "s"}
-            </span>
-          ) : null}
-        </div>
-
-        {plan.assumptions.length > 0 ? (
-          <div className="mt-3">
-            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-400">Assumptions</p>
-            <div className="mt-2 space-y-1.5">
-              {plan.assumptions.slice(0, 4).map((item) => (
-                <p key={item} className="text-[12px] leading-relaxed text-zinc-600">
-                  - {item}
-                </p>
-              ))}
-            </div>
-          </div>
-        ) : null}
-      </div>
-
-      {isReadyForApproval ? (
-        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-          <button
-            type="button"
-            onClick={onApprove}
-            disabled={isApproving}
-            className="inline-flex h-10 items-center justify-center rounded-xl bg-zinc-900 px-4 text-[12px] font-semibold text-white transition-opacity hover:opacity-85 disabled:opacity-40"
-          >
-            {isApproving ? "Approving..." : "Approve plan"}
-          </button>
-          <div className="flex min-h-10 items-center rounded-xl border border-zinc-200 bg-white px-3 text-[12px] text-zinc-500">
-            Send changes below if you want the plan revised first.
-          </div>
-        </div>
-      ) : isApproved ? (
-        <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-[12px] text-emerald-800">
-          {requirePlanApproval ? "Plan approved. The agent can continue from this brief." : "Plan approval is off, so the agent can continue from this brief."}
-        </div>
-      ) : null}
-    </div>
-  )
-}
 
 function EmptyPane({ icon, title, subtitle }: { icon: ReactNode; title: string; subtitle: string }) {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-5 px-8 text-center">
+    <div className="flex h-full flex-col items-center justify-center gap-4 px-5 text-center sm:gap-5 sm:px-8">
       <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-zinc-200 bg-white text-zinc-300 shadow-[0_2px_12px_rgba(0,0,0,0.06)]">
         {icon}
       </div>
@@ -692,14 +734,14 @@ function TabButton({ active, onClick, icon, label }: { active: boolean; onClick:
       type="button"
       onClick={onClick}
       className={cn(
-        "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-3 text-[12.5px] font-medium transition-all",
+        "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-[12px] font-medium transition-all sm:px-3 sm:text-[12.5px]",
         active
           ? "bg-zinc-900 text-white shadow-sm"
           : "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800"
       )}
     >
       {icon}
-      {label}
+      <span className="hidden min-[380px]:inline">{label}</span>
     </button>
   )
 }
@@ -755,17 +797,30 @@ export default function ComputerPage() {
   const [isRunning, setIsRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<Tab>("browser")
+  const [previewDevice, setPreviewDevice] = useState<PreviewDevice>("desktop")
   const [selectedFile, setSelectedFile] = useState<GeneratedFile | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [restartAfterStop, setRestartAfterStop] = useState(false)
+  const [isResumingPreview, setIsResumingPreview] = useState(false)
 
   // Deploy state
   const [deployOpen, setDeployOpen] = useState(false)
   const [deployTab, setDeployTab] = useState<"netlify" | "vercel">("netlify")
+  const [shareOpen, setShareOpen] = useState(false)
+  const [inviteEmail, setInviteEmail] = useState("")
+  const [isInviting, setIsInviting] = useState(false)
+  const [inviteError, setInviteError] = useState<string | null>(null)
+  const [copiedShareLink, setCopiedShareLink] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [versions, setVersions] = useState<Array<Omit<ComputerVersion, "files">>>([])
+  const [isLoadingVersions, setIsLoadingVersions] = useState(false)
+  const [isRestoringVersion, setIsRestoringVersion] = useState<string | null>(null)
+  const [versionError, setVersionError] = useState<string | null>(null)
   const [permissionsOpen, setPermissionsOpen] = useState(false)
   const [permissionsDraft, setPermissionsDraft] = useState(true)
   const [isSavingPermissions, setIsSavingPermissions] = useState(false)
   const [isApprovingPlan, setIsApprovingPlan] = useState(false)
+  const [isApprovingBackend, setIsApprovingBackend] = useState(false)
   const [selectedClarificationAnswers, setSelectedClarificationAnswers] = useState<Record<string, string>>({})
   const [isSubmittingClarificationAnswers, setIsSubmittingClarificationAnswers] = useState(false)
   const [netlifyConnected, setNetlifyConnected] = useState<boolean | null>(null)
@@ -786,7 +841,6 @@ export default function ComputerPage() {
   const feedRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
   const autoStarted = useRef(false)
-  const sidebarInitialized = useRef(false)
   const id = params.id
 
   // Firestore subscription — no selectedFile in deps to prevent churn
@@ -834,9 +888,18 @@ export default function ComputerPage() {
   }, [computer?.sandboxUrl])
 
   useEffect(() => {
-    if (typeof window === "undefined" || sidebarInitialized.current) return
-    setSidebarOpen(window.matchMedia("(min-width: 1024px)").matches)
-    sidebarInitialized.current = true
+    if (isResumingPreview) setActiveTab("preview")
+  }, [isResumingPreview])
+
+  useEffect(() => {
+    const media = window.matchMedia("(min-width: 1024px)")
+    const syncSidebarForDesktop = () => {
+      if (media.matches) setSidebarOpen(true)
+    }
+
+    syncSidebarForDesktop()
+    media.addEventListener("change", syncSidebarForDesktop)
+    return () => media.removeEventListener("change", syncSidebarForDesktop)
   }, [])
 
   // Netlify / Vercel status on deploy modal open
@@ -854,7 +917,7 @@ export default function ComputerPage() {
       if (!id) return
       try {
         const token = await user.getIdToken()
-        const res = await fetch(`/api/vercel/status?projectId=${encodeURIComponent(id)}`, {
+        const res = await fetch(`/api/vercel/status?computerId=${encodeURIComponent(id)}`, {
           headers: { Authorization: `Bearer ${token}` }
         })
         const json = await res.json().catch(() => null)
@@ -927,8 +990,117 @@ export default function ComputerPage() {
     setIsRunning(false)
   }, [id, user])
 
+  const resumePreview = useCallback(async () => {
+    if (!user || !id) return
+    setIsResumingPreview(true)
+    try {
+      const token = await user.getIdToken()
+      const response = await fetch(`/api/computer/${id}/sandbox`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!response.ok || !response.body) return
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buf = ""
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        const parts = buf.split("\n\n")
+        buf = parts.pop() ?? ""
+      }
+    } catch {}
+    finally {
+      setIsResumingPreview(false)
+    }
+  }, [id, user])
+
+  const copyShareLink = useCallback(async () => {
+    if (typeof window === "undefined") return
+    await navigator.clipboard.writeText(window.location.href)
+    setCopiedShareLink(true)
+    window.setTimeout(() => setCopiedShareLink(false), 1400)
+  }, [])
+
+  const inviteCollaborator = useCallback(async () => {
+    if (!user || !id || isInviting) return
+    const email = inviteEmail.trim()
+    if (!email) return
+
+    setIsInviting(true)
+    setInviteError(null)
+    try {
+      const token = await user.getIdToken()
+      const response = await fetch(`/api/computer/${id}/share`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ email }),
+      })
+      const payload = await response.json().catch(() => null)
+      if (!response.ok) {
+        throw new Error(payload?.error ?? "Failed to invite collaborator")
+      }
+      setInviteEmail("")
+    } catch (err: any) {
+      setInviteError(err?.message ?? "Failed to invite collaborator")
+    } finally {
+      setIsInviting(false)
+    }
+  }, [id, inviteEmail, isInviting, user])
+
+  const loadVersions = useCallback(async () => {
+    if (!user || !id) return
+
+    setIsLoadingVersions(true)
+    setVersionError(null)
+    try {
+      const token = await user.getIdToken()
+      const response = await fetch(`/api/computer/${id}/versions`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      const payload = await response.json().catch(() => null)
+      if (!response.ok) {
+        throw new Error(payload?.error ?? "Failed to load version history")
+      }
+      setVersions(Array.isArray(payload?.versions) ? payload.versions : [])
+    } catch (err: any) {
+      setVersionError(err?.message ?? "Failed to load version history")
+    } finally {
+      setIsLoadingVersions(false)
+    }
+  }, [id, user])
+
+  const restoreVersion = useCallback(async (versionId: string) => {
+    if (!user || !id || isRestoringVersion) return
+
+    setIsRestoringVersion(versionId)
+    setVersionError(null)
+    try {
+      const token = await user.getIdToken()
+      const response = await fetch(`/api/computer/${id}/versions/${versionId}/restore`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      const payload = await response.json().catch(() => null)
+      if (!response.ok) {
+        throw new Error(payload?.error ?? "Failed to restore version")
+      }
+      await loadVersions()
+    } catch (err: any) {
+      setVersionError(err?.message ?? "Failed to restore version")
+    } finally {
+      setIsRestoringVersion(null)
+    }
+  }, [id, isRestoringVersion, loadVersions, user])
+
+  useEffect(() => {
+    if (historyOpen) loadVersions()
+  }, [historyOpen, loadVersions])
+
   // Derived early so callbacks can reference them
   const status = computer?.status ?? "idle"
+  const canManageComputer = !!user && computer?.ownerId === user.uid
   const isActive = isRunning || (status !== "idle" && status !== "complete" && status !== "error")
   const planningStatus = computer?.planningStatus ?? "draft"
   const requirePlanApproval = computer?.permissions?.requirePlanApproval ?? true
@@ -936,15 +1108,21 @@ export default function ComputerPage() {
   const activePlan = computer?.plan ?? null
   const isClonePlan = activePlan?.intent === "website-clone"
   const requiresPlanApproval = planningStatus === "ready-for-approval" && requirePlanApproval && !isClonePlan
+  const requiresBackendApproval =
+    computer?.supabaseProvisioningStatus === "approval-required" ||
+    computer?.supabaseProvisioningStatus === "oauth-required"
   const isWaitingForUser =
     planningStatus === "needs-input" ||
-    requiresPlanApproval
+    requiresPlanApproval ||
+    requiresBackendApproval
   const inputPlaceholder =
     planningStatus === "needs-input"
       ? "Answer the open questions..."
       : requiresPlanApproval
         ? "Ask for plan changes or approve the plan..."
-        : "Send instructions..."
+        : requiresBackendApproval
+          ? "Connect Supabase or ask for a frontend-only version..."
+          : "Message collaborators or @lotusagent..."
 
   useEffect(() => {
     const nextQuestions = normalizeClarificationQuestions(computer?.clarificationQuestions)
@@ -976,6 +1154,22 @@ export default function ComputerPage() {
     startRun()
   }, [computer?.status, isRunning, isWaitingForUser, restartAfterStop, startRun])
 
+  // Auto-resume sandbox on page load when build is complete but sandbox has expired
+  useEffect(() => {
+    if (!computer) return
+    if (computer.status !== "complete") return
+    const fileCount = computer.files?.length ?? 0
+    if (!fileCount) return
+    if (!id || !user) return
+    if (isRunning || isResumingPreview) return
+
+    const key = `${id}:${fileCount}`
+    if (lastAutoSandboxKey === key) return
+    lastAutoSandboxKey = key
+
+    resumePreview()
+  }, [computer, id, user, isRunning, isResumingPreview, resumePreview])
+
   const submitChatMessage = useCallback(async (value: string) => {
     if (!user || !id) return
     const message = value.trim()
@@ -984,12 +1178,16 @@ export default function ComputerPage() {
     const actionId = typeof crypto !== "undefined" && "randomUUID" in crypto
       ? crypto.randomUUID()
       : `user-${Date.now()}`
+    const mentionsLotus = /(^|\s)@lotusagent\b/i.test(message)
 
     const optimisticAction: ComputerAction = {
       id: actionId,
       timestamp: new Date().toISOString(),
       type: "message",
       actor: "user",
+      authorUid: user.uid,
+      authorName: user.displayName || user.email || "You",
+      authorPhotoURL: user.photoURL,
       content: message,
     }
 
@@ -1001,7 +1199,9 @@ export default function ComputerPage() {
 
     try {
       const token = await user.getIdToken()
-      const intent = isRunning || isActive ? "interrupt" : "message"
+      const intent = mentionsLotus
+        ? (isRunning || isActive ? "interrupt" : "message")
+        : "chat_message"
       const response = await fetch(`/api/computer/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -1011,6 +1211,8 @@ export default function ComputerPage() {
         const payload = await response.json().catch(() => null)
         throw new Error(payload?.error ?? "Failed to send message")
       }
+      if (!mentionsLotus) return
+
       if (intent === "interrupt") {
         setRestartAfterStop(true)
         abortRef.current?.abort()
@@ -1071,6 +1273,98 @@ export default function ComputerPage() {
     }
   }, [id, isApprovingPlan, startRun, user])
 
+  const waitForSupabaseOAuth = useCallback(() => {
+    return new Promise<void>((resolve, reject) => {
+      let settled = false
+      let interval: ReturnType<typeof setInterval> | null = null
+      let timeout: ReturnType<typeof setTimeout> | null = null
+
+      const cleanup = () => {
+        window.removeEventListener("message", onMessage)
+        if (interval) clearInterval(interval)
+        if (timeout) clearTimeout(timeout)
+      }
+
+      const finish = (ok: boolean, message?: string) => {
+        if (settled) return
+        settled = true
+        cleanup()
+        if (ok) resolve()
+        else reject(new Error(message || "Supabase connection failed"))
+      }
+
+      const handlePayload = (payload: unknown) => {
+        if (!payload || typeof payload !== "object") return false
+        const data = payload as { type?: string; ok?: boolean; message?: string }
+        if (data.type !== "supabase-oauth") return false
+        finish(data.ok === true, data.message)
+        return true
+      }
+
+      function onMessage(event: MessageEvent) {
+        handlePayload(event.data)
+      }
+
+      window.addEventListener("message", onMessage)
+      interval = setInterval(() => {
+        try {
+          const raw = localStorage.getItem("supabase-oauth-result")
+          if (!raw) return
+          localStorage.removeItem("supabase-oauth-result")
+          handlePayload(JSON.parse(raw))
+        } catch {}
+      }, 700)
+      timeout = setTimeout(() => finish(false, "Supabase connection timed out"), 120000)
+    })
+  }, [])
+
+  const approveBackend = useCallback(async () => {
+    if (!user || !id || isApprovingBackend) return
+
+    setIsApprovingBackend(true)
+    setError(null)
+
+    try {
+      const token = await user.getIdToken()
+      const connectionRes = await fetch("/api/supabase/check-connection", {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      const connection = await connectionRes.json().catch(() => null)
+
+      if (!connection?.connected) {
+        const authRes = await fetch(
+          `/api/integrations/supabase/authorize?builderProjectId=${encodeURIComponent(`computer-${id}`)}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        )
+        const auth = await authRes.json().catch(() => null)
+        if (!authRes.ok || typeof auth?.url !== "string") {
+          throw new Error(auth?.error ?? "Failed to start Supabase connection")
+        }
+
+        const popup = window.open(auth.url, "supabase-oauth", "width=720,height=760,menubar=no,toolbar=no,location=no")
+        if (!popup) throw new Error("Popup blocked. Allow popups to connect Supabase.")
+        await waitForSupabaseOAuth()
+      }
+
+      const approveRes = await fetch(`/api/computer/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ intent: "approve_backend" }),
+      })
+      const approveJson = await approveRes.json().catch(() => null)
+      if (!approveRes.ok) {
+        throw new Error(approveJson?.error ?? "Failed to approve backend setup")
+      }
+
+      setSidebarOpen(true)
+      await startRun()
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to connect Supabase")
+    } finally {
+      setIsApprovingBackend(false)
+    }
+  }, [id, isApprovingBackend, startRun, user, waitForSupabaseOAuth])
+
   const savePermissions = useCallback(async () => {
     if (!user || !id || isSavingPermissions) return
 
@@ -1106,7 +1400,7 @@ export default function ComputerPage() {
     if (!netlifyConnected) {
       try {
         const token = await user.getIdToken()
-        const res = await fetch(`/api/netlify/oauth/start?projectId=${encodeURIComponent(id)}`, {
+        const res = await fetch(`/api/netlify/oauth/start?computerId=${encodeURIComponent(id)}`, {
           headers: { Authorization: `Bearer ${token}` }
         })
         const json = await res.json()
@@ -1172,7 +1466,7 @@ export default function ComputerPage() {
       const res = await fetch("/api/vercel/save-token", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ projectId: id, token: vercelTokenInput.trim() }),
+        body: JSON.stringify({ computerId: id, token: vercelTokenInput.trim() }),
       })
       if (!res.ok) throw new Error("Failed to save token")
       setVercelConnected(true)
@@ -1270,6 +1564,32 @@ export default function ComputerPage() {
     { id: "code", label: "Code", icon: <Code2 className="h-3.5 w-3.5" /> },
     { id: "research", label: "Research", icon: <BookOpen className="h-3.5 w-3.5" /> },
   ]
+  const activePreviewDevice =
+    PREVIEW_DEVICES.find((device) => device.id === previewDevice) ?? PREVIEW_DEVICES[0]
+  const collaborators = computer?.collaborators ?? []
+  const hasMultiplePeople = collaborators.some((collaborator) => collaborator.uid !== user?.uid)
+  const mentionOptions: MentionOption[] = hasMultiplePeople
+    ? [
+        {
+          id: "lotusagent",
+          label: "Lotus Agent",
+          value: "lotusagent",
+          description: "Ask the agent to use this chat as context",
+        },
+        ...collaborators
+          .filter((collaborator) => collaborator.uid !== user?.uid)
+          .map((collaborator) => {
+            const label = collaborator.displayName || collaborator.email || "Collaborator"
+            return {
+              id: collaborator.uid,
+              label,
+              value: mentionValueFromName(label),
+              description: collaborator.email,
+            }
+          }),
+      ]
+    : []
+  const shareLink = typeof window !== "undefined" ? window.location.href : ""
 
   return (
     <div className="flex h-[100dvh] flex-col overflow-hidden bg-[#f0ece4] text-[#1c1c1c]">
@@ -1277,11 +1597,11 @@ export default function ComputerPage() {
       <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(ellipse_80%_50%_at_50%_-10%,rgba(210,200,182,0.22),transparent)]" />
 
       {/* ── Header ── */}
-      <header className="relative z-10 shrink-0 px-3 pt-3 pb-2.5 sm:px-4 sm:pt-4 sm:pb-3">
+      <header className="relative z-10 shrink-0 px-2 pb-2 pt-2 sm:px-4 sm:pb-3 sm:pt-4">
         <div className="mx-auto max-w-[1800px]">
-          <div className="flex items-center gap-2.5 rounded-[1.4rem] border border-[#e0dbd1] bg-[rgba(252,250,246,0.92)] px-4 py-3 shadow-[0_1px_3px_rgba(0,0,0,0.06),0_8px_32px_-12px_rgba(0,0,0,0.12)] backdrop-blur-md sm:rounded-[1.6rem] sm:px-5 sm:py-3.5">
+          <div className="flex flex-col gap-2 rounded-[1.15rem] border border-[#e0dbd1] bg-[rgba(252,250,246,0.92)] px-3 py-2.5 shadow-[0_1px_3px_rgba(0,0,0,0.06),0_8px_32px_-12px_rgba(0,0,0,0.12)] backdrop-blur-md sm:flex-row sm:items-center sm:gap-2.5 sm:rounded-[1.6rem] sm:px-5 sm:py-3.5">
             {/* identity */}
-            <div className="flex min-w-0 flex-1 items-center gap-3">
+            <div className="flex min-w-0 flex-1 items-center gap-2.5 sm:gap-3">
               <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-zinc-200 bg-white shadow-sm">
                 <Cpu className="h-3.5 w-3.5 text-zinc-500" />
               </div>
@@ -1292,7 +1612,7 @@ export default function ComputerPage() {
                   <span className="truncate text-zinc-600">{computer?.name ?? "Loading…"}</span>
                 </div>
                 {computer?.prompt ? (
-                  <p className="mt-0.5 max-w-xl truncate text-[12px] text-zinc-500 sm:text-[13px]">
+                  <p className="mt-0.5 hidden max-w-xl truncate text-[12px] text-zinc-500 min-[420px]:block sm:text-[13px]">
                     {computer.prompt.split("\n")[0]}
                   </p>
                 ) : null}
@@ -1300,7 +1620,7 @@ export default function ComputerPage() {
             </div>
 
             {/* actions */}
-            <div className="flex shrink-0 items-center gap-2">
+            <div className="grid w-full shrink-0 grid-cols-[repeat(auto-fit,minmax(42px,1fr))] gap-2 sm:flex sm:w-auto sm:min-w-0 sm:items-center sm:gap-2 sm:overflow-x-auto sm:[scrollbar-width:none]">
               {/* status pill */}
               <div className={cn(
                 "hidden items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] sm:inline-flex",
@@ -1314,21 +1634,49 @@ export default function ComputerPage() {
 
               <button
                 type="button"
+                aria-label="Permissions"
+                title="Permissions"
                 onClick={() => setPermissionsOpen(true)}
-                className="inline-flex h-8 items-center gap-1.5 rounded-xl border border-zinc-200 bg-white px-3 text-[12px] font-medium text-zinc-600 shadow-sm transition-colors hover:bg-zinc-50 sm:h-9"
+                className="inline-flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-xl border border-zinc-200 bg-white px-0 text-[12px] font-medium text-zinc-600 shadow-sm transition-colors hover:bg-zinc-50 sm:h-9 sm:px-3"
               >
-                <ShieldCheck className="h-3.5 w-3.5" />
+                <ShieldCheck className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
                 <span className="hidden sm:inline">Permissions</span>
               </button>
+
+              <button
+                type="button"
+                aria-label="Share"
+                title="Share"
+                onClick={() => setShareOpen(true)}
+                className="inline-flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-xl border border-zinc-200 bg-white px-0 text-[12px] font-medium text-zinc-600 shadow-sm transition-colors hover:bg-zinc-50 sm:h-9 sm:px-3"
+              >
+                <Share2 className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
+                <span className="hidden sm:inline">Share</span>
+              </button>
+
+              {(hasFiles || (computer?.versionCount ?? 0) > 0) ? (
+                <button
+                  type="button"
+                  aria-label="History"
+                  title="History"
+                  onClick={() => setHistoryOpen(true)}
+                  className="inline-flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-xl border border-zinc-200 bg-white px-0 text-[12px] font-medium text-zinc-600 shadow-sm transition-colors hover:bg-zinc-50 sm:h-9 sm:px-3"
+                >
+                  <Clock className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
+                  <span className="hidden sm:inline">History</span>
+                </button>
+              ) : null}
 
               {/* deploy button — only when files exist */}
               {hasFiles && (
                 <button
                   type="button"
+                  aria-label="Deploy"
+                  title="Deploy"
                   onClick={() => setDeployOpen(true)}
-                  className="inline-flex h-8 items-center gap-1.5 rounded-xl border border-zinc-200 bg-white px-3 text-[12px] font-medium text-zinc-700 shadow-sm transition-colors hover:border-zinc-300 hover:bg-zinc-50 sm:h-9"
+                  className="inline-flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-xl border border-[#d9cdbc] bg-[#fffaf1] px-0 text-[12px] font-semibold text-[#7a6244] shadow-sm transition-colors hover:border-[#cbbda9] hover:bg-[#fff6e6] sm:h-9 sm:border-zinc-200 sm:bg-white sm:px-3 sm:font-medium sm:text-zinc-700 sm:hover:border-zinc-300 sm:hover:bg-zinc-50"
                 >
-                  <Rocket className="h-3.5 w-3.5" />
+                  <Rocket className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
                   <span className="hidden sm:inline">Deploy</span>
                 </button>
               )}
@@ -1339,34 +1687,25 @@ export default function ComputerPage() {
                   href={computer.deployUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex h-8 items-center gap-1.5 rounded-xl bg-zinc-900 px-3 text-[12px] font-medium text-white transition-opacity hover:opacity-80 sm:h-9"
+                  aria-label="Live"
+                  title="Live"
+                  className="inline-flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-xl bg-zinc-900 px-0 text-[12px] font-medium text-white transition-opacity hover:opacity-80 sm:h-9 sm:px-3"
                 >
-                  <ExternalLink className="h-3.5 w-3.5" />
+                  <ExternalLink className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
                   <span className="hidden sm:inline">Live</span>
                 </a>
-              ) : null}
-
-              {/* run / stop */}
-              {(status === "idle" || status === "error" || status === "complete") && !isRunning && !isWaitingForUser ? (
-                <button
-                  type="button"
-                  onClick={startRun}
-                  disabled={!user}
-                  className="inline-flex h-8 items-center gap-1.5 rounded-xl border border-zinc-200 bg-white px-3 text-[12px] font-semibold text-zinc-800 shadow-sm transition hover:border-zinc-300 hover:bg-zinc-50 disabled:opacity-40 sm:h-9"
-                >
-                  <Play className="h-3 w-3 fill-zinc-800" />
-                  <span className="hidden sm:inline">Run</span>
-                </button>
               ) : null}
 
               {!isRunning && requiresPlanApproval ? (
                 <button
                   type="button"
+                  aria-label="Approve"
+                  title="Approve"
                   onClick={approvePlan}
                   disabled={!user || isApprovingPlan}
-                  className="inline-flex h-8 items-center gap-1.5 rounded-xl bg-zinc-900 px-3 text-[12px] font-semibold text-white transition-opacity hover:opacity-85 disabled:opacity-40 sm:h-9"
+                  className="inline-flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-xl bg-zinc-900 px-0 text-[12px] font-semibold text-white transition-opacity hover:opacity-85 disabled:opacity-40 sm:h-9 sm:px-3"
                 >
-                  <Check className="h-3.5 w-3.5" />
+                  <Check className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
                   <span className="hidden sm:inline">{isApprovingPlan ? "Approving..." : "Approve"}</span>
                 </button>
               ) : null}
@@ -1374,8 +1713,10 @@ export default function ComputerPage() {
               {isRunning ? (
                 <button
                   type="button"
+                  aria-label="Stop"
+                  title="Stop"
                   onClick={stopRun}
-                  className="inline-flex h-8 items-center gap-1.5 rounded-xl border border-red-200 bg-red-50 px-3 text-[12px] font-semibold text-red-600 transition hover:bg-red-100 sm:h-9"
+                  className="inline-flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-xl border border-red-200 bg-red-50 px-0 text-[12px] font-semibold text-red-600 transition hover:bg-red-100 sm:h-9 sm:px-3"
                 >
                   <span className="h-2 w-2 rounded-sm bg-red-500" />
                   Stop
@@ -1385,10 +1726,12 @@ export default function ComputerPage() {
               {/* agent toggle (mobile) */}
               <button
                 type="button"
+                aria-label={sidebarOpen ? "Close agent panel" : "Open agent panel"}
+                title={sidebarOpen ? "Close agent panel" : "Open agent panel"}
                 onClick={() => setSidebarOpen(v => !v)}
-                className="inline-flex h-8 items-center gap-1.5 rounded-xl border border-zinc-200 bg-white px-3 text-[12px] font-medium text-zinc-600 shadow-sm transition-colors hover:bg-zinc-50 lg:hidden sm:h-9"
+                className="inline-flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-xl border border-zinc-200 bg-white px-0 text-[12px] font-medium text-zinc-600 shadow-sm transition-colors hover:bg-zinc-50 lg:hidden sm:h-9 sm:px-3"
               >
-                {sidebarOpen ? <X className="h-3.5 w-3.5" /> : <Menu className="h-3.5 w-3.5" />}
+                {sidebarOpen ? <X className="h-4 w-4 sm:h-3.5 sm:w-3.5" /> : <Menu className="h-4 w-4 sm:h-3.5 sm:w-3.5" />}
               </button>
             </div>
           </div>
@@ -1396,7 +1739,7 @@ export default function ComputerPage() {
       </header>
 
       {/* ── Body ── */}
-      <div className="relative flex min-h-0 flex-1 overflow-hidden px-3 pb-3 sm:px-4 sm:pb-4">
+      <div className="relative flex min-h-0 flex-1 overflow-hidden px-2 pb-2 sm:px-4 sm:pb-4">
         {/* mobile backdrop */}
         <AnimatePresence initial={false}>
           {sidebarOpen ? (
@@ -1422,11 +1765,11 @@ export default function ComputerPage() {
               animate={{ y: 0, opacity: 1 }}
               exit={{ y: 16, opacity: 0 }}
               transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
-              className="absolute inset-x-3 bottom-3 top-auto z-30 flex h-[min(78dvh,740px)] flex-col overflow-hidden rounded-[1.4rem] border border-[#e4dfd5] bg-[#faf9f6] shadow-[0_16px_48px_-24px_rgba(0,0,0,0.22)] sm:inset-x-4 sm:bottom-4 sm:h-[min(80dvh,780px)] sm:rounded-[1.5rem] lg:relative lg:inset-auto lg:mr-3 lg:h-auto lg:w-[380px] lg:shrink-0 lg:rounded-[1.4rem] lg:shadow-[0_4px_24px_-8px_rgba(0,0,0,0.10)] xl:w-[420px]"
+              className="absolute inset-x-0 bottom-0 top-0 z-30 flex flex-col overflow-hidden rounded-[1.15rem] border border-[#e4dfd5] bg-[#faf9f6] shadow-[0_16px_48px_-24px_rgba(0,0,0,0.22)] sm:inset-x-4 sm:bottom-4 sm:top-auto sm:h-[min(80dvh,780px)] sm:rounded-[1.5rem] lg:relative lg:inset-auto lg:mr-3 lg:h-auto lg:w-[380px] lg:shrink-0 lg:rounded-[1.4rem] lg:shadow-[0_4px_24px_-8px_rgba(0,0,0,0.10)] xl:w-[420px]"
             >
               {/* sidebar header */}
-              <div className="shrink-0 border-b border-[#ede8e0] bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.88),rgba(248,244,238,0.98))] px-4 py-4">
-                <div className="rounded-[1.35rem] border border-[#e4ddd2] bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(246,241,233,0.96))] p-4 shadow-[0_24px_48px_-38px_rgba(0,0,0,0.34)]">
+              <div className="shrink-0 border-b border-[#ede8e0] bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.88),rgba(248,244,238,0.98))] px-3 py-3 sm:px-4 sm:py-4">
+                <div className="rounded-[1.1rem] border border-[#e4ddd2] bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(246,241,233,0.96))] p-3 shadow-[0_24px_48px_-38px_rgba(0,0,0,0.34)] sm:rounded-[1.35rem] sm:p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-zinc-400">Agent runtime</p>
@@ -1435,7 +1778,7 @@ export default function ComputerPage() {
                           <Sparkles className="h-4 w-4" />
                         </div>
                         <div className="min-w-0">
-                          <p className="truncate text-[14px] font-semibold text-zinc-900">BuildKit Agent</p>
+                          <p className="truncate text-[14px] font-semibold text-zinc-900">Lotus Agent</p>
                           <p className="mt-0.5 text-[12px] leading-relaxed text-zinc-500">{sidebarStateLabel}</p>
                         </div>
                       </div>
@@ -1456,7 +1799,7 @@ export default function ComputerPage() {
                     </div>
                   </div>
 
-                  <div className="mt-4 grid grid-cols-2 gap-2">
+                  <div className="mt-3 grid grid-cols-2 gap-2 sm:mt-4">
                     <SidebarStatPill
                       label="Progress"
                       value={
@@ -1484,48 +1827,51 @@ export default function ComputerPage() {
                 </div>
               ) : null}
 
-              <PlanningPanel
-                plan={activePlan}
-                planningStatus={planningStatus}
-                requirePlanApproval={requirePlanApproval}
-                isApproving={isApprovingPlan}
-                onApprove={approvePlan}
-                onOpenPermissions={() => setPermissionsOpen(true)}
-              />
-
               {/* feed */}
               <div
                 ref={feedRef}
-                className="min-h-0 flex-1 overflow-y-auto bg-[linear-gradient(180deg,#fffefb,#f8f4ed)] px-4 py-4 [scrollbar-width:thin] sm:px-5 sm:py-5"
+                className="min-h-0 flex-1 overflow-y-auto px-3 py-4 [scrollbar-width:thin] sm:px-5 sm:py-5"
               >
-                {visibleActions.length === 0 && !isRunning && !(planningStatus === "needs-input" && clarificationQuestions.length > 0) ? (
+                {visibleActions.length === 0 &&
+                !isRunning &&
+                !(planningStatus === "needs-input" && clarificationQuestions.length > 0) ? (
                   <div className="flex h-full items-center justify-center">
-                    <div className="rounded-[1.5rem] border border-[#e4ddd2] bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(247,243,236,0.96))] px-6 py-7 text-center shadow-[0_24px_52px_-40px_rgba(0,0,0,0.28)]">
-                      <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-zinc-400">Session feed</p>
-                      <p className="mt-3 text-[13px] font-medium text-zinc-700">
+                    <div className="text-center">
+                      <p className="text-[13px] font-medium text-zinc-600">
                         {status === "idle" ? "Ready to build" : "No messages yet"}
                       </p>
-                      <p className="mt-1.5 text-[12px] leading-relaxed text-zinc-400">
-                        {status === "idle" ? "Run the agent or send instructions below." : "Messages will appear here."}
+                      <p className="mt-1 text-[11.5px] text-zinc-400">
+                        {status === "idle"
+                          ? "Run the agent or send instructions below."
+                          : "Messages will appear here."}
                       </p>
                     </div>
                   </div>
                 ) : (
-                  <div className="relative space-y-3.5 before:absolute before:bottom-3 before:left-[14px] before:top-2 before:w-px before:bg-[linear-gradient(180deg,rgba(180,164,138,0),rgba(180,164,138,0.42),rgba(180,164,138,0))]">
+                  <div className="space-y-0.5">
                     <AnimatePresence initial={false}>
                       {visibleActions.map((action, i) => {
                         const isLatest = i === visibleActions.length - 1 && isRunning
+                        const isPlanCard = action.type === "tool_result" && action.toolName === "plan_project"
+                        const backend = backendFromAction(action)
+                        const isBackendApproval =
+                          backend?.status === "approval-required" || backend?.status === "oauth-required"
                         return (
                           <motion.div
                             key={action.id}
-                            initial={{ opacity: 0, y: 6 }}
+                            initial={{ opacity: 0, y: 4 }}
                             animate={{ opacity: 1, y: 0 }}
                             exit={{ opacity: 0 }}
-                            transition={{ duration: 0.14 }}
+                            transition={{ duration: 0.12 }}
                           >
                             <ActionCard
                               action={action}
                               isLatest={isLatest}
+                              currentUserId={user?.uid}
+                              onApprove={isPlanCard && requiresPlanApproval ? approvePlan : undefined}
+                              onApproveBackend={isBackendApproval ? approveBackend : undefined}
+                              isApproving={isPlanCard ? isApprovingPlan : undefined}
+                              isApprovingBackend={isBackendApproval ? isApprovingBackend : undefined}
                             />
                           </motion.div>
                         )
@@ -1533,35 +1879,44 @@ export default function ComputerPage() {
                     </AnimatePresence>
 
                     {planningStatus === "needs-input" && clarificationQuestions.length > 0 ? (
-                      <ClarificationPanel
-                        questions={clarificationQuestions}
-                        selectedAnswers={selectedClarificationAnswers}
-                        isSubmitting={isSubmittingClarificationAnswers}
-                        onSelectAnswer={selectClarificationAnswer}
-                        onSubmitAnswers={submitClarificationAnswers}
-                        onOpenPermissions={() => setPermissionsOpen(true)}
-                      />
-                    ) : null}
-
-                    {isRunning ? (
-                      <div className="px-1 py-2">
-                        <TextShimmer className="text-[13px] text-zinc-500" duration={1.8}>
-                          Thinking
-                        </TextShimmer>
+                      <div className="pt-3">
+                        <ClarificationPanel
+                          questions={clarificationQuestions}
+                          selectedAnswers={selectedClarificationAnswers}
+                          isSubmitting={isSubmittingClarificationAnswers}
+                          onSelectAnswer={selectClarificationAnswer}
+                          onSubmitAnswers={submitClarificationAnswers}
+                          onOpenPermissions={() => setPermissionsOpen(true)}
+                        />
                       </div>
                     ) : null}
+
+                    <AnimatePresence>
+                      {isRunning ? (
+                        <motion.div
+                          key="lotus-thinking"
+                          initial={{ opacity: 0, y: 4 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -4 }}
+                          transition={{ duration: 0.18 }}
+                        >
+                          <LotusThinkingBadge label={STATUS_LABEL[status] ?? "Working"} />
+                        </motion.div>
+                      ) : null}
+                    </AnimatePresence>
                   </div>
                 )}
               </div>
 
               {/* input */}
-              <div className="shrink-0 border-t border-[#ede8e0] bg-[#faf9f6] p-3 sm:p-4">
+              <div className="shrink-0 border-t border-[#ede8e0] bg-[#faf9f6] p-2.5 sm:p-4">
                 <AnimatedAIInput
                   mode="chat"
                   compact
                   surface="code"
                   placeholder={inputPlaceholder}
                   isLoading={isRunning}
+                  mentionOptions={mentionOptions}
                   onStop={stopRun}
                   onSubmit={submitChatMessage}
                 />
@@ -1571,9 +1926,9 @@ export default function ComputerPage() {
         </AnimatePresence>
 
         {/* ── Main viewport ── */}
-        <main className="relative z-10 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[1.4rem] border border-[#e0dbd1] bg-[rgba(252,250,246,0.96)] shadow-[0_2px_16px_-4px_rgba(0,0,0,0.08)] backdrop-blur-sm sm:rounded-[1.6rem]">
+        <main className="relative z-10 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[1.15rem] border border-[#e0dbd1] bg-[rgba(252,250,246,0.96)] shadow-[0_2px_16px_-4px_rgba(0,0,0,0.08)] backdrop-blur-sm sm:rounded-[1.6rem]">
           {/* tab bar */}
-          <div className="flex shrink-0 items-center gap-2 border-b border-zinc-100 bg-[#faf9f5] px-3 py-2.5 sm:px-4">
+          <div className="flex shrink-0 items-center gap-1.5 border-b border-zinc-100 bg-[#faf9f5] px-2 py-2 sm:gap-2 sm:px-4 sm:py-2.5">
             <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none]">
               {tabs.map(tab => (
                 <TabButton
@@ -1616,15 +1971,15 @@ export default function ComputerPage() {
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
                   transition={{ duration: 0.14 }}
-                  className="flex h-full items-center justify-center overflow-auto bg-[radial-gradient(ellipse_at_top,rgba(255,255,255,0.7),rgba(240,236,228,0.8))] p-4 sm:p-6"
+                  className="flex h-full items-center justify-center overflow-auto bg-[radial-gradient(ellipse_at_top,rgba(255,255,255,0.7),rgba(240,236,228,0.8))] p-3 sm:p-6"
                 >
                   {computer?.browserbaseLiveViewUrl ? (
-                    <div className="flex h-full w-full max-w-[720px] flex-col items-center">
+                    <div className="flex h-full w-full max-w-[720px] flex-col items-center justify-center">
                       {/* monitor shell */}
                       <div className="w-full rounded-[1.4rem] border border-[#7a7060] bg-[linear-gradient(160deg,#cec3b0,#a89880)] p-2.5 shadow-[0_32px_80px_-40px_rgba(0,0,0,0.4)] sm:rounded-[1.6rem]">
                         <div className="rounded-[1.1rem] border border-[#8e8070] bg-[linear-gradient(180deg,#c4b8a4,#a89880)] px-3 pb-3 pt-5 sm:rounded-[1.2rem] sm:px-5 sm:pb-5 sm:pt-7">
                           <div className="mb-3 flex items-center justify-between">
-                            <span className="text-[9px] font-bold uppercase tracking-[0.22em] text-[#706254]">BuildKit</span>
+                            <span className="text-[9px] font-bold uppercase tracking-[0.22em] text-[#706254]">lotus.build</span>
                             <span className="text-[9px] font-bold uppercase tracking-[0.22em] text-[#8a7a68]">Live</span>
                           </div>
                           <div className="overflow-hidden rounded-[0.85rem] border-[8px] border-[#282a2d] shadow-[inset_0_3px_14px_rgba(0,0,0,0.35)]">
@@ -1671,35 +2026,74 @@ export default function ComputerPage() {
                   transition={{ duration: 0.14 }}
                   className="h-full"
                 >
-                  {computer?.sandboxUrl ? (
+                  {isResumingPreview ? (
+                    <div className="flex h-full flex-col items-center justify-center gap-3">
+                      <LotusThinkingBadge label="Reconnecting preview…" />
+                      <p className="text-[11px] text-zinc-400">Starting dev sandbox — this may take a minute</p>
+                    </div>
+                  ) : computer?.sandboxUrl ? (
                     <div className="flex h-full flex-col">
                       {/* address bar */}
-                      <div className="flex shrink-0 items-center gap-2 border-b border-zinc-100 bg-white px-3 py-2">
-                        <div className="flex gap-1">
-                          <span className="h-2.5 w-2.5 rounded-full bg-red-300" />
-                          <span className="h-2.5 w-2.5 rounded-full bg-amber-300" />
-                          <span className="h-2.5 w-2.5 rounded-full bg-green-300" />
-                        </div>
-                        <div className="flex flex-1 items-center gap-1.5 rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1">
+                      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-zinc-100 bg-white px-2 py-2 sm:flex-nowrap sm:px-3">
+                        <div className="order-1 flex min-w-0 flex-1 basis-full items-center gap-1.5 rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1 sm:basis-auto">
                           <Globe className="h-3 w-3 shrink-0 text-zinc-400" />
                           <span className="truncate font-mono text-[11px] text-zinc-500">{computer.sandboxUrl}</span>
+                        </div>
+                        <div className="order-2 flex shrink-0 items-center rounded-lg border border-zinc-200 bg-zinc-50 p-0.5">
+                          {PREVIEW_DEVICES.map((device) => {
+                            const selected = previewDevice === device.id
+
+                            return (
+                              <motion.button
+                                key={device.id}
+                                type="button"
+                                aria-label={`${device.label} preview`}
+                                title={`${device.label} preview`}
+                                whileTap={{ scale: 0.96 }}
+                                onClick={() => setPreviewDevice(device.id)}
+                                className={cn(
+                                  "flex h-6 min-w-6 items-center justify-center rounded-md px-1.5 text-zinc-500 outline-none focus-visible:ring-2 focus-visible:ring-[#a89578]/35",
+                                  selected && "bg-white text-[#7a6244] shadow-sm"
+                                )}
+                              >
+                                {device.icon}
+                                <span className="ml-1 hidden text-[11px] font-medium md:inline">{device.label}</span>
+                              </motion.button>
+                            )
+                          })}
                         </div>
                         <a
                           href={computer.sandboxUrl}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="flex h-7 w-7 items-center justify-center rounded-lg border border-zinc-200 text-zinc-500 transition-colors hover:bg-zinc-50"
+                          className="order-3 ml-auto flex h-7 w-7 items-center justify-center rounded-lg border border-zinc-200 text-zinc-500 transition-colors hover:bg-zinc-50 sm:ml-0"
                         >
                           <ExternalLink className="h-3 w-3" />
                         </a>
                       </div>
-                      <iframe
-                        key={computer.sandboxUrl}
-                        src={computer.sandboxUrl}
-                        className="min-h-0 flex-1 border-0"
-                        title="Preview"
-                        allow="same-origin"
-                      />
+                      <div className="min-h-0 flex-1 overflow-auto bg-[#f7f5f1] p-1.5 sm:p-4">
+                        <motion.div
+                          key={previewDevice}
+                          initial={{ opacity: 0.88, scale: 0.995 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+                          className={cn(
+                            "mx-auto h-full min-h-[420px] max-w-full overflow-hidden bg-white sm:min-h-[520px]",
+                            previewDevice === "desktop"
+                              ? "border-0 shadow-none"
+                              : "rounded-xl border border-[#e0dbd1] shadow-[0_16px_48px_-24px_rgba(0,0,0,0.22)]"
+                          )}
+                          style={{ width: activePreviewDevice.width }}
+                        >
+                          <iframe
+                            key={`${computer.sandboxUrl}-${previewDevice}`}
+                            src={computer.sandboxUrl}
+                            className="h-full w-full border-0"
+                            title={`${activePreviewDevice.label} preview`}
+                            allow="same-origin"
+                          />
+                        </motion.div>
+                      </div>
                     </div>
                   ) : (
                     <EmptyPane
@@ -1752,7 +2146,7 @@ export default function ComputerPage() {
                         selectedFile={selectedFile}
                         onSelectFile={setSelectedFile}
                         isGenerating={Boolean(currentGeneratingFile)}
-                        className="w-full border-b border-zinc-100 bg-[#fafaf7] md:h-full md:w-56 md:border-b-0 md:border-r"
+                        className="max-h-44 w-full shrink-0 overflow-y-auto border-b border-zinc-100 bg-[#fafaf7] md:h-full md:max-h-none md:w-56 md:border-b-0 md:border-r"
                       />
                       <div className="min-h-0 min-w-0 flex-1">
                         {selectedFile ? (
@@ -1860,6 +2254,207 @@ export default function ComputerPage() {
       </div>
 
       {/* ── Deploy Modal ── */}
+      <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] w-[calc(100vw-1.5rem)] max-w-xl overflow-y-auto border-zinc-200 bg-[#f8f7f4]">
+          <DialogHeader>
+            <div className="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">
+              <Clock className="h-2.5 w-2.5" />
+              History
+            </div>
+            <DialogTitle className="mt-3 text-[18px] font-semibold text-zinc-900">
+              Version history
+            </DialogTitle>
+            <DialogDescription className="mt-1 text-[13px] text-zinc-500">
+              Restore a previous generated state when you want to go back.
+            </DialogDescription>
+          </DialogHeader>
+
+          {versionError ? (
+            <p className="rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-[12px] text-red-700">
+              {versionError}
+            </p>
+          ) : null}
+
+          <div className="space-y-2">
+            {isLoadingVersions ? (
+              <div className="rounded-2xl border border-zinc-200 bg-white px-4 py-5">
+                <TextShimmer warm className="text-[13px]">Loading versions...</TextShimmer>
+              </div>
+            ) : versions.length === 0 ? (
+              <div className="rounded-2xl border border-zinc-200 bg-white px-4 py-5">
+                <p className="text-[13px] font-semibold text-zinc-900">No versions yet</p>
+                <p className="mt-1 text-[12px] text-zinc-500">Versions appear after the agent generates files.</p>
+              </div>
+            ) : (
+              versions.map((version) => {
+                const createdAt =
+                  typeof version.createdAt === "string"
+                    ? new Intl.DateTimeFormat(undefined, {
+                        dateStyle: "medium",
+                        timeStyle: "short",
+                      }).format(new Date(version.createdAt))
+                    : "Just now"
+                const isCurrent = computer?.currentVersionId === version.id
+
+                return (
+                  <div
+                    key={version.id}
+                    className={cn(
+                      "flex items-center gap-3 rounded-2xl border bg-white px-3 py-3",
+                      isCurrent ? "border-[#cdbb9f] ring-1 ring-[#e7d9c2]" : "border-zinc-200"
+                    )}
+                  >
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#f7f5f1] text-[12px] font-semibold text-[#7a6244]">
+                      v{version.versionNumber}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <p className="truncate text-[13px] font-semibold text-zinc-900">{version.title}</p>
+                        {isCurrent ? (
+                          <span className="shrink-0 rounded-full bg-green-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-green-700">
+                            Current
+                          </span>
+                        ) : null}
+                      </div>
+                      <p className="mt-0.5 text-[11px] text-zinc-500">
+                        {version.fileCount} file{version.fileCount === 1 ? "" : "s"} · {createdAt}
+                      </p>
+                    </div>
+                    {canManageComputer ? (
+                      <button
+                        type="button"
+                        onClick={() => restoreVersion(version.id)}
+                        disabled={isCurrent || isRestoringVersion !== null}
+                        className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-xl border border-zinc-200 bg-white px-3 text-[12px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-40"
+                      >
+                        <RotateCcw className="h-3.5 w-3.5" />
+                        {isRestoringVersion === version.id ? "Restoring..." : "Restore"}
+                      </button>
+                    ) : null}
+                  </div>
+                )
+              })
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={shareOpen} onOpenChange={setShareOpen}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] w-[calc(100vw-1.5rem)] max-w-lg overflow-y-auto border-zinc-200 bg-[#f8f7f4]">
+          <DialogHeader>
+            <div className="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">
+              <Share2 className="h-2.5 w-2.5" />
+              Share
+            </div>
+            <DialogTitle className="mt-3 text-[18px] font-semibold text-zinc-900">
+              Invite collaborators
+            </DialogTitle>
+            <DialogDescription className="mt-1 text-[13px] text-zinc-500">
+              Collaborators can chat here in real time. The agent only runs when a message includes @lotusagent.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-zinc-200 bg-white p-3">
+              <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-400">Link</p>
+              <div className="flex min-w-0 items-center gap-2">
+                <Input
+                  readOnly
+                  value={shareLink}
+                  className="h-10 min-w-0 flex-1 border-zinc-200 bg-[#faf9f6] text-[12px] text-zinc-600"
+                />
+                <button
+                  type="button"
+                  onClick={copyShareLink}
+                  className="inline-flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-xl border border-zinc-200 bg-white px-3 text-[12px] font-medium text-zinc-700 shadow-sm hover:bg-zinc-50"
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                  {copiedShareLink ? "Copied" : "Copy"}
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-zinc-200 bg-white p-3">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-400">People</p>
+                <span className="inline-flex items-center gap-1 rounded-full bg-[#f7f5f1] px-2 py-1 text-[10px] font-medium text-zinc-500">
+                  <Users className="h-3 w-3" />
+                  {collaborators.length + 1}
+                </span>
+              </div>
+
+              {canManageComputer ? (
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Input
+                    type="email"
+                    value={inviteEmail}
+                    onChange={(event) => setInviteEmail(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") inviteCollaborator()
+                    }}
+                    placeholder="friend@example.com"
+                    className="h-10 border-zinc-200 bg-[#faf9f6] text-[13px]"
+                  />
+                  <button
+                    type="button"
+                    onClick={inviteCollaborator}
+                    disabled={isInviting || !inviteEmail.trim()}
+                    className="inline-flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-xl bg-zinc-900 px-4 text-[12px] font-semibold text-white hover:opacity-85 disabled:opacity-40"
+                  >
+                    <UserPlus className="h-3.5 w-3.5" />
+                    {isInviting ? "Inviting..." : "Invite"}
+                  </button>
+                </div>
+              ) : (
+                <p className="text-[12px] leading-relaxed text-zinc-500">
+                  Only the owner can invite more people to this computer.
+                </p>
+              )}
+
+              {inviteError ? (
+                <p className="mt-2 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-[12px] text-red-700">
+                  {inviteError}
+                </p>
+              ) : null}
+
+              <div className="mt-3 space-y-2">
+                <div className="flex items-center gap-2 rounded-xl border border-zinc-100 bg-[#faf9f6] px-3 py-2">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-zinc-900 text-[11px] font-semibold text-white">
+                    {(user?.displayName || user?.email || "O").slice(0, 1).toUpperCase()}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-[12px] font-semibold text-zinc-900">
+                      {user?.displayName || user?.email || "Owner"}
+                    </p>
+                    <p className="text-[10px] uppercase tracking-[0.14em] text-zinc-400">Owner</p>
+                  </div>
+                </div>
+
+                {collaborators.map((collaborator) => (
+                  <div key={collaborator.uid} className="flex items-center gap-2 rounded-xl border border-zinc-100 bg-[#faf9f6] px-3 py-2">
+                    <div className="flex h-7 w-7 items-center justify-center overflow-hidden rounded-full bg-white text-[11px] font-semibold text-zinc-600 ring-1 ring-zinc-200">
+                      {collaborator.photoURL ? (
+                        <img src={collaborator.photoURL} alt="" className="h-full w-full object-cover" />
+                      ) : (
+                        (collaborator.displayName || collaborator.email || "C").slice(0, 1).toUpperCase()
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[12px] font-semibold text-zinc-900">
+                        {collaborator.displayName || collaborator.email || "Collaborator"}
+                      </p>
+                      {collaborator.email ? (
+                        <p className="truncate text-[11px] text-zinc-400">{collaborator.email}</p>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={permissionsOpen} onOpenChange={setPermissionsOpen}>
         <DialogContent className="max-w-lg border-zinc-200 bg-[#f8f7f4]">
           <DialogHeader>

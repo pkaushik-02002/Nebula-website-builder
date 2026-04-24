@@ -5,7 +5,7 @@ import { Navbar } from "@/components/ui/navbar"
 import { FooterSection } from "@/components/sections/footer-section"
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
 import { Button } from "@/components/ui/button"
-import { buildkitFaqs } from "@/lib/buildkit-site-content"
+import { lotusFaqs } from "@/lib/lotus-site-content"
 import { LEGAL_CONTACT_EMAIL, LEGAL_CONTACT_HREF } from "@/lib/legal-content"
 import {
   ArrowLeft,
@@ -46,7 +46,7 @@ export default function HelpPage() {
             </h2>
             <div className="overflow-hidden rounded-2xl border border-zinc-200 bg-white">
               <Accordion type="single" collapsible className="w-full">
-                {buildkitFaqs.map((faq, i) => (
+                {lotusFaqs.map((faq, i) => (
                   <AccordionItem
                     key={i}
                     value={`faq-${i}`}

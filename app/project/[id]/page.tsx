@@ -3830,7 +3830,7 @@ function ProjectContent() {
                     <div className={isUserMessage ? "max-w-[85%]" : "w-full"}>
                       <div className="mb-1 flex items-center px-1">
                         <span className="text-[11px] font-medium text-zinc-400">
-                          {isUserMessage ? "You" : "Lotus.build"}
+                          {isUserMessage ? "You" : "lotus.build"}
                         </span>
                       </div>
 

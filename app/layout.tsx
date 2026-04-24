@@ -13,7 +13,7 @@ const manrope = Manrope({
 
 function normalizeSiteUrl(raw?: string): string {
   const value = (raw || "").trim()
-  if (!value) return "https://buildkit.app"
+  if (!value) return "https://lotus.build"
   if (/^https?:\/\//i.test(value)) return value
   return `https://${value}`
 }
@@ -23,8 +23,8 @@ const siteUrl = normalizeSiteUrl(process.env.NEXT_PUBLIC_APP_URL)
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
   title: {
-    default: "Lotus.build | AI-Powered Full-Stack App Builder",
-    template: "%s | Lotus.build",
+    default: "lotus.build | AI-Powered Full-Stack App Builder",
+    template: "%s | lotus.build",
   },
   description:
     "Turn ideas into production-ready web apps with AI. Describe what you want to build in plain English—landing pages, dashboards, SaaS UIs—and get React/TypeScript code, live preview, and one-click deploy to Vercel or Netlify.",
@@ -37,25 +37,25 @@ export const metadata: Metadata = {
     "web app generator",
     "Vite React",
     "deploy to Vercel",
-    "Lotus.build",
+    "lotus.build",
   ],
-  authors: [{ name: "Lotus.build", url: siteUrl }],
-  creator: "Lotus.build",
-  publisher: "Lotus.build",
-  applicationName: "Lotus.build",
+  authors: [{ name: "lotus.build", url: siteUrl }],
+  creator: "lotus.build",
+  publisher: "lotus.build",
+  applicationName: "lotus.build",
   referrer: "origin-when-cross-origin",
   openGraph: {
     type: "website",
     locale: "en_US",
     url: siteUrl,
-    siteName: "Lotus.build",
-    title: "Lotus.build | AI-Powered Full-Stack App Builder",
+    siteName: "lotus.build",
+    title: "lotus.build | AI-Powered Full-Stack App Builder",
     description:
       "Turn ideas into production-ready web apps with AI. Describe what you want—get React code, live preview, and one-click deploy.",
   },
   twitter: {
     card: "summary",
-    title: "Lotus.build | AI-Powered Full-Stack App Builder",
+    title: "lotus.build | AI-Powered Full-Stack App Builder",
     description: "Turn ideas into production-ready web apps with AI. Describe what you want—get code, preview, deploy.",
   },
   robots: {
@@ -104,7 +104,7 @@ export default function RootLayout({
       {
         "@type": "Organization",
         "@id": `${siteUrl}/#organization`,
-        name: "Lotus.build",
+        name: "lotus.build",
         url: siteUrl,
         logo: { "@type": "ImageObject", url: `${siteUrl}/icon.svg` },
         description: "AI-powered full-stack app builder. Turn ideas into production-ready web applications.",
@@ -113,7 +113,7 @@ export default function RootLayout({
         "@type": "WebSite",
         "@id": `${siteUrl}/#website`,
         url: siteUrl,
-        name: "Lotus.build",
+        name: "lotus.build",
         description: "Build full-stack web apps with AI. Describe your idea—get React code, live preview, and deploy.",
         publisher: { "@id": `${siteUrl}/#organization` },
         inLanguage: "en-US",
@@ -125,7 +125,7 @@ export default function RootLayout({
       },
       {
         "@type": "SoftwareApplication",
-        name: "Lotus.build",
+        name: "lotus.build",
         applicationCategory: "DeveloperApplication",
         operatingSystem: "Web",
         description: "AI-powered app builder. Generate React/TypeScript apps from a prompt, preview in-browser, deploy to Vercel or Netlify.",

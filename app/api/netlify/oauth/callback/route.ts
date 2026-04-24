@@ -26,7 +26,7 @@ export async function GET(req: Request) {
     return new NextResponse("Invalid state", { status: 400 })
   }
 
-  const { uid, projectId } = stateSnap.data() as any
+  const { uid, projectId, computerId } = stateSnap.data() as any
   if (!uid) {
     return new NextResponse("Invalid state payload", { status: 400 })
   }
@@ -58,7 +58,7 @@ export async function GET(req: Request) {
   await adminDb.collection("netlifyOauthStates").doc(state).delete().catch(() => {})
 
   const redirectTo = new URL(process.env.NEXT_PUBLIC_APP_URL || url.origin)
-  redirectTo.pathname = projectId ? `/project/${projectId}` : "/projects"
+  redirectTo.pathname = computerId ? `/computer/${computerId}` : projectId ? `/project/${projectId}` : "/projects"
   redirectTo.searchParams.set("netlify", "connected")
 
   return NextResponse.redirect(redirectTo.toString())

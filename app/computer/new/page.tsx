@@ -94,7 +94,7 @@ export default function ComputerNewPage() {
             className="group flex items-center gap-2 text-[13px] font-medium text-zinc-600 transition-colors hover:text-zinc-900"
           >
             <ArrowLeft className="h-3.5 w-3.5 transition-transform group-hover:-translate-x-0.5" />
-            Lotus.build
+            lotus.build
           </Link>
 
           <div className="inline-flex items-center gap-1.5 rounded-full border border-[#e6dfd1] bg-white px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500 shadow-sm">

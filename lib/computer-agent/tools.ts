@@ -1,13 +1,22 @@
 import Anthropic from "@anthropic-ai/sdk"
 import { Sandbox } from "@e2b/code-interpreter"
 import { FieldValue } from "firebase-admin/firestore"
+import crypto from "crypto"
 import JSZip from "jszip"
 import { nanoid } from "nanoid"
 import { z } from "zod"
 import { adminDb } from "@/lib/firebase-admin"
 import { loadStagehand } from "@/lib/browserbase/load-stagehand"
 import type { ComputerBrowserSession } from "@/lib/computer-agent/browserbase-session"
+import { encryptEnvVars, decryptEnvVars } from "@/lib/encrypt-env"
+import { extractSqlTables, generatePostgresSchema } from "@/lib/integrations/supabase/schema"
+import {
+  analyzeSupabaseProvisioningNeed,
+  generateSupabaseIntegrationUpdates,
+  mergeProjectFiles,
+} from "@/lib/integrations/supabase/provision"
 import { getUserNetlifyToken } from "@/lib/server-auth"
+import { getSupabaseConnection, supabaseManagementFetch } from "@/lib/supabase-management"
 import type { ComputerAction, ComputerBuildScope, ComputerIntent, ComputerResearchSource } from "@/lib/computer-types"
 
 export interface ProjectPlan {
@@ -45,6 +54,7 @@ export interface ToolContext {
   computerId: string
   uid: string
   idToken: string
+  prompt: string
   browserSession: ComputerBrowserSession
   onFileGenerationProgress?: (progress: FileGenerationProgress) => Promise<void> | void
 }
@@ -93,7 +103,7 @@ export const COMPUTER_TOOLS: Anthropic.Tool[] = [
   {
     name: "generate_files",
     description:
-      "Generate complete production-ready project files using the plan and research context. Returns {files: ProjectFile[]}.",
+      "Generate complete production-ready project files using the plan and research context. Dynamically analyzes backend needs and wires Supabase when required. Returns {files: ProjectFile[], backend}.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -345,7 +355,11 @@ async function planProject(prompt: string, research: string): Promise<ProjectPla
   const response = await anthropic.messages.create({
     model: "claude-sonnet-4-5",
     max_tokens: 4096,
-    system: "Senior product architect. Output valid JSON only. No markdown, no explanation.",
+    system: [
+      "Senior product architect and design director.",
+      "Output valid JSON only. No markdown, no explanation.",
+      "Plan for launch-quality, domain-specific websites, not generic AI templates.",
+    ].join(" "),
     messages: [
       {
         role: "user",
@@ -376,8 +390,10 @@ Return a JSON object:
     "sections": ["section descriptions with real content from research"],
     "colorPalette": "primary, secondary, accent hex values",
     "typography": "Google Fonts pairing",
-    "layoutDirection": "layout rhythm and hierarchy",
-    "motionDirection": "animation tone and interaction style"
+    "layoutDirection": "specific visual composition, layout rhythm, and hierarchy",
+    "motionDirection": "animation tone and interaction style",
+    "designSignature": "one distinctive, domain-specific visual idea that makes this site feel custom",
+    "avoidPatterns": ["specific generic patterns to avoid for this brief"]
   },
   "assumptions": ["only assumptions that are still being made"],
   "researchHighlights": ["specific findings from the references or brief"],
@@ -391,7 +407,12 @@ Rules:
 - If the clone request does not name a specific page or section, plan only the public landing page or homepage by default.
 - For a default landing-page clone, keep pages focused on ["Home"] unless the brief explicitly asks for more.
 - If the brief clearly asks for immersive visuals, 3D, or WebGL, reflect that in techChoices.graphics instead of ignoring it.
+- If the product needs persisted data, auth, accounts, CRUD, uploads, dashboards, bookings, orders, payments, or other server-backed behavior, set buildScope to "full-stack" and describe the real backend data needs in contentPlan.
 - Base every content field on the research or the user's brief. Use real details, not generic placeholders.
+- Make a decisive design direction. Do not produce vague instructions like "modern clean layout" or "professional design".
+- Avoid generic AI-site patterns: centered hero + three feature cards + fake stats + fake testimonials + generic CTA.
+- Sections must be chosen for this exact product and audience. Do not include social proof, pricing, testimonials, or metrics unless the brief/research supports them.
+- Prefer asymmetry, editorial rhythm, strong typography, purposeful imagery, and domain-specific interaction details over bland card grids.
 - Keep assumptions short and honest.`,
       },
     ],
@@ -406,13 +427,22 @@ Rules:
 
 // ─── generate_files ────────────────────────────────────────────────────────────
 
-const GENERATE_SYSTEM = `You are an elite full-stack developer building production-grade React/Vite applications.
+const GENERATE_SYSTEM = `You are an elite full-stack developer and senior visual designer building production-grade React/Vite applications.
+
+QUALITY BAR:
+The output must look like a real design studio built it for a paying client. It must not look like an AI-generated template, startup boilerplate, or a default Tailwind demo.
 
 MANDATORY RULES:
 - Zero placeholder content. Every word from research or intelligently inferred from domain.
 - Real business copy. Sounds like the actual business owner wrote it.
 - Domain aesthetics: colors, fonts, layout match the industry exactly.
 - Avoid generic AI-looking SaaS sections, filler metrics, fake testimonials, or empty feature grids.
+- Never use a generic layout recipe: centered hero, three cards, stats row, testimonial cards, FAQ, CTA. Only include sections the product actually needs.
+- Create a distinctive first viewport. Use a memorable composition: editorial split rhythm, overlapping media, product UI, full-bleed imagery, timeline, map, menu board, booking surface, command center, or another domain-specific visual idea.
+- Avoid bland cards everywhere. Cards are for real grouped content only; vary section structure with bands, sidebars, inset tools, comparison rows, media-led blocks, tables, timelines, or interactive surfaces.
+- No fake metrics, fake logos, fake people, fake reviews, or fabricated awards. If proof is unavailable, use concrete product/process details instead.
+- Do not use one-note purple/blue gradients, generic slate dashboards, beige-only pages, or stock-looking bokeh/orb backgrounds.
+- Use strong typography: one display font and one body font from Google Fonts, with a clear scale and confident headings. Do not use Inter alone.
 - Google Fonts @import - pair display/heading font with body font.
 - CSS custom properties for the color palette. Never generic gray-only.
 - Framer Motion entrance animations, stagger lists, scroll reveals.
@@ -422,9 +452,19 @@ MANDATORY RULES:
 - Real navigation with smooth scroll to sections.
 - Footer with useful links - not empty nav items.
 - lucide-react for icons. framer-motion for animations.
+- Component architecture: split real sections/components into separate files. Do not dump a giant single-file App unless the site is tiny.
+- Responsive polish is required: no overlapping text, no clipped buttons, no awkward hero at mobile sizes, no horizontal overflow.
 - If the plan calls for 3D or WebGL, use a production-safe approach such as three, @react-three/fiber, and @react-three/drei only where it materially improves the site.
+- If the plan is full-stack, build the frontend flows and state shape that match the required backend behavior. Supabase provisioning and client wiring may run after generation; keep code cleanly structured for that integration.
 - If the plan is a website clone, recreate the frontend information architecture, pacing, and interaction feel from scratch without copying backend behavior.
 - If the plan is a default website clone, build the landing page or homepage only unless the user explicitly asked for additional pages or sections.
+
+DESIGN EXECUTION:
+- Let the plan's designSignature drive the layout. If designSignature is weak, infer a sharper one from the domain before coding.
+- Each section needs a job: sell, explain, compare, let the user act, show inventory/work, or reduce uncertainty. Remove sections that do not have a job.
+- Use real UI where useful: booking forms, filters, calculators, menus, comparison tables, onboarding steps, dashboards, galleries, or product mockups. Make them visually credible.
+- Write concise, specific copy. Prefer concrete nouns and verbs over "transform", "unlock", "seamless", "innovative", "elevate", or "next-generation".
+- Final result should feel custom at 1440px and carefully adapted at 390px.
 
 FILE FORMAT (strict):
 ===FILE: path/to/file.tsx===
@@ -465,7 +505,9 @@ ${JSON.stringify(plan, null, 2)}
 Research context (use for ALL copy and content - not generic text):
 ${research}
 
-Apply the content plan's color palette, typography, section structure, and motion direction directly. Every text element must reflect the research or the user's supplied brief.`,
+Apply the content plan's color palette, typography, section structure, designSignature, avoidPatterns, and motion direction directly.
+Before coding, mentally reject the first generic layout idea and choose a more specific composition for this domain.
+Every text element must reflect the research or the user's supplied brief.`,
       },
     ],
   })
@@ -547,30 +589,562 @@ Apply the content plan's color palette, typography, section structure, and motio
   return finalFiles
 }
 
+function isViteConfigPath(path: string): boolean {
+  return /^vite\.config\.(ts|js|mjs|mts|cjs)$/.test(path)
+}
+
+function projectUsesVite(files: ProjectFile[]): boolean {
+  const packageFile = files.find((file) => file.path === "package.json")
+  if (!packageFile) return false
+
+  try {
+    const pkg = JSON.parse(packageFile.content) as {
+      dependencies?: Record<string, string>
+      devDependencies?: Record<string, string>
+    }
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies }
+    return Boolean(deps.vite)
+  } catch {
+    return false
+  }
+}
+
+function findMatchingBraceIndex(content: string, openBraceIndex: number): number {
+  let depth = 0
+  let quote: '"' | "'" | "`" | null = null
+  let escaped = false
+
+  for (let index = openBraceIndex; index < content.length; index++) {
+    const char = content[index]
+
+    if (quote) {
+      if (escaped) {
+        escaped = false
+      } else if (char === "\\") {
+        escaped = true
+      } else if (char === quote) {
+        quote = null
+      }
+      continue
+    }
+
+    if (char === '"' || char === "'" || char === "`") {
+      quote = char
+      continue
+    }
+
+    if (char === "{") depth += 1
+    if (char === "}") depth -= 1
+    if (depth === 0) return index
+  }
+
+  return -1
+}
+
+function replaceExistingViteServerConfig(content: string, serverConfig: string): string | null {
+  const serverMatch = /server\s*:\s*\{/.exec(content)
+  if (!serverMatch) return null
+
+  const openBraceIndex = content.indexOf("{", serverMatch.index)
+  const closeBraceIndex = findMatchingBraceIndex(content, openBraceIndex)
+  if (closeBraceIndex === -1) return null
+
+  const prefix = content.slice(0, serverMatch.index)
+  const suffix = content.slice(closeBraceIndex + 1)
+  return `${prefix}${serverConfig}${suffix}`
+}
+
+function withSandboxViteServerConfig(content: string): string {
+  const serverConfig = `server: {
+    host: "0.0.0.0",
+    port: 3000,
+    strictPort: true,
+    allowedHosts: true,
+    hmr: { overlay: false },
+  }`
+
+  const replacedServerConfig = replaceExistingViteServerConfig(content, serverConfig)
+  if (replacedServerConfig) return replacedServerConfig
+
+  if (/export\s+default\s+defineConfig\s*\(\s*\{/.test(content)) {
+    return content.replace(
+      /export\s+default\s+defineConfig\s*\(\s*\{/,
+      (match) => `${match}\n  ${serverConfig},`
+    )
+  }
+
+  if (/defineConfig\s*\(\s*\{/.test(content)) {
+    return content.replace(
+      /defineConfig\s*\(\s*\{/,
+      (match) => `${match}\n  ${serverConfig},`
+    )
+  }
+
+  if (/export\s+default\s*\{/.test(content)) {
+    return content.replace(
+      /export\s+default\s*\{/,
+      (match) => `${match}\n  ${serverConfig},`
+    )
+  }
+
+  return content
+}
+
+function prepareSandboxFiles(files: ProjectFile[]): ProjectFile[] {
+  const prepared = files.map((file) => {
+    if (!isViteConfigPath(file.path)) return file
+
+    return {
+      ...file,
+      content: withSandboxViteServerConfig(file.content),
+    }
+  })
+
+  if (!projectUsesVite(prepared) || prepared.some((file) => isViteConfigPath(file.path))) {
+    return prepared
+  }
+
+  return [
+    ...prepared,
+    {
+      path: "vite.config.ts",
+      content: `import { defineConfig } from "vite"
+import react from "@vitejs/plugin-react"
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    host: "0.0.0.0",
+    port: 3000,
+    strictPort: true,
+    allowedHosts: true,
+    hmr: { overlay: false },
+  },
+})
+`,
+    },
+  ]
+}
+
+type ComputerSupabaseRecord = {
+  name?: string
+  prompt?: string
+  files?: ProjectFile[]
+  generatedSchemaSql?: string
+  generatedSchemaTables?: string[]
+  supabaseProjectRef?: string
+  supabaseProjectName?: string
+  supabaseUrl?: string
+  supabaseAnonKey?: string
+  schemaPushStatus?: string
+  plan?: ProjectPlan | null
+  supabaseBackendApproved?: boolean
+}
+
+type SupabaseProjectRecord = {
+  id?: string
+  ref?: string
+  name?: string
+  region?: string
+  organization_id?: string
+  api_url?: string
+  url?: string
+}
+
+type SupabaseCredentials = {
+  projectRef: string
+  projectName: string
+  supabaseUrl: string
+  supabaseAnonKey: string
+}
+
+type ComputerBackendSetupResult = {
+  status: "not-needed" | "approval-required" | "oauth-required" | "success" | "error"
+  reason: string
+  files: ProjectFile[]
+  schemaApplied: boolean
+  projectRef?: string
+  tables?: string[]
+  error?: string
+}
+
+function buildComputerProjectName(name: string, prompt: string): string {
+  const raw = name.trim() || prompt.split(/\s+/).slice(0, 3).join("-")
+  const normalized = raw
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+
+  return (normalized || "computer-app").slice(0, 40)
+}
+
+function ensureSupabaseSupportFiles(params: {
+  files: ProjectFile[]
+  schemaSql: string
+}): ProjectFile[] {
+  const next = new Map(params.files.map((file) => [file.path, file]))
+
+  if (!next.has(".env.example")) {
+    next.set(".env.example", {
+      path: ".env.example",
+      content: [
+        "VITE_SUPABASE_URL=",
+        "VITE_SUPABASE_ANON_KEY=",
+      ].join("\n"),
+    })
+  }
+
+  if (params.schemaSql.trim()) {
+    next.set("supabase/migrations/001_initial.sql", {
+      path: "supabase/migrations/001_initial.sql",
+      content: params.schemaSql.trim(),
+    })
+  }
+
+  return Array.from(next.values())
+}
+
+async function resolveSupabaseOrganizationId(uid: string): Promise<string> {
+  try {
+    const organizations = await supabaseManagementFetch<Array<{ id?: string }>>(uid, "/v1/organizations")
+    const organizationId = (organizations[0]?.id ?? "").toString().trim()
+    if (organizationId) return organizationId
+  } catch {}
+
+  try {
+    const projects = await supabaseManagementFetch<Array<{ organization_id?: string }>>(uid, "/v1/projects")
+    return (projects.find((project) => !!project.organization_id)?.organization_id ?? "").toString().trim()
+  } catch {
+    return ""
+  }
+}
+
+async function fetchSupabaseCredentials(uid: string, projectRef: string): Promise<SupabaseCredentials> {
+  const details = await supabaseManagementFetch<SupabaseProjectRecord>(
+    uid,
+    `/v1/projects/${encodeURIComponent(projectRef)}`
+  )
+  const apiKeys = await supabaseManagementFetch<Array<{ api_key?: string; name?: string }>>(
+    uid,
+    `/v1/projects/${encodeURIComponent(projectRef)}/api-keys`
+  )
+
+  const supabaseUrl = (details?.api_url ?? details?.url ?? `https://${projectRef}.supabase.co`).toString().trim()
+  const supabaseAnonKey = apiKeys.find((key) => (key.name || "").toLowerCase().includes("anon"))?.api_key?.trim() || ""
+  const projectName = (details?.name ?? projectRef).toString().trim()
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    throw new Error("Could not retrieve Supabase project credentials")
+  }
+
+  return {
+    projectRef,
+    projectName,
+    supabaseUrl,
+    supabaseAnonKey,
+  }
+}
+
+async function ensureComputerSupabaseProject(params: {
+  uid: string
+  computerId: string
+  computer: ComputerSupabaseRecord
+}): Promise<SupabaseCredentials> {
+  const linkedRef = (params.computer.supabaseProjectRef ?? "").toString().trim()
+  if (linkedRef) return fetchSupabaseCredentials(params.uid, linkedRef)
+
+  const organizationId = await resolveSupabaseOrganizationId(params.uid)
+  if (!organizationId) {
+    throw new Error("No Supabase organization found for this account")
+  }
+
+  const created = await supabaseManagementFetch<SupabaseProjectRecord>(params.uid, "/v1/projects", {
+    method: "POST",
+    body: JSON.stringify({
+      name: buildComputerProjectName(params.computer.name ?? "", params.computer.prompt ?? ""),
+      region: "us-east-1",
+      db_pass: crypto.randomBytes(24).toString("base64url"),
+      organization_id: organizationId,
+    }),
+  })
+
+  const projectRef = (created?.ref ?? created?.id ?? "").toString().trim()
+  if (!projectRef) {
+    throw new Error("Supabase project was created without a project ref")
+  }
+
+  return fetchSupabaseCredentials(params.uid, projectRef)
+}
+
+async function maybeSetupComputerBackend(params: {
+  files: ProjectFile[]
+  plan: ProjectPlan
+  prompt: string
+  context: ToolContext
+}): Promise<ComputerBackendSetupResult> {
+  const computerRef = adminDb.collection("computers").doc(params.context.computerId)
+  const computerSnap = await computerRef.get()
+  const computer = (computerSnap.data() ?? {}) as ComputerSupabaseRecord
+  const projectName = (computer.name ?? "").toString().trim()
+
+  const provisioningPlan = await analyzeSupabaseProvisioningNeed({
+    prompt: params.prompt,
+    projectName,
+    files: params.files,
+    generationMeta: params.plan as unknown as Record<string, unknown>,
+  })
+
+  if (!provisioningPlan.shouldProvision) {
+    await computerRef.set(
+      {
+        supabaseProvisioningStatus: "not-needed",
+        supabaseProvisioningReason: provisioningPlan.reason,
+        supabaseProvisionedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    )
+
+    return {
+      status: "not-needed",
+      reason: provisioningPlan.reason,
+      files: params.files,
+      schemaApplied: false,
+    }
+  }
+
+  const backendApproved = computer.supabaseBackendApproved === true || Boolean(computer.supabaseProjectRef)
+  if (!backendApproved) {
+    await computerRef.set(
+      {
+        supabaseProvisioningStatus: "approval-required",
+        supabaseProvisioningReason: provisioningPlan.reason,
+        pendingBackendSetup: {
+          provider: "supabase",
+          reason: provisioningPlan.reason,
+          needsSchema: provisioningPlan.needsSchema,
+          needsClientIntegration: provisioningPlan.needsClientIntegration,
+        },
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    )
+
+    return {
+      status: "approval-required",
+      reason: provisioningPlan.reason,
+      files: params.files,
+      schemaApplied: false,
+    }
+  }
+
+  const connection = await getSupabaseConnection(params.context.uid)
+  if (!connection) {
+    await computerRef.set(
+      {
+        supabaseProvisioningStatus: "oauth-required",
+        supabaseProvisioningReason: provisioningPlan.reason,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    )
+
+    return {
+      status: "oauth-required",
+      reason: "Supabase OAuth connection required before backend setup can run.",
+      files: params.files,
+      schemaApplied: false,
+    }
+  }
+
+  const linkedProject = await ensureComputerSupabaseProject({
+    uid: params.context.uid,
+    computerId: params.context.computerId,
+    computer,
+  })
+
+  const schemaResult =
+    typeof computer.generatedSchemaSql === "string" && computer.generatedSchemaSql.trim()
+      ? {
+          sql: computer.generatedSchemaSql.trim(),
+          tables: Array.isArray(computer.generatedSchemaTables)
+            ? computer.generatedSchemaTables
+            : extractSqlTables(computer.generatedSchemaSql),
+        }
+      : provisioningPlan.needsSchema
+        ? await generatePostgresSchema({
+            appPrompt: params.prompt,
+            projectName,
+            existingFiles: params.files,
+            setupReason: provisioningPlan.reason,
+          })
+        : { sql: "", tables: [] }
+
+  let schemaPushStatus = "skipped"
+  if (schemaResult.sql.trim()) {
+    await supabaseManagementFetch(
+      params.context.uid,
+      `/v1/projects/${encodeURIComponent(linkedProject.projectRef)}/database/query`,
+      {
+        method: "POST",
+        body: JSON.stringify({ query: schemaResult.sql }),
+      }
+    )
+    schemaPushStatus = "success"
+  }
+
+  let nextFiles = params.files
+  if (provisioningPlan.needsClientIntegration) {
+    const updates = await generateSupabaseIntegrationUpdates({
+      prompt: params.prompt,
+      projectName,
+      files: params.files,
+      schemaSql: schemaResult.sql,
+      supabaseUrl: linkedProject.supabaseUrl,
+      anonKeyPresent: Boolean(linkedProject.supabaseAnonKey),
+      setupReason: provisioningPlan.reason,
+    })
+
+    if (updates.length > 0) {
+      nextFiles = mergeProjectFiles(params.files, updates)
+    }
+  }
+
+  nextFiles = ensureSupabaseSupportFiles({
+    files: nextFiles,
+    schemaSql: schemaResult.sql,
+  })
+
+  const { encrypted } = encryptEnvVars(
+    JSON.stringify({
+      VITE_SUPABASE_URL: linkedProject.supabaseUrl,
+      VITE_SUPABASE_ANON_KEY: linkedProject.supabaseAnonKey,
+    })
+  )
+
+  await adminDb.collection("supabaseLinks").doc(`computer-${params.context.computerId}`).set(
+    {
+      id: `computer-${params.context.computerId}`,
+      computerId: params.context.computerId,
+      userId: params.context.uid,
+      supabaseProjectRef: linkedProject.projectRef,
+      supabaseProjectName: linkedProject.projectName,
+      supabaseUrl: linkedProject.supabaseUrl,
+      supabaseAnonKey: linkedProject.supabaseAnonKey,
+      oauthTokenId: params.context.uid,
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  )
+
+  await computerRef.set(
+    {
+      files: nextFiles,
+      generatedSchemaSql: schemaResult.sql,
+      generatedSchemaTables: schemaResult.tables,
+      generatedSchemaUpdatedAt: FieldValue.serverTimestamp(),
+      schemaPushedAt: schemaResult.sql.trim() ? FieldValue.serverTimestamp() : null,
+      schemaPushStatus,
+      envVarsEncrypted: encrypted,
+      envVarNames: ["VITE_SUPABASE_URL", "VITE_SUPABASE_ANON_KEY"],
+      envVarsUpdatedAt: FieldValue.serverTimestamp(),
+      supabaseProjectRef: linkedProject.projectRef,
+      supabaseProjectName: linkedProject.projectName,
+      supabaseUrl: linkedProject.supabaseUrl,
+      pendingBackendSetup: null,
+      supabaseBackendApproved: true,
+      supabaseProvisioningStatus: "success",
+      supabaseProvisioningReason: provisioningPlan.reason,
+      supabaseProvisionedAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  )
+
+  return {
+    status: "success",
+    reason: provisioningPlan.reason,
+    files: nextFiles,
+    schemaApplied: Boolean(schemaResult.sql.trim()),
+    projectRef: linkedProject.projectRef,
+    tables: schemaResult.tables,
+  }
+}
+
+function sanitizeEnvVar(key: string, value: string): { key: string; value: string } | null {
+  const trimmedKey = key.trim()
+  if (!/^[A-Z0-9_]+$/.test(trimmedKey)) return null
+
+  return {
+    key: trimmedKey,
+    value: value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n"),
+  }
+}
+
+async function injectComputerEnvVars(sandbox: Sandbox, computerId?: string): Promise<void> {
+  if (!computerId) return
+
+  try {
+    const snap = await adminDb.collection("computers").doc(computerId).get()
+    const encrypted = snap.exists ? (snap.data() as { envVarsEncrypted?: string })?.envVarsEncrypted : undefined
+    if (!encrypted) return
+
+    const plain = decryptEnvVars(encrypted)
+    const envVars = JSON.parse(plain) as Record<string, string>
+    const sanitizedLines = Object.entries(envVars).flatMap(([key, value]) => {
+      const sanitized = sanitizeEnvVar(key, value)
+      return sanitized ? [`${sanitized.key}="${sanitized.value}"`] : []
+    })
+
+    if (sanitizedLines.length > 0) {
+      await sandbox.files.write("/home/user/project/.env", `${sanitizedLines.join("\n")}\n`)
+    }
+  } catch (error) {
+    console.warn("[computer sandbox] Failed to inject env vars:", error)
+  }
+}
+
 // ─── run_sandbox ───────────────────────────────────────────────────────────────
 
-async function runSandbox(
-  files: ProjectFile[]
+export async function runSandbox(
+  files: ProjectFile[],
+  options: { computerId?: string } = {}
 ): Promise<{ previewUrl: string; sandboxId: string; errors: string[] }> {
   const errors: string[] = []
   const PROJECT_DIR = "/home/user/project"
+  const sandboxFiles = prepareSandboxFiles(files)
 
   const sandbox = await Sandbox.create("base", {
     apiKey: process.env.E2B_API_KEY!,
-    timeoutMs: 10 * 60 * 1000,
+    timeoutMs: 30 * 60 * 1000, // 30 min — enough for full session
   })
   const previewUrl = `https://${sandbox.getHost(3000)}`
 
   try {
-    await sandbox.commands.run(`mkdir -p ${PROJECT_DIR}`, { timeoutMs: 5000 })
-
-    for (const file of files) {
+    // Create all unique directories in one shot
+    const dirs = new Set<string>()
+    for (const file of sandboxFiles) {
       const fullPath = `${PROJECT_DIR}/${file.path}`
       const dir = fullPath.substring(0, fullPath.lastIndexOf("/"))
-      if (dir !== PROJECT_DIR) {
-        await sandbox.commands.run(`mkdir -p "${dir}"`, { timeoutMs: 5000 }).catch(() => {})
-      }
-      await sandbox.files.write(fullPath, file.content)
+      if (dir !== PROJECT_DIR) dirs.add(dir)
+    }
+    if (dirs.size > 0) {
+      await sandbox.commands.run(`mkdir -p ${[...dirs].map(d => `"${d}"`).join(" ")}`, { timeoutMs: 10000 })
+    } else {
+      await sandbox.commands.run(`mkdir -p ${PROJECT_DIR}`, { timeoutMs: 5000 })
+    }
+
+    // Write all files in parallel
+    await Promise.all(
+      sandboxFiles.map((file) =>
+        sandbox.files.write(`${PROJECT_DIR}/${file.path}`, file.content)
+      )
+    )
+
+    const hasUserEnvFile = sandboxFiles.some((file) => file.path === ".env" || file.path === ".env.local")
+    if (!hasUserEnvFile) {
+      await injectComputerEnvVars(sandbox, options.computerId)
     }
 
     const install = await sandbox.commands.run(
@@ -581,25 +1155,26 @@ async function runSandbox(
       errors.push(`npm install failed: ${(install.stderr || install.stdout || "").slice(0, 400)}`)
     }
 
-    // Detect framework from package.json
-    let devCmd = `npx vite --host 0.0.0.0 --port 3000`
+    // Detect framework and pick dev command using project's own npm script
+    let devCmd = `npm run dev -- --host 0.0.0.0 --port 3000`
     try {
-      const pkgFile = files.find((f) => f.path === "package.json")
+      const pkgFile = sandboxFiles.find((f) => f.path === "package.json")
       if (pkgFile) {
         const pkg = JSON.parse(pkgFile.content)
         const deps = { ...pkg.dependencies, ...pkg.devDependencies }
-        if (deps?.next) devCmd = `npx next dev -H 0.0.0.0 -p 3000`
+        if (deps?.next) devCmd = `npm run dev -- -H 0.0.0.0 -p 3000`
       }
     } catch {}
 
+    // Use setsid + nohup so the process survives shell session teardown
     await sandbox.commands.run(
-      `cd ${PROJECT_DIR} && nohup ${devCmd} > /tmp/dev.log 2>&1 &`,
-      { timeoutMs: 10000 }
+      `cd ${PROJECT_DIR} && setsid nohup ${devCmd} > /tmp/dev.log 2>&1 < /dev/null & echo $! > /tmp/dev.pid`,
+      { timeoutMs: 15000 }
     )
 
-    // Poll for ready - 90 s max
+    // Poll for ready — 150 s max (75 × 2 s)
     let ready = false
-    for (let i = 0; i < 45; i++) {
+    for (let i = 0; i < 75; i++) {
       await new Promise((r) => setTimeout(r, 2000))
       try {
         const res = await fetch(previewUrl, { signal: AbortSignal.timeout(4000) })
@@ -607,7 +1182,9 @@ async function runSandbox(
         if (
           res.ok &&
           !body.includes("there's no service running") &&
-          !body.includes("closed port error")
+          !body.includes("closed port error") &&
+          !body.includes("is not allowed") &&
+          !body.includes("Connection refused")
         ) {
           ready = true
           break
@@ -617,19 +1194,17 @@ async function runSandbox(
 
     if (!ready) {
       const logs = await sandbox.commands
-        .run("tail -60 /tmp/dev.log 2>/dev/null || echo ''", { timeoutMs: 5000 })
+        .run("tail -80 /tmp/dev.log 2>/dev/null || echo ''", { timeoutMs: 5000 })
         .catch(() => ({ stdout: "" }))
-      errors.push(`Dev server not ready: ${(logs.stdout ?? "").slice(-400)}`)
+      errors.push(`Dev server not ready after 150 s: ${(logs.stdout ?? "").slice(-600)}`)
     }
 
     return { previewUrl, sandboxId: sandbox.sandboxId, errors }
   } catch (err: any) {
     const logs = await sandbox.commands
-      .run("tail -60 /tmp/dev.log 2>/dev/null || echo ''", { timeoutMs: 5000 })
+      .run("tail -80 /tmp/dev.log 2>/dev/null || echo ''", { timeoutMs: 5000 })
       .catch(() => ({ stdout: "" }))
-    if (logs.stdout) {
-      errors.push(`Sandbox logs: ${(logs.stdout ?? "").slice(-400)}`)
-    }
+    if (logs.stdout) errors.push(`Sandbox logs: ${(logs.stdout ?? "").slice(-600)}`)
     errors.push(err?.message ?? "Sandbox error")
     return { previewUrl, sandboxId: sandbox.sandboxId, errors }
   }
@@ -891,11 +1466,44 @@ export async function executeTool(
         context.computerId,
         context.onFileGenerationProgress
       )
-      return { files }
+      const backend = await maybeSetupComputerBackend({
+        files,
+        plan: input.plan as ProjectPlan,
+        prompt: context.prompt,
+        context,
+      }).catch(async (error: unknown): Promise<ComputerBackendSetupResult> => {
+        const message = error instanceof Error ? error.message : "Backend setup failed"
+        await adminDb.collection("computers").doc(context.computerId).set(
+          {
+            supabaseProvisioningStatus: "error",
+            supabaseProvisioningReason: message,
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        )
+
+        return {
+          status: "error",
+          reason: message,
+          files,
+          schemaApplied: false,
+          error: message,
+        }
+      })
+      const backendSummary = {
+        status: backend.status,
+        reason: backend.reason,
+        schemaApplied: backend.schemaApplied,
+        projectRef: backend.projectRef,
+        tables: backend.tables,
+        error: backend.error,
+      }
+
+      return { files: backend.files, backend: backendSummary }
     }
 
     case "run_sandbox":
-      return runSandbox(filterFiles(input.files as ProjectFile[]))
+      return runSandbox(filterFiles(input.files as ProjectFile[]), { computerId: context.computerId })
 
     case "verify_preview":
       return verifyPreview(

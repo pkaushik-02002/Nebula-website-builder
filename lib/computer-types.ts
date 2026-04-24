@@ -69,9 +69,37 @@ export interface ComputerAction {
   type: "thinking"|"tool_call"|"tool_result"|"message"|"decision"
   content: string
   actor?: "user"|"agent"|"system"
+  authorUid?: string
+  authorName?: string
+  authorPhotoURL?: string | null
   toolName?: string
   toolInput?: Record<string, unknown>
   toolOutput?: string
+}
+
+export interface ComputerCollaborator {
+  uid: string
+  email?: string
+  displayName?: string
+  photoURL?: string | null
+  invitedAt?: string
+  invitedBy?: string
+}
+
+export interface ComputerVersion {
+  id: string
+  versionNumber: number
+  title: string
+  source: "generate_files" | "fix_errors" | "restore"
+  files: Array<{path: string; content: string}>
+  fileCount: number
+  prompt?: string
+  planSummary?: string
+  sandboxUrl?: string | null
+  deployUrl?: string | null
+  createdBy: "agent" | "user"
+  createdByUid?: string
+  createdAt: unknown
 }
 
 export interface ComputerResearchSource {
@@ -86,6 +114,10 @@ export interface ComputerResearchSource {
 export interface Computer {
   id: string
   ownerId: string
+  collaboratorIds?: string[]
+  collaborators?: ComputerCollaborator[]
+  currentVersionId?: string | null
+  versionCount?: number
   name: string
   prompt: string
   referenceUrls: string[]
@@ -105,6 +137,18 @@ export interface Computer {
   browserbaseSessionId?: string
   browserbaseLiveViewUrl?: string
   deployUrl?: string
+  pendingBackendSetup?: {
+    provider: "supabase"
+    reason: string
+    needsSchema?: boolean
+    needsClientIntegration?: boolean
+  } | null
+  supabaseBackendApproved?: boolean
+  supabaseProvisioningStatus?: "not-needed"|"approval-required"|"oauth-required"|"success"|"error"
+  supabaseProvisioningReason?: string
+  supabaseProjectRef?: string
+  supabaseProjectName?: string
+  supabaseUrl?: string
   cancelRequested?: boolean
   approvedAt?: unknown
   createdAt: unknown

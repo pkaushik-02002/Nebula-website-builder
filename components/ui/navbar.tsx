@@ -70,7 +70,7 @@ export function Navbar() {
       <nav className="relative max-w-5xl w-full mx-auto flex h-12 items-center justify-between px-4 sm:px-6 rounded-full bg-white border border-zinc-200 md:grid md:grid-cols-[1fr_auto_1fr]">
         {/* Left: Logo */}
         <Link href="/" className="font-display text-lg font-semibold text-zinc-900 shrink-0 md:justify-self-start">
-          Lotus.build
+          lotus.build
         </Link>
 
         {/* Center Nav Links (desktop/tablet) */}

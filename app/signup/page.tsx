@@ -105,7 +105,7 @@ export default function SignupPage() {
             <div className="max-w-xl">
               <Link href="/" className="inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-white px-4 py-2 text-sm font-medium text-zinc-700 shadow-sm">
                 <Sparkles className="h-4 w-4 text-zinc-500" />
-                Lotus.build
+                lotus.build
               </Link>
 
               <h1 className="mt-8 font-display text-5xl font-bold leading-[0.96] tracking-tight text-zinc-900 xl:text-6xl">
@@ -145,7 +145,7 @@ export default function SignupPage() {
             <div className="rounded-[2rem] border border-zinc-200/90 bg-white p-6 shadow-[0_30px_90px_-40px_rgba(0,0,0,0.35)] sm:p-8">
               <div className="mb-8 text-center lg:text-left">
                 <Link href="/" className="text-2xl font-bold text-zinc-900 lg:hidden">
-                  Lotus.build
+                  lotus.build
                 </Link>
                 <p className="mt-2 text-xs font-medium uppercase tracking-[0.22em] text-zinc-500">
                   Start here
@@ -154,7 +154,7 @@ export default function SignupPage() {
                   Create your account
                 </h2>
                 <p className="mt-2 text-sm leading-relaxed text-zinc-500">
-                  Join Lotus.build and start building with the same calm workflow.
+                  Join lotus.build and start building with the same calm workflow.
                 </p>
               </div>
 

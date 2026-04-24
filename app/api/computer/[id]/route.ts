@@ -1,13 +1,15 @@
-import { adminDb } from "@/lib/firebase-admin"
-import { requireUserUid } from "@/lib/server-auth"
 import { FieldValue } from "firebase-admin/firestore"
 import { nanoid } from "nanoid"
-import type { ComputerAction, ComputerPermissions } from "@/lib/computer-types"
+
+import { canAccessComputer, canManageComputer } from "@/lib/computer-access"
 import {
   extractReferenceDomainsFromText,
   extractReferenceUrlsFromText,
   mergeReferenceUrls,
 } from "@/lib/computer-agent/reference-urls"
+import { adminAuth, adminDb } from "@/lib/firebase-admin"
+import { requireUserUid } from "@/lib/server-auth"
+import type { ComputerAction, ComputerPermissions } from "@/lib/computer-types"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -27,7 +29,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   }
 
   const data = snap.data() as Record<string, unknown>
-  if (data.ownerId !== uid) {
+  if (!canAccessComputer(data, uid)) {
     return Response.json({ error: "Forbidden" }, { status: 403 })
   }
 
@@ -50,11 +52,13 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   }
 
   const data = snap.data() as Record<string, unknown>
-  if (data.ownerId !== uid) {
+  const canAccess = canAccessComputer(data, uid)
+  const canManage = canManageComputer(data, uid)
+  if (!canAccess) {
     return Response.json({ error: "Forbidden" }, { status: 403 })
   }
 
-  let intent: "message" | "interrupt" | "stop" | "approve_plan" | "update_permissions"
+  let intent: "chat_message" | "message" | "interrupt" | "stop" | "approve_plan" | "approve_backend" | "update_permissions"
   let message = ""
   let actionId: string | undefined
   let permissions: Partial<ComputerPermissions> | null = null
@@ -75,12 +79,16 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     return Response.json({ error: "Invalid JSON body" }, { status: 400 })
   }
 
-  if (!["message", "interrupt", "stop", "approve_plan", "update_permissions"].includes(intent)) {
+  if (!["chat_message", "message", "interrupt", "stop", "approve_plan", "approve_backend", "update_permissions"].includes(intent)) {
     return Response.json({ error: "Invalid intent" }, { status: 400 })
   }
 
-  if ((intent === "message" || intent === "interrupt") && !message) {
+  if ((intent === "chat_message" || intent === "message" || intent === "interrupt") && !message) {
     return Response.json({ error: "message is required" }, { status: 400 })
+  }
+
+  if (["approve_plan", "approve_backend", "update_permissions"].includes(intent) && !canManage) {
+    return Response.json({ error: "Only the owner can approve plans or change permissions" }, { status: 403 })
   }
 
   if (intent === "update_permissions" && !permissions) {
@@ -99,6 +107,21 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   const currentReferenceUrls = Array.isArray(data.referenceUrls)
     ? data.referenceUrls.filter((value): value is string => typeof value === "string")
     : []
+  const recentDiscussion = Array.isArray(data.actions)
+    ? data.actions
+        .filter((value): value is ComputerAction => {
+          if (!value || typeof value !== "object") return false
+          const candidate = value as ComputerAction
+          return candidate.actor === "user" && candidate.type === "message" && typeof candidate.content === "string"
+        })
+        .slice(-20)
+        .map((entry) => `${entry.authorName ?? "User"}: ${entry.content}`)
+    : []
+  const author = await adminAuth.getUser(uid).catch(() => null)
+  const authorName =
+    author?.displayName ||
+    author?.email ||
+    (typeof data.ownerId === "string" && data.ownerId === uid ? "Owner" : "Collaborator")
 
   if (message) {
     action = {
@@ -106,6 +129,9 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       timestamp: new Date().toISOString(),
       type: "message",
       actor: "user",
+      authorUid: uid,
+      authorName,
+      authorPhotoURL: author?.photoURL ?? null,
       content: message,
     }
 
@@ -116,15 +142,22 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     )
 
     updates.actions = FieldValue.arrayUnion(action)
-    updates.prompt = currentPrompt
-      ? `${currentPrompt}\n\nAdditional instruction from user:\n${message}`
-      : message
     updates.referenceUrls = nextReferenceUrls
-    updates.planningStatus = "draft"
-    updates.clarificationQuestions = []
-    updates.plan = null
-    updates.approvedAt = null
-    updates.currentGeneratingFile = null
+
+    if (intent !== "chat_message") {
+      const instruction = message.replace(/(^|\s)@lotusagent\b/gi, " ").replace(/\s+/g, " ").trim() || message
+      const discussionContext = [...recentDiscussion, `${authorName}: ${message}`]
+        .map((entry) => `- ${entry}`)
+        .join("\n")
+      updates.prompt = currentPrompt
+        ? `${currentPrompt}\n\nRecent collaborator discussion:\n${discussionContext}\n\nAdditional instruction from ${authorName}:\n${instruction}`
+        : `Recent collaborator discussion:\n${discussionContext}\n\nInstruction:\n${instruction}`
+      updates.planningStatus = "draft"
+      updates.clarificationQuestions = []
+      updates.plan = null
+      updates.approvedAt = null
+      updates.currentGeneratingFile = null
+    }
   }
 
   if (intent === "interrupt" || intent === "stop") {
@@ -147,6 +180,26 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     updates.actions = FieldValue.arrayUnion(action)
     updates.planningStatus = "approved"
     updates.approvedAt = FieldValue.serverTimestamp()
+    updates.cancelRequested = false
+    updates.currentGeneratingFile = null
+  }
+
+  if (intent === "approve_backend") {
+    const pendingBackend = data.pendingBackendSetup
+    if (!pendingBackend || typeof pendingBackend !== "object") {
+      return Response.json({ error: "No pending backend setup to approve" }, { status: 400 })
+    }
+
+    action = {
+      id: actionId || nanoid(),
+      timestamp: new Date().toISOString(),
+      type: "decision",
+      actor: "user",
+      content: "Supabase backend approved. Continue backend setup.",
+    }
+
+    updates.actions = FieldValue.arrayUnion(action)
+    updates.supabaseBackendApproved = true
     updates.cancelRequested = false
     updates.currentGeneratingFile = null
   }

@@ -13,8 +13,8 @@ export type LegalDocument = {
   sections: LegalSection[]
 }
 
-export const LEGAL_OPERATOR_NAME = "Lotus.Build"
-export const LEGAL_PRODUCT_NAME = "Lotus.build"
+export const LEGAL_OPERATOR_NAME = "lotus.build"
+export const LEGAL_PRODUCT_NAME = "lotus.build"
 export const LEGAL_CONTACT_EMAIL = "arpkwebsitedevelopment@gmail.com"
 export const LEGAL_CONTACT_HREF = `mailto:${LEGAL_CONTACT_EMAIL}`
 export const LEGAL_LAST_UPDATED = "April 21, 2026"
@@ -224,7 +224,7 @@ export const privacyDocument: LegalDocument = {
       title: "6. Cookies, local storage, and analytics",
       paragraphs: [
         "We use cookies and browser storage technologies for essential product operation. This includes remembering privacy choices, preserving temporary workflow state, supporting sign-in and integration handoffs, and storing interface preferences that you actively change.",
-        "Lotus.build also offers optional privacy-friendly analytics through Vercel Web Analytics. Vercel describes this service as cookieless, and on this site it remains off until you opt in. For the current register of storage technologies and controls, see our Cookie Policy.",
+        "lotus.build also offers optional privacy-friendly analytics through Vercel Web Analytics. Vercel describes this service as cookieless, and on this site it remains off until you opt in. For the current register of storage technologies and controls, see our Cookie Policy.",
       ],
     },
     {

@@ -109,7 +109,7 @@ export function ThinkingBar({
     >
       {isGenerating ? (
         <div className="mb-4">
-          <TextShimmer className="text-xs uppercase tracking-widest text-zinc-500">Lotus.build Agent Orchestrating Build</TextShimmer>
+          <TextShimmer className="text-xs uppercase tracking-widest text-zinc-500">Lotus Agent Orchestrating Build</TextShimmer>
         </div>
       ) : null}
 

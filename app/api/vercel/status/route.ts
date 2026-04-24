@@ -9,12 +9,15 @@ export async function GET(req: Request) {
     const uid = await requireUserUid(req)
     const url = new URL(req.url)
     const projectId = url.searchParams.get("projectId") || ""
+    const computerId = url.searchParams.get("computerId") || ""
+    const sourceId = computerId || projectId
+    const collection = computerId ? "computers" : "projects"
 
-    if (!projectId) {
-      return NextResponse.json({ error: "Missing projectId" }, { status: 400 })
+    if (!sourceId) {
+      return NextResponse.json({ error: "Missing projectId or computerId" }, { status: 400 })
     }
 
-    const snap = await adminDb.collection("projects").doc(projectId).get()
+    const snap = await adminDb.collection(collection).doc(sourceId).get()
     if (!snap.exists) {
       return NextResponse.json({ connected: false })
     }

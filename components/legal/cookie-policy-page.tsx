@@ -19,10 +19,10 @@ export function CookiePolicyPage() {
               Cookie Policy
             </p>
             <h1 className="mt-4 text-3xl font-semibold tracking-tight text-zinc-900 sm:text-4xl lg:text-5xl">
-              How Lotus.build uses cookies and browser storage
+              How lotus.build uses cookies and browser storage
             </h1>
             <p className="mt-4 text-base leading-relaxed text-zinc-600 sm:text-lg">
-              This page lists the storage and access technologies currently used by Lotus.build across the
+              This page lists the storage and access technologies currently used by lotus.build across the
               public site and builder flows. Essential technologies stay active because the product relies on
               them. Optional analytics remains off until you choose otherwise.
             </p>
@@ -90,17 +90,17 @@ export function CookiePolicyPage() {
                 </h2>
                 <div className="mt-4 space-y-4 text-sm leading-7 text-zinc-600 sm:text-[15px]">
                   <p>
-                    Lotus.build presents equal first-layer choices to reject optional analytics or allow it.
+                    lotus.build presents equal first-layer choices to reject optional analytics or allow it.
                     Essential storage stays on because the site needs it for sign-in, builder continuity, and
                     remembering your privacy choice.
                   </p>
                   <p>
                     You can reopen cookie settings at any time from the footer or this page. If you later turn
-                    analytics off, Lotus.build refreshes the page so optional measurement stops for subsequent
+                    analytics off, lotus.build refreshes the page so optional measurement stops for subsequent
                     navigation.
                   </p>
                   <p>
-                    Lotus.build does not currently use advertising cookies, retargeting tags, or cross-site
+                    lotus.build does not currently use advertising cookies, retargeting tags, or cross-site
                     marketing pixels in the current web application codebase.
                   </p>
                 </div>

@@ -1,6 +1,6 @@
 import { MetadataRoute } from "next"
 
-const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://buildkit.app"
+const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://lotus.build"
 
 export default function sitemap(): MetadataRoute.Sitemap {
   const routes = [

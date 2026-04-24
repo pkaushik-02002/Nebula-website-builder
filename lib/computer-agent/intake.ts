@@ -84,7 +84,8 @@ Return valid JSON only. No markdown. No commentary.
 Rules:
 - Website clone requests are a default flow, not an exception.
 - If the brief is specific enough to plan a production-quality website safely, do not ask clarification questions.
-- If critical information is missing, ask concise high-value clarification questions only.
+- If critical information is missing, ask concise high-value clarification questions only. Do not paper over weak briefs with random assumptions.
+- Ask clarification when the user asks for a "modern website" or "nice landing page" but gives no product, audience, offer, or visual direction.
 - When clarification is needed, return structured questions with clickable options.
 - When the user asks to clone, recreate, mirror, imitate, or rebuild an existing website, classify it as "website-clone".
 - Website cloning must always use "frontend-only" scope. Never suggest backend cloning.
@@ -93,6 +94,7 @@ Rules:
 - If the user wants a richer web experience such as WebGL, 3D scenes, immersive motion, or interactive storytelling, keep that in mind but only ask follow-up questions when something essential is unclear.
 - If a clone-style request does not include a usable reference URL, clarification is required.
 - Prefer at most 4 questions unless the brief is truly too vague.
+- Prefer questions that improve design quality: audience, offer, content source, visual taste, and required interactions.
 - Each clarification question must include 2 to 4 concise options that a user can click.
 - Each option must include a short "label" of a few words, not a full sentence.
 - Each option must include a complete "answer" string that can be sent back to the agent as the user's reply.
@@ -135,6 +137,7 @@ Plan approval is ${input.permissions?.requirePlanApproval === false ? "disabled"
 
 Remember:
 - Disable assumptions only when the brief is genuinely too vague or missing critical targets.
+- Do not approve a plan from a vague aesthetic request alone. High-quality design needs product/audience/content anchors.
 - Clone requests default to frontend-only.
 - If no exact target URL is present for a clone request, ask for it.
 - Clarification options should feel like real product decisions, not generic filler.`,

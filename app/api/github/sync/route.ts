@@ -175,7 +175,7 @@ export async function POST(req: Request) {
               }
 
               const putRes = await githubRequest(installationToken, "PUT", `/repos/${owner}/${repoName}/contents/${encodedPath}`, {
-                message: `Sync from BuildKit: ${path}`,
+                message: `Sync from lotus.build: ${path}`,
                 content,
                 ...(sha ? { sha } : {}),
               })
@@ -318,7 +318,7 @@ export async function POST(req: Request) {
       }
 
       const putRes = await githubRequest(installationToken, "PUT", `/repos/${owner}/${repoName}/contents/${encodedPath}`, {
-        message: `Sync from BuildKit: ${path}`,
+        message: `Sync from lotus.build: ${path}`,
         content,
         ...(sha ? { sha } : {}),
       })

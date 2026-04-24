@@ -21,6 +21,13 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
+export interface MentionOption {
+  id: string;
+  label: string;
+  value: string;
+  description?: string;
+}
+
 interface UseAutoResizeTextareaProps {
   minHeight: number;
   maxHeight?: number;
@@ -75,6 +82,7 @@ interface AnimatedAIInputProps {
   initialModel?: string;
   contextBadge?: { label: string; value: string; onClear?: () => void } | null;
   surface?: "default" | "code";
+  mentionOptions?: MentionOption[];
 }
 
 type VoiceState = "idle" | "recording" | "transcribing";
@@ -235,6 +243,7 @@ export function AnimatedAIInput({
   initialModel,
   contextBadge,
   surface = "default",
+  mentionOptions = [],
 }: AnimatedAIInputProps) {
   const router = useRouter();
   const { user, userData } = useAuth();
@@ -247,6 +256,8 @@ export function AnimatedAIInput({
   const [voiceSupported, setVoiceSupported] = useState(false);
   const [voiceFeedback, setVoiceFeedback] = useState<{ tone: "muted" | "error"; text: string } | null>(null);
   const [selectedModel, setSelectedModel] = useState("GPT-4-1 Mini");
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [mentionPickerDismissed, setMentionPickerDismissed] = useState(false);
   const [availableModels, setAvailableModels] = useState([
     "o3-mini",
     "GPT-4-1 Mini",
@@ -274,8 +285,30 @@ export function AnimatedAIInput({
   const buildTokenLimit = Math.max(0, Number(userData?.tokensLimit ?? 0), buildUsed + buildRemaining);
   const effectiveModel = autoMode ? "GPT-4-1 Mini" : selectedModel;
   const isVoiceBusy = voiceState !== "idle";
+  const selectionStart = textareaRef.current?.selectionStart ?? value.length;
+  const valueBeforeCursor = value.slice(0, selectionStart);
+  const mentionMatch = /(^|\s)@([a-zA-Z0-9._-]*)$/.exec(valueBeforeCursor);
+  const mentionQuery = mentionMatch?.[2]?.toLowerCase() ?? "";
+  const showMentionPicker = mode === "chat" && mentionOptions.length > 0 && Boolean(mentionMatch) && !mentionPickerDismissed;
+  const filteredMentionOptions = showMentionPicker
+    ? mentionOptions
+        .filter((option) => {
+          const haystack = `${option.label} ${option.value}`.toLowerCase();
+          return haystack.includes(mentionQuery);
+        })
+        .slice(0, 6)
+    : [];
 
-  const PENDING_CREATE_KEY = "buildkit_pending_create";
+  const PENDING_CREATE_KEY = "lotus_pending_create";
+
+  useEffect(() => {
+    setMentionIndex(0);
+    setMentionPickerDismissed(false);
+  }, [mentionQuery]);
+
+  useEffect(() => {
+    if (mentionIndex >= filteredMentionOptions.length) setMentionIndex(0);
+  }, [filteredMentionOptions.length, mentionIndex]);
 
   useEffect(() => {
     if (!isPaidUser) setAutoMode(true);
@@ -548,7 +581,56 @@ export function AnimatedAIInput({
     }
   }, [disabled, isCreating, isLoading, isVoiceBusy, transcribeAudio, user, voiceSupported]);
 
+  const insertMention = useCallback((option: MentionOption) => {
+    const textarea = textareaRef.current;
+    const cursor = textarea?.selectionStart ?? value.length;
+    const beforeCursor = value.slice(0, cursor);
+    const afterCursor = value.slice(cursor);
+    const match = /(^|\s)@([a-zA-Z0-9._-]*)$/.exec(beforeCursor);
+
+    if (!match || match.index === undefined) return;
+
+    const prefix = beforeCursor.slice(0, match.index);
+    const leadingSpace = match[1] || "";
+    const nextValue = `${prefix}${leadingSpace}@${option.value} ${afterCursor}`;
+    const nextCursor = `${prefix}${leadingSpace}@${option.value} `.length;
+
+    setValue(nextValue);
+    window.requestAnimationFrame(() => {
+      adjustHeight();
+      textarea?.focus();
+      textarea?.setSelectionRange(nextCursor, nextCursor);
+    });
+  }, [adjustHeight, textareaRef, value]);
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (filteredMentionOptions.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setMentionIndex((current) => (current + 1) % filteredMentionOptions.length);
+        return;
+      }
+
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setMentionIndex((current) => (current - 1 + filteredMentionOptions.length) % filteredMentionOptions.length);
+        return;
+      }
+
+      if (e.key === "Tab" || e.key === "Enter") {
+        e.preventDefault();
+        insertMention(filteredMentionOptions[mentionIndex] ?? filteredMentionOptions[0]);
+        return;
+      }
+
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setMentionIndex(0);
+        setMentionPickerDismissed(true);
+        return;
+      }
+    }
+
     const isSubmitKey = (e.key === "Enter" && !e.shiftKey) || ((e.ctrlKey || e.metaKey) && e.key === "Enter");
     if (isSubmitKey && value.trim() && !isCreating && !isVoiceBusy && (!isLoading || mode === "chat")) {
       if (disabled) return;
@@ -642,9 +724,49 @@ export function AnimatedAIInput({
             disabled={disabled}
             onChange={(e) => {
               setValue(e.target.value);
+              setMentionPickerDismissed(false);
               adjustHeight();
             }}
           />
+
+          {filteredMentionOptions.length > 0 ? (
+            <motion.div
+              initial={{ opacity: 0, y: 6, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 4, scale: 0.98 }}
+              transition={{ duration: 0.12 }}
+              className={cn(
+                "absolute left-3 right-3 z-20 overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-[0_18px_48px_-24px_rgba(0,0,0,0.28)]",
+                isCodeSurface ? "bottom-[3.9rem] sm:bottom-[4.2rem]" : "bottom-[4.5rem] sm:bottom-[5rem]"
+              )}
+            >
+              {filteredMentionOptions.map((option, index) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    insertMention(option);
+                  }}
+                  className={cn(
+                    "flex w-full items-center gap-2 px-3 py-2.5 text-left",
+                    index === mentionIndex ? "bg-[#f7f5f1]" : "bg-white hover:bg-zinc-50"
+                  )}
+                >
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-[11px] font-semibold text-white">
+                    {option.label.slice(0, 1).toUpperCase()}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[13px] font-semibold text-zinc-900">{option.label}</span>
+                    {option.description ? (
+                      <span className="block truncate text-[11px] text-zinc-500">{option.description}</span>
+                    ) : null}
+                  </span>
+                  <span className="shrink-0 font-mono text-[11px] text-zinc-400">@{option.value}</span>
+                </button>
+              ))}
+            </motion.div>
+          ) : null}
 
           {voiceNotice ? (
             <p

@@ -6,7 +6,7 @@ import { collection, addDoc, serverTimestamp } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { useAuth } from "@/contexts/auth-context"
 
-const PENDING_CREATE_KEY = "buildkit_pending_create"
+const PENDING_CREATE_KEY = "lotus_pending_create"
 
 export function CreateAfterLogin() {
   const pathname = usePathname()

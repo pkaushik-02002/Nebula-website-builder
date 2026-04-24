@@ -1,7 +1,9 @@
+import { FieldValue } from "firebase-admin/firestore"
+
+import { AgentRunQuotaExceededError, consumeAgentRun } from "@/lib/agent-run-quota"
+import { canAccessComputer } from "@/lib/computer-access"
 import { adminDb } from "@/lib/firebase-admin"
 import { requireUserUid } from "@/lib/server-auth"
-import { AgentRunQuotaExceededError, consumeAgentRun } from "@/lib/agent-run-quota"
-import { FieldValue } from "firebase-admin/firestore"
 import type { ComputerAction, ComputerStep, ComputerStatus, ComputerStepKind } from "@/lib/computer-types"
 
 export const runtime = "nodejs"
@@ -32,7 +34,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   }
 
   const data = snap.data() as Record<string, unknown>
-  if (data.ownerId !== uid) {
+  if (!canAccessComputer(data, uid)) {
     return Response.json({ error: "Forbidden" }, { status: 403 })
   }
 

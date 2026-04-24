@@ -1,5 +1,8 @@
+import Anthropic from "@anthropic-ai/sdk"
 import { FieldValue } from "firebase-admin/firestore"
 import { nanoid } from "nanoid"
+
+import { createComputerVersion } from "@/lib/computer-versions"
 import { adminDb } from "@/lib/firebase-admin"
 import { ComputerBrowserSession } from "./browserbase-session"
 import { analyzeComputerBrief } from "./intake"
@@ -9,6 +12,7 @@ import {
   mergeReferenceUrls,
 } from "./reference-urls"
 import {
+  COMPUTER_TOOLS,
   executeTool,
   type FileGenerationProgress,
   type ProjectFile,
@@ -75,6 +79,7 @@ interface OrchestratorContext {
   computerId: string
   uid: string
   idToken: string
+  prompt: string
   browserSession: ComputerBrowserSession
   onFileGenerationProgress?: (progress: FileGenerationProgress) => Promise<void>
 }
@@ -200,6 +205,279 @@ function sanitizeToolPayloadForFeed(payload: Record<string, unknown>): Record<st
   )
 }
 
+async function runBuildAgent({
+  plan,
+  researchSources,
+  prompt,
+  context,
+  emitAction,
+  emitStep,
+  emitStatus,
+  shouldCancel,
+  persistArtifacts,
+}: {
+  plan: ProjectPlan
+  researchSources: ComputerResearchSource[]
+  prompt: string
+  context: OrchestratorContext
+  emitAction: OrchestratorParams["emitAction"]
+  emitStep: OrchestratorParams["emitStep"]
+  emitStatus: OrchestratorParams["emitStatus"]
+  shouldCancel?: () => Promise<boolean>
+  persistArtifacts: (toolName: string, result: unknown) => Promise<void>
+}): Promise<void> {
+  const MAX_TURNS = 28
+  const researchDigest = buildResearchDigest(prompt, researchSources)
+
+  const systemPrompt = `You are an autonomous web development agent with senior product-design taste.
+Your job: build, verify, and deliver a production-quality website that looks custom, modern, and credible.
+
+You have these tools:
+- browserbase_research: scrape reference URLs for real content
+- plan_project: generate a structured project plan (already done - skip unless revising)
+- generate_files: write all production files for the site
+- run_sandbox: boot the E2B dev server and get a live preview URL
+- verify_preview: open the live URL in a real browser, check for issues
+- fix_errors: patch specific files to resolve verification issues
+- deploy_site: build + zip + deploy to Netlify (only when user requests deploy)
+
+RULES:
+- Think before each tool call. Explain your reasoning in 1-2 sentences first.
+- Never call generate_files without first having a plan.
+- Treat design quality as a hard requirement, not decoration. Reject generic AI-template layouts.
+- Do not accept centered hero + card grid + fake stats + testimonials as a default structure.
+- The generated site should have a distinctive design signature tied to the user's domain and content.
+- After run_sandbox, always call verify_preview before declaring done.
+- If verify_preview finds issues, call fix_errors then run_sandbox + verify_preview again.
+- After 2 fix attempts, if issues persist, summarize remaining issues clearly and stop.
+- Never call deploy_site unless the user explicitly asked to deploy.
+- When verification passes, emit a clear completion message and stop.
+- Do not call plan_project again — a plan has already been drafted and approved.
+
+The plan is already approved. Proceed directly to building.`
+
+  const initialMessage = `Build this site now.
+
+Approved plan:
+${JSON.stringify(plan, null, 2)}
+
+Research context (use for all copy — no placeholders):
+${researchDigest}
+
+Start by calling generate_files with the plan and research.`
+
+  const messages: Anthropic.MessageParam[] = [
+    { role: "user", content: initialMessage },
+  ]
+
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+  const ref = adminDb.collection("computers").doc(context.computerId)
+  let turnCount = 0
+
+  while (turnCount < MAX_TURNS) {
+    if (await shouldCancel?.()) {
+      await emitAction({
+        id: nanoid(),
+        timestamp: new Date().toISOString(),
+        type: "message",
+        actor: "system",
+        content: "Stopped by you. Send a message to continue.",
+      })
+      await emitStatus("idle")
+      return
+    }
+
+    turnCount++
+
+    const response = await anthropic.messages.create({
+      model: "claude-sonnet-4-5",
+      max_tokens: 4096,
+      system: systemPrompt,
+      tools: COMPUTER_TOOLS,
+      messages,
+    })
+
+    for (const block of response.content) {
+      if (block.type === "text" && block.text.trim()) {
+        await emitAction({
+          id: nanoid(),
+          timestamp: new Date().toISOString(),
+          type: "thinking",
+          actor: "agent",
+          content: block.text.trim(),
+        })
+      }
+    }
+
+    if (response.stop_reason === "end_turn") {
+      const finalText = response.content
+        .filter((b): b is Anthropic.TextBlock => b.type === "text")
+        .map((b) => b.text)
+        .join("")
+        .trim()
+
+      if (finalText) {
+        await emitAction({
+          id: nanoid(),
+          timestamp: new Date().toISOString(),
+          type: "decision",
+          actor: "agent",
+          content: finalText,
+        })
+      }
+      await emitStatus("complete")
+      return
+    }
+
+    const toolUseBlocks = response.content.filter(
+      (b): b is Anthropic.ToolUseBlock => b.type === "tool_use"
+    )
+
+    if (toolUseBlocks.length === 0) {
+      await emitStatus("complete")
+      return
+    }
+
+    messages.push({ role: "assistant", content: response.content })
+
+    const toolResults: Anthropic.ToolResultBlockParam[] = []
+
+    for (const toolUse of toolUseBlocks) {
+      const toolName = toolUse.name as keyof typeof TOOL_STEP_MAP
+      const toolInput = toolUse.input as Record<string, unknown>
+
+      const sanitizedInput = sanitizeToolPayloadForFeed(toolInput)
+      await emitAction({
+        id: nanoid(),
+        timestamp: new Date().toISOString(),
+        type: "tool_call",
+        actor: "agent",
+        content: toolName,
+        toolName,
+        toolInput: sanitizedInput,
+      })
+
+      const stepKind = TOOL_STEP_MAP[toolName]
+      if (stepKind) {
+        await emitStatus(STEP_STATUS_MAP[stepKind], stepKind)
+        await emitStep({
+          id: nanoid(),
+          kind: stepKind,
+          title: TOOL_TITLE_MAP[toolName] ?? toolName.replace(/_/g, " "),
+          status: "active",
+          startedAt: new Date().toISOString(),
+        })
+      }
+
+      if (toolName === "generate_files") {
+        await ref.update({
+          files: [],
+          currentGeneratingFile: null,
+          updatedAt: FieldValue.serverTimestamp(),
+        }).catch(() => {})
+      }
+
+      try {
+        const result = await executeTool(toolName, toolInput, context)
+
+        await persistArtifacts(toolName, result)
+
+        const toolOutputStr = JSON.stringify(
+          result && typeof result === "object" && !Array.isArray(result)
+            ? sanitizeToolPayloadForFeed(result as Record<string, unknown>)
+            : result
+        )
+
+        await emitAction({
+          id: nanoid(),
+          timestamp: new Date().toISOString(),
+          type: "tool_result",
+          actor: "agent",
+          content: toolOutputStr.slice(0, 600),
+          toolName,
+          toolOutput: toolOutputStr,
+        })
+
+        if (stepKind) {
+          await emitStep({
+            id: nanoid(),
+            kind: stepKind,
+            title: TOOL_TITLE_MAP[toolName] ?? toolName.replace(/_/g, " "),
+            status: "complete",
+            finishedAt: new Date().toISOString(),
+          })
+        }
+
+        const backendStatus =
+          toolName === "generate_files" && result && typeof result === "object"
+            ? (result as { backend?: { status?: string; reason?: string } }).backend
+            : null
+
+        if (backendStatus?.status === "approval-required" || backendStatus?.status === "oauth-required") {
+          await emitAction({
+            id: nanoid(),
+            timestamp: new Date().toISOString(),
+            type: "message",
+            actor: "system",
+            content: backendStatus.status === "oauth-required"
+              ? "This build needs a Supabase backend, but Supabase is not connected yet. Connect Supabase in the prompt above and I will continue the backend setup."
+              : "This build needs a Supabase backend. Approve the Supabase connection in the prompt above and I will create the schema, wire the app, and restart the preview.",
+          })
+          await emitStatus("idle")
+          return
+        }
+
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: toolUse.id,
+          content: toolOutputStr,
+        })
+      } catch (err: any) {
+        const errMsg = err?.message ?? "Tool failed"
+
+        await emitAction({
+          id: nanoid(),
+          timestamp: new Date().toISOString(),
+          type: "tool_result",
+          actor: "agent",
+          content: `Error: ${errMsg}`,
+          toolName,
+          toolOutput: JSON.stringify({ error: errMsg }),
+        })
+
+        if (stepKind) {
+          await emitStep({
+            id: nanoid(),
+            kind: stepKind,
+            title: TOOL_TITLE_MAP[toolName] ?? toolName.replace(/_/g, " "),
+            status: "failed",
+            finishedAt: new Date().toISOString(),
+            summary: errMsg,
+          })
+        }
+
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: toolUse.id,
+          content: JSON.stringify({ error: errMsg }),
+          is_error: true,
+        })
+      }
+    }
+
+    messages.push({ role: "user", content: toolResults })
+  }
+
+  await emitAction({
+    id: nanoid(),
+    timestamp: new Date().toISOString(),
+    type: "message",
+    actor: "system",
+    content: "Reached maximum agent turns. Review the current state and send a follow-up instruction to continue.",
+  })
+  await emitStatus("complete")
+}
+
 export async function runComputerOrchestrator(params: OrchestratorParams): Promise<void> {
   const {
     computerId,
@@ -226,6 +504,7 @@ export async function runComputerOrchestrator(params: OrchestratorParams): Promi
     computerId,
     uid,
     idToken,
+    prompt,
     browserSession,
     onFileGenerationProgress: persistFileGenerationProgress,
   }
@@ -259,11 +538,22 @@ export async function runComputerOrchestrator(params: OrchestratorParams): Promi
       updates.plan = result
     }
 
-    if (toolName === "generate_files") {
+    if (toolName === "generate_files" || toolName === "fix_errors") {
       const files = (result as { files?: ProjectFile[] } | null)?.files
       if (Array.isArray(files)) {
         updates.files = files
         updates.currentGeneratingFile = null
+        await createComputerVersion({
+          computerId,
+          files,
+          source: toolName,
+          title: toolName === "fix_errors" ? "Fixed version" : "Generated version",
+          prompt,
+          createdBy: "agent",
+          createdByUid: uid,
+        }).catch((error) => {
+          console.warn("[computer versions] Failed to create version:", error)
+        })
       }
     }
 
@@ -591,74 +881,17 @@ export async function runComputerOrchestrator(params: OrchestratorParams): Promi
       throw new Error("No plan available to build from")
     }
 
-    if (await handleCancellation()) return
-
-    const researchDigest = buildResearchDigest(prompt, researchSources)
-    let files = (await runTool<{ files: ProjectFile[] }>("generate_files", {
-      plan,
-      research: researchDigest,
-    })).files
-
-    if (await handleCancellation()) return
-
-    let sandbox = await runTool<RunSandboxResult>("run_sandbox", { files })
-    if (sandbox.errors.length > 0) {
-      await emitAction({
-        id: nanoid(),
-        timestamp: new Date().toISOString(),
-        type: "message",
-        actor: "system",
-        content: `Preview warnings: ${sandbox.errors.join(" | ")}`,
-      })
-    }
-
-    if (!sandbox.previewUrl) {
-      await emitStatus("error")
-      return
-    }
-
-    let verification = await runTool<VerifyPreviewResult>("verify_preview", {
-      sandboxUrl: sandbox.previewUrl,
-      plan,
+    await runBuildAgent({
+      plan: plan as ProjectPlan,
+      researchSources,
+      prompt,
+      context,
+      emitAction,
+      emitStep,
+      emitStatus,
+      shouldCancel,
+      persistArtifacts,
     })
-
-    for (let attempt = 0; !verification.passed && attempt < MAX_FIX_ATTEMPTS; attempt++) {
-      if (await handleCancellation()) return
-
-      files = (await runTool<{ files: ProjectFile[] }>("fix_errors", {
-        files,
-        issues: verification.issues,
-      })).files
-
-      sandbox = await runTool<RunSandboxResult>("run_sandbox", { files })
-      if (!sandbox.previewUrl) break
-
-      verification = await runTool<VerifyPreviewResult>("verify_preview", {
-        sandboxUrl: sandbox.previewUrl,
-        plan,
-      })
-    }
-
-    if (!verification.passed) {
-      await emitAction({
-        id: nanoid(),
-        timestamp: new Date().toISOString(),
-        type: "message",
-        actor: "system",
-        content: "I wasn't able to verify the website cleanly yet. Review the latest issues in the feed and send another instruction so I can keep iterating.",
-      })
-      await emitStatus("error")
-      return
-    }
-
-    await emitAction({
-      id: nanoid(),
-      timestamp: new Date().toISOString(),
-      type: "message",
-      actor: "system",
-      content: "Preview verified. Review the site in Preview and deploy whenever you're ready.",
-    })
-    await emitStatus("complete")
   } finally {
     await browserSession.close().catch(() => {})
   }

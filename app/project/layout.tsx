@@ -2,7 +2,7 @@ import type { Metadata } from "next"
 
 export const metadata: Metadata = {
   title: "Project",
-  description: "Build and edit your app with Lotus.build.",
+  description: "Build and edit your app with lotus.build.",
   robots: { index: false, follow: false },
 }
 

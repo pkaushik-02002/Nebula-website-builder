@@ -176,7 +176,7 @@ function SettingsContent() {
             >
               <ArrowLeft className="h-3.5 w-3.5" />
             </button>
-            <Link href="/" className="text-[15px] font-semibold text-zinc-900">Lotus.build</Link>
+            <Link href="/" className="text-[15px] font-semibold text-zinc-900">lotus.build</Link>
           </div>
           <div className="flex items-center gap-2">
             <Link href="/projects" className="rounded-full border border-zinc-200 bg-white px-3.5 py-1.5 text-xs font-medium text-zinc-600 transition-colors hover:bg-zinc-50">
@@ -513,7 +513,7 @@ function SettingsContent() {
               </p>
               <ul className="space-y-1.5 text-sm text-red-700">
                 {[
-                  "Your Lotus.build sign-in access",
+                  "Your lotus.build sign-in access",
                   "Your user profile record for this account",
                   "Direct access to account-level settings tied to this login",
                 ].map((item) => (
