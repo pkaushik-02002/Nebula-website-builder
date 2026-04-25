@@ -1,5 +1,6 @@
 import Browserbase from "@browserbasehq/sdk"
 import { loadStagehand } from "@/lib/browserbase/load-stagehand"
+import { stagehandServerOptions } from "@/lib/browserbase/stagehand-server-options"
 import { adminDb } from "@/lib/firebase-admin"
 
 type StagehandInstance = {
@@ -116,6 +117,7 @@ export class ComputerBrowserSession {
     const { Stagehand } = await loadStagehand()
 
     const stagehand = new Stagehand({
+      ...stagehandServerOptions,
       env: "BROWSERBASE",
       modelName: "claude-sonnet-4-5",
       modelClientOptions: { apiKey: process.env.ANTHROPIC_API_KEY },

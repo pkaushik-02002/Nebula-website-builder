@@ -1,5 +1,6 @@
-import { requireUserUid } from "@/lib/server-auth"
 import { loadStagehand } from "@/lib/browserbase/load-stagehand"
+import { stagehandServerOptions } from "@/lib/browserbase/stagehand-server-options"
+import { requireUserUid } from "@/lib/server-auth"
 import { z } from "zod"
 
 export const runtime = "nodejs"
@@ -37,6 +38,7 @@ export async function POST(req: Request) {
 
   const { Stagehand } = await loadStagehand()
   const stagehand = new Stagehand({
+    ...stagehandServerOptions,
     env: "BROWSERBASE",
     browserbaseSessionID: sessionId,
     modelName: "claude-sonnet-4-5",
