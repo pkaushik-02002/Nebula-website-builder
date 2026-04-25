@@ -19,6 +19,7 @@ type CreateComputerVersionParams = {
 }
 
 function getVersionTitle(source: ComputerVersion["source"], versionNumber: number): string {
+  if (source === "modify_files") return `Edit ${versionNumber}`
   if (source === "fix_errors") return `Fix ${versionNumber}`
   if (source === "restore") return `Restore ${versionNumber}`
   return `Version ${versionNumber}`

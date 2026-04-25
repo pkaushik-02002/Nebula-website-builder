@@ -42,6 +42,7 @@ import {
   Globe,
   Menu,
   Monitor,
+  Pencil,
   RotateCcw,
   Rocket,
   ShieldCheck,
@@ -122,6 +123,7 @@ function humanizeTool(name?: string) {
     browserbase_navigate: "Browsing",
     plan_project: "Planning",
     generate_files: "Writing files",
+    modify_files: "Applying changes",
     run_sandbox: "Starting sandbox",
     verify_preview: "Verifying",
     fix_errors: "Fixing errors",
@@ -160,11 +162,38 @@ function prettyResult(action: ComputerAction): string {
           return `${(files as { count: number }).count} files generated`
         return "Files generated"
       }
-      case "run_sandbox": return "Sandbox ready"
+      case "modify_files": {
+        const backend = out.backend as { status?: string; schemaApplied?: boolean } | undefined
+        if (backend?.status === "approval-required") return "Changes applied; Supabase approval needed"
+        if (backend?.status === "oauth-required") return "Changes applied; Supabase connection needed"
+        if (backend?.status === "error") return "Changes applied; backend setup needs attention"
+        const changedPaths = out.changedPaths
+        if (Array.isArray(changedPaths)) {
+          const n = changedPaths.length
+          return n > 0 ? `Applied ${n} file change${n === 1 ? "" : "s"}` : "No file changes needed"
+        }
+        return "Changes applied"
+      }
+      case "run_sandbox": {
+        if (out.ready === false) {
+          const errors = out.errors
+          const n = Array.isArray(errors) ? errors.length : 0
+          return n > 0 ? `Sandbox needs repair (${n} issue${n === 1 ? "" : "s"})` : "Sandbox did not open"
+        }
+        return "Sandbox ready"
+      }
       case "verify_preview": {
         const issues = out.issues as string[] | undefined
         const n = issues?.length ?? 0
         return n > 0 ? `Found ${n} issue${n === 1 ? "" : "s"}` : "Verified — no issues"
+      }
+      case "fix_errors": {
+        const changedPaths = out.changedPaths
+        const n = Array.isArray(changedPaths) ? changedPaths.length : 0
+        if (out.patchApplied === true) {
+          return n > 0 ? `Applied patch to ${n} file${n === 1 ? "" : "s"}` : "Patch applied"
+        }
+        return n > 0 ? `Updated ${n} file${n === 1 ? "" : "s"}` : "Fix applied"
       }
       case "deploy_site": return "Deployed"
       default: return action.content
@@ -257,7 +286,11 @@ function planCardFromOutput(toolOutput: string | undefined) {
 }
 
 function backendFromAction(action: ComputerAction): { status?: string; reason?: string; schemaApplied?: boolean } | null {
-  if (action.type !== "tool_result" || action.toolName !== "generate_files" || !action.toolOutput) return null
+  if (
+    action.type !== "tool_result" ||
+    (action.toolName !== "generate_files" && action.toolName !== "modify_files") ||
+    !action.toolOutput
+  ) return null
 
   try {
     const parsed = JSON.parse(action.toolOutput) as { backend?: { status?: string; reason?: string; schemaApplied?: boolean } }
@@ -281,21 +314,35 @@ function ActionCard({
   action,
   isLatest,
   currentUserId,
+  editingValue,
   onApprove,
   onApproveBackend,
+  onStartEdit,
+  onChangeEdit,
+  onCancelEdit,
+  onSubmitEdit,
   isApproving,
   isApprovingBackend,
+  isSubmittingEdit,
 }: {
   action: ComputerAction
   isLatest?: boolean
   currentUserId?: string
+  editingValue?: string | null
   onApprove?: () => void
   onApproveBackend?: () => void
+  onStartEdit?: (action: ComputerAction) => void
+  onChangeEdit?: (value: string) => void
+  onCancelEdit?: () => void
+  onSubmitEdit?: () => void
   isApproving?: boolean
   isApprovingBackend?: boolean
+  isSubmittingEdit?: boolean
 }) {
   if (action.actor === "user") {
     const showAuthor = !!action.authorName && action.authorUid !== currentUserId
+    const canEdit = action.authorUid === currentUserId && !!onStartEdit
+    const isEditing = editingValue !== undefined && editingValue !== null
     return (
       <div className="flex justify-end py-1">
         <div className="max-w-[82%]">
@@ -304,11 +351,65 @@ function ActionCard({
               {action.authorName}
             </p>
           ) : null}
-          <div className="rounded-2xl rounded-br-[5px] bg-[#1c1c1c] px-3.5 py-2.5 shadow-[0_1px_3px_rgba(0,0,0,0.15)]">
-          <p className="whitespace-pre-wrap text-[13px] leading-[1.65] text-white">
-            {action.content}
-          </p>
-          </div>
+          {isEditing ? (
+            <div className="min-w-[min(420px,80vw)] rounded-2xl rounded-br-[5px] border border-[#d8d0c3] bg-white p-2 shadow-[0_10px_30px_-20px_rgba(0,0,0,0.28)]">
+              <textarea
+                value={editingValue}
+                onChange={(event) => onChangeEdit?.(event.target.value)}
+                onKeyDown={(event) => {
+                  if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                    event.preventDefault()
+                    onSubmitEdit?.()
+                  }
+                  if (event.key === "Escape") {
+                    event.preventDefault()
+                    onCancelEdit?.()
+                  }
+                }}
+                className="min-h-24 w-full resize-none rounded-xl border border-[#eee8de] bg-[#faf9f6] px-3 py-2 text-[13px] leading-[1.6] text-zinc-900 outline-none focus:border-[#cbbda8]"
+                autoFocus
+              />
+              <div className="mt-2 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={onCancelEdit}
+                  disabled={isSubmittingEdit}
+                  className="inline-flex h-8 items-center rounded-lg border border-[#e4dfd5] bg-white px-3 text-[11.5px] font-medium text-zinc-600 hover:bg-[#f7f5f1] disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={onSubmitEdit}
+                  disabled={isSubmittingEdit || !editingValue.trim()}
+                  className="inline-flex h-8 items-center rounded-lg bg-[#1c1c1c] px-3 text-[11.5px] font-semibold text-white hover:opacity-90 disabled:opacity-50"
+                >
+                  {isSubmittingEdit ? "Saving..." : "Resubmit"}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="rounded-2xl rounded-br-[5px] bg-[#1c1c1c] px-3.5 py-2.5 shadow-[0_1px_3px_rgba(0,0,0,0.15)]">
+                <p className="whitespace-pre-wrap text-[13px] leading-[1.65] text-white">
+                  {action.content}
+                </p>
+              </div>
+              {canEdit ? (
+                <div className="mt-1 flex justify-end pr-1">
+                  <button
+                    type="button"
+                    onClick={() => onStartEdit(action)}
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-full text-zinc-400 hover:bg-white/70 hover:text-zinc-700"
+                    aria-label="Edit message"
+                    title="Edit"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ) : null}
+            </>
+          )}
         </div>
       </div>
     )
@@ -798,6 +899,7 @@ export default function ComputerPage() {
   const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<Tab>("browser")
   const [previewDevice, setPreviewDevice] = useState<PreviewDevice>("desktop")
+  const [isMobileViewport, setIsMobileViewport] = useState(false)
   const [selectedFile, setSelectedFile] = useState<GeneratedFile | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [restartAfterStop, setRestartAfterStop] = useState(false)
@@ -824,6 +926,9 @@ export default function ComputerPage() {
   const [isApprovingBackend, setIsApprovingBackend] = useState(false)
   const [selectedClarificationAnswers, setSelectedClarificationAnswers] = useState<Record<string, string>>({})
   const [isSubmittingClarificationAnswers, setIsSubmittingClarificationAnswers] = useState(false)
+  const [editingActionId, setEditingActionId] = useState<string | null>(null)
+  const [editingDraft, setEditingDraft] = useState("")
+  const [isSubmittingEdit, setIsSubmittingEdit] = useState(false)
   const [netlifyConnected, setNetlifyConnected] = useState<boolean | null>(null)
   const [isDeploying, setIsDeploying] = useState(false)
   const [deployStep, setDeployStep] = useState("")
@@ -842,6 +947,7 @@ export default function ComputerPage() {
   const feedRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
   const autoStarted = useRef(false)
+  const pendingOptimisticActionIds = useRef(new Set<string>())
   const id = params.id
 
   // Firestore subscription — no selectedFile in deps to prevent churn
@@ -854,8 +960,11 @@ export default function ComputerPage() {
         const incoming = { id: snapshot.id, ...data } as Computer
         if (!prev) return incoming
         const serverIds = new Set(incoming.actions?.map(a => a.id))
+        for (const actionId of Array.from(pendingOptimisticActionIds.current)) {
+          if (serverIds.has(actionId)) pendingOptimisticActionIds.current.delete(actionId)
+        }
         const optimistic = (prev.actions || []).filter(
-          a => a.actor === "user" && !serverIds.has(a.id)
+          a => pendingOptimisticActionIds.current.has(a.id) && !serverIds.has(a.id)
         )
         return { ...incoming, actions: [...(incoming.actions || []), ...optimistic] }
       })
@@ -902,6 +1011,21 @@ export default function ComputerPage() {
     media.addEventListener("change", syncSidebarForDesktop)
     return () => media.removeEventListener("change", syncSidebarForDesktop)
   }, [])
+
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 767px)")
+    const syncMobileViewport = () => setIsMobileViewport(media.matches)
+
+    syncMobileViewport()
+    media.addEventListener("change", syncMobileViewport)
+    return () => media.removeEventListener("change", syncMobileViewport)
+  }, [])
+
+  useEffect(() => {
+    if (isMobileViewport && activeTab === "code") {
+      setActiveTab("preview")
+    }
+  }, [activeTab, isMobileViewport])
 
   // Netlify / Vercel status on deploy modal open
   useEffect(() => {
@@ -1010,6 +1134,25 @@ export default function ComputerPage() {
         buf += decoder.decode(value, { stream: true })
         const parts = buf.split("\n\n")
         buf = parts.pop() ?? ""
+        for (const part of parts) {
+          const line = part.trim()
+          if (!line.startsWith("data: ")) continue
+          try {
+            const event = JSON.parse(line.slice(6)) as {
+              type?: string
+              ready?: boolean
+              errors?: string[]
+              error?: string
+            }
+            if (event.type === "error") {
+              setError(event.error ?? "Sandbox error")
+            }
+            if (event.type === "done" && event.ready === false) {
+              const firstError = Array.isArray(event.errors) ? event.errors[0] : null
+              setError(firstError || "Sandbox did not open port 3000")
+            }
+          } catch {}
+        }
       }
     } catch {}
     finally {
@@ -1116,6 +1259,8 @@ export default function ComputerPage() {
   const clarificationQuestions = normalizeClarificationQuestions(computer?.clarificationQuestions)
   const activePlan = computer?.plan ?? null
   const isClonePlan = activePlan?.intent === "website-clone"
+  const collaborators = computer?.collaborators ?? []
+  const hasMultiplePeople = collaborators.some((collaborator) => collaborator.uid !== user?.uid)
   const requiresPlanApproval = planningStatus === "ready-for-approval" && requirePlanApproval && !isClonePlan
   const requiresBackendApproval =
     computer?.supabaseProvisioningStatus === "approval-required" ||
@@ -1131,7 +1276,9 @@ export default function ComputerPage() {
         ? "Ask for plan changes or approve the plan..."
         : requiresBackendApproval
           ? "Connect Supabase or ask for a frontend-only version..."
-          : "Message collaborators or @lotusagent..."
+          : hasMultiplePeople
+            ? "Message collaborators or @lotusagent..."
+            : "Send a follow-up instruction..."
 
   useEffect(() => {
     const nextQuestions = normalizeClarificationQuestions(computer?.clarificationQuestions)
@@ -1163,21 +1310,21 @@ export default function ComputerPage() {
     startRun()
   }, [computer?.status, isRunning, isWaitingForUser, restartAfterStop, startRun])
 
-  // Auto-resume sandbox on page load when build is complete but sandbox has expired
+  // Auto-resume sandbox on page load when generated files exist but the live sandbox needs reconnecting.
   useEffect(() => {
     if (!computer) return
-    if (computer.status !== "complete") return
     const fileCount = computer.files?.length ?? 0
     if (!fileCount) return
     if (!id || !user) return
     if (isRunning || isResumingPreview) return
+    if (isActive || isWaitingForUser) return
 
-    const key = `${id}:${fileCount}`
+    const key = `${id}:${computer.currentVersionId ?? fileCount}:${computer.status}:${computer.sandboxUrl ?? "no-sandbox"}`
     if (lastAutoSandboxKey === key) return
     lastAutoSandboxKey = key
 
     resumePreview()
-  }, [computer, id, user, isRunning, isResumingPreview, resumePreview])
+  }, [computer, id, isActive, isRunning, isResumingPreview, isWaitingForUser, resumePreview, user])
 
   const submitChatMessage = useCallback(async (value: string) => {
     if (!user || !id) return
@@ -1188,6 +1335,7 @@ export default function ComputerPage() {
       ? crypto.randomUUID()
       : `user-${Date.now()}`
     const mentionsLotus = /(^|\s)@lotusagent\b/i.test(message)
+    const shouldTriggerAgent = !hasMultiplePeople || mentionsLotus
 
     const optimisticAction: ComputerAction = {
       id: actionId,
@@ -1200,6 +1348,7 @@ export default function ComputerPage() {
       content: message,
     }
 
+    pendingOptimisticActionIds.current.add(actionId)
     setComputer((prev) =>
       prev ? { ...prev, actions: [...(prev.actions ?? []), optimisticAction] } : prev
     )
@@ -1208,7 +1357,7 @@ export default function ComputerPage() {
 
     try {
       const token = await user.getIdToken()
-      const intent = mentionsLotus
+      const intent = shouldTriggerAgent
         ? (isRunning || isActive ? "interrupt" : "message")
         : "chat_message"
       const response = await fetch(`/api/computer/${id}`, {
@@ -1220,7 +1369,7 @@ export default function ComputerPage() {
         const payload = await response.json().catch(() => null)
         throw new Error(payload?.error ?? "Failed to send message")
       }
-      if (!mentionsLotus) return
+      if (!shouldTriggerAgent) return
 
       if (intent === "interrupt") {
         setRestartAfterStop(true)
@@ -1232,7 +1381,73 @@ export default function ComputerPage() {
     } catch (err: any) {
       setError(err?.message ?? "Failed to send message")
     }
-  }, [id, isActive, isRunning, startRun, user])
+  }, [hasMultiplePeople, id, isActive, isRunning, startRun, user])
+
+  const startEditMessage = useCallback((action: ComputerAction) => {
+    if (action.actor !== "user" || action.authorUid !== user?.uid) return
+    setEditingActionId(action.id)
+    setEditingDraft(action.content)
+  }, [user?.uid])
+
+  const cancelEditMessage = useCallback(() => {
+    setEditingActionId(null)
+    setEditingDraft("")
+  }, [])
+
+  const submitEditedMessage = useCallback(async () => {
+    if (!user || !id || !editingActionId || isSubmittingEdit) return
+    const message = editingDraft.trim()
+    if (!message) return
+
+    const mentionsLotus = /(^|\s)@lotusagent\b/i.test(message)
+    const shouldTriggerAgent = !hasMultiplePeople || mentionsLotus
+    const intent = shouldTriggerAgent ? "edit_message" : "edit_chat_message"
+
+    setIsSubmittingEdit(true)
+    setError(null)
+
+    try {
+      const token = await user.getIdToken()
+      const response = await fetch(`/api/computer/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ intent, editedActionId: editingActionId, message }),
+      })
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null)
+        throw new Error(payload?.error ?? "Failed to edit message")
+      }
+
+      setEditingActionId(null)
+      setEditingDraft("")
+      setSidebarOpen(true)
+
+      if (!shouldTriggerAgent) return
+
+      if (isRunning || isActive) {
+        setRestartAfterStop(true)
+        abortRef.current?.abort()
+        setIsRunning(false)
+      } else {
+        startRun()
+      }
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to edit message")
+    } finally {
+      setIsSubmittingEdit(false)
+    }
+  }, [
+    editingActionId,
+    editingDraft,
+    hasMultiplePeople,
+    id,
+    isActive,
+    isRunning,
+    isSubmittingEdit,
+    startRun,
+    user,
+  ])
 
   const selectClarificationAnswer = useCallback((questionId: string, answer: string) => {
     setSelectedClarificationAnswers((current) => ({
@@ -1570,13 +1785,13 @@ export default function ComputerPage() {
   const tabs: Array<{ id: Tab; label: string; icon: ReactNode }> = [
     { id: "browser", label: "Browser", icon: <Globe className="h-3.5 w-3.5" /> },
     { id: "preview", label: "Preview", icon: <Monitor className="h-3.5 w-3.5" /> },
-    { id: "code", label: "Code", icon: <Code2 className="h-3.5 w-3.5" /> },
+    ...(!isMobileViewport
+      ? [{ id: "code" as const, label: "Code", icon: <Code2 className="h-3.5 w-3.5" /> }]
+      : []),
     { id: "research", label: "Research", icon: <BookOpen className="h-3.5 w-3.5" /> },
   ]
   const activePreviewDevice =
     PREVIEW_DEVICES.find((device) => device.id === previewDevice) ?? PREVIEW_DEVICES[0]
-  const collaborators = computer?.collaborators ?? []
-  const hasMultiplePeople = collaborators.some((collaborator) => collaborator.uid !== user?.uid)
   const mentionOptions: MentionOption[] = hasMultiplePeople
     ? [
         {
@@ -1877,10 +2092,16 @@ export default function ComputerPage() {
                               action={action}
                               isLatest={isLatest}
                               currentUserId={user?.uid}
+                              editingValue={editingActionId === action.id ? editingDraft : null}
                               onApprove={isPlanCard && requiresPlanApproval ? approvePlan : undefined}
                               onApproveBackend={isBackendApproval ? approveBackend : undefined}
+                              onStartEdit={isRunning ? undefined : startEditMessage}
+                              onChangeEdit={setEditingDraft}
+                              onCancelEdit={cancelEditMessage}
+                              onSubmitEdit={submitEditedMessage}
                               isApproving={isPlanCard ? isApprovingPlan : undefined}
                               isApprovingBackend={isBackendApproval ? isApprovingBackend : undefined}
+                              isSubmittingEdit={isSubmittingEdit}
                             />
                           </motion.div>
                         )

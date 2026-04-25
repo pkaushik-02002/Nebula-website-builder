@@ -99,7 +99,7 @@ export interface ComputerVersion {
   id: string
   versionNumber: number
   title: string
-  source: "generate_files" | "fix_errors" | "restore"
+  source: "generate_files" | "modify_files" | "fix_errors" | "restore"
   files: Array<{path: string; content: string}>
   fileCount: number
   prompt?: string
@@ -130,6 +130,7 @@ export interface Computer {
   versionCount?: number
   name: string
   prompt: string
+  followUpInstruction?: string | null
   referenceUrls: string[]
   permissions?: ComputerPermissions
   planningStatus?: ComputerPlanningStatus

@@ -58,9 +58,10 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     return Response.json({ error: "Forbidden" }, { status: 403 })
   }
 
-  let intent: "chat_message" | "message" | "interrupt" | "stop" | "approve_plan" | "approve_backend" | "update_permissions"
+  let intent: "chat_message" | "message" | "edit_chat_message" | "edit_message" | "interrupt" | "stop" | "approve_plan" | "approve_backend" | "update_permissions"
   let message = ""
   let actionId: string | undefined
+  let editedActionId: string | undefined
   let permissions: Partial<ComputerPermissions> | null = null
 
   try {
@@ -68,6 +69,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     intent = body?.intent
     message = typeof body?.message === "string" ? body.message.trim() : ""
     actionId = typeof body?.actionId === "string" ? body.actionId : undefined
+    editedActionId = typeof body?.editedActionId === "string" ? body.editedActionId : undefined
     if (body?.permissions && typeof body.permissions === "object") {
       permissions = {
         ...(typeof body.permissions.requirePlanApproval === "boolean"
@@ -79,12 +81,16 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     return Response.json({ error: "Invalid JSON body" }, { status: 400 })
   }
 
-  if (!["chat_message", "message", "interrupt", "stop", "approve_plan", "approve_backend", "update_permissions"].includes(intent)) {
+  if (!["chat_message", "message", "edit_chat_message", "edit_message", "interrupt", "stop", "approve_plan", "approve_backend", "update_permissions"].includes(intent)) {
     return Response.json({ error: "Invalid intent" }, { status: 400 })
   }
 
-  if ((intent === "chat_message" || intent === "message" || intent === "interrupt") && !message) {
+  if ((intent === "chat_message" || intent === "message" || intent === "edit_chat_message" || intent === "edit_message" || intent === "interrupt") && !message) {
     return Response.json({ error: "message is required" }, { status: 400 })
+  }
+
+  if ((intent === "edit_chat_message" || intent === "edit_message") && !editedActionId) {
+    return Response.json({ error: "editedActionId is required" }, { status: 400 })
   }
 
   if (["approve_plan", "approve_backend", "update_permissions"].includes(intent) && !canManage) {
@@ -104,6 +110,17 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   const currentPermissions = (data.permissions as ComputerPermissions | undefined) ?? {
     requirePlanApproval: true,
   }
+  const hasCurrentBuild =
+    Boolean(data.plan) &&
+    Array.isArray(data.files) &&
+    data.files.some((file) => {
+      return Boolean(
+        file &&
+        typeof file === "object" &&
+        typeof (file as { path?: unknown }).path === "string" &&
+        typeof (file as { content?: unknown }).content === "string"
+      )
+    })
   const currentReferenceUrls = Array.isArray(data.referenceUrls)
     ? data.referenceUrls.filter((value): value is string => typeof value === "string")
     : []
@@ -117,13 +134,68 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
         .slice(-20)
         .map((entry) => `${entry.authorName ?? "User"}: ${entry.content}`)
     : []
+  const currentActions = Array.isArray(data.actions)
+    ? data.actions.filter((value): value is ComputerAction => {
+        return Boolean(value && typeof value === "object" && typeof (value as ComputerAction).id === "string")
+      })
+    : []
   const author = await adminAuth.getUser(uid).catch(() => null)
   const authorName =
     author?.displayName ||
     author?.email ||
     (typeof data.ownerId === "string" && data.ownerId === uid ? "Owner" : "Collaborator")
 
-  if (message) {
+  if (intent === "edit_chat_message" || intent === "edit_message") {
+    const editIndex = currentActions.findIndex((candidate) => candidate.id === editedActionId)
+    const targetAction = editIndex >= 0 ? currentActions[editIndex] : null
+
+    if (!targetAction || targetAction.actor !== "user" || targetAction.type !== "message") {
+      return Response.json({ error: "Editable message not found" }, { status: 404 })
+    }
+
+    if (targetAction.authorUid && targetAction.authorUid !== uid) {
+      return Response.json({ error: "Only the message author can edit this message" }, { status: 403 })
+    }
+
+    const editedAction: ComputerAction = {
+      ...targetAction,
+      timestamp: new Date().toISOString(),
+      content: message,
+    }
+    const keptActions = currentActions.slice(0, editIndex)
+    const nextActions = [...keptActions, editedAction]
+    const nextReferenceUrls = mergeReferenceUrls(
+      currentReferenceUrls,
+      extractReferenceUrlsFromText(message),
+      extractReferenceDomainsFromText(message)
+    )
+    const instruction = message.replace(/(^|\s)@lotusagent\b/gi, " ").replace(/\s+/g, " ").trim() || message
+    const discussionContext = nextActions
+      .filter((entry) => entry.actor === "user" && entry.type === "message")
+      .slice(-20)
+      .map((entry) => `- ${entry.authorName ?? "User"}: ${entry.content}`)
+      .join("\n")
+
+    action = editedAction
+    updates.actions = nextActions
+    updates.referenceUrls = nextReferenceUrls
+    if (intent === "edit_chat_message") {
+      await ref.update(updates)
+      return Response.json({ ok: true, action })
+    }
+    updates.prompt = currentPrompt
+      ? `${currentPrompt}\n\nEdited conversation through ${authorName}:\n${discussionContext}\n\nEdited instruction from ${authorName}:\n${instruction}`
+      : `Edited conversation:\n${discussionContext}\n\nInstruction:\n${instruction}`
+    updates.followUpInstruction = hasCurrentBuild ? instruction : null
+    updates.planningStatus = hasCurrentBuild ? "approved" : "draft"
+    updates.clarificationQuestions = []
+    if (!hasCurrentBuild) {
+      updates.plan = null
+    }
+    updates.approvedAt = null
+    updates.currentGeneratingFile = null
+    updates.cancelRequested = true
+  } else if (message) {
     action = {
       id: actionId || nanoid(),
       timestamp: new Date().toISOString(),
@@ -152,9 +224,12 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       updates.prompt = currentPrompt
         ? `${currentPrompt}\n\nRecent collaborator discussion:\n${discussionContext}\n\nAdditional instruction from ${authorName}:\n${instruction}`
         : `Recent collaborator discussion:\n${discussionContext}\n\nInstruction:\n${instruction}`
-      updates.planningStatus = "draft"
+      updates.followUpInstruction = hasCurrentBuild ? instruction : null
+      updates.planningStatus = hasCurrentBuild ? "approved" : "draft"
       updates.clarificationQuestions = []
-      updates.plan = null
+      if (!hasCurrentBuild) {
+        updates.plan = null
+      }
       updates.approvedAt = null
       updates.currentGeneratingFile = null
     }
@@ -162,6 +237,10 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
   if (intent === "interrupt" || intent === "stop") {
     updates.cancelRequested = true
+    updates.currentGeneratingFile = null
+    if (intent === "stop") {
+      updates.status = "idle"
+    }
   }
 
   if (intent === "approve_plan") {
@@ -180,6 +259,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     updates.actions = FieldValue.arrayUnion(action)
     updates.planningStatus = "approved"
     updates.approvedAt = FieldValue.serverTimestamp()
+    updates.followUpInstruction = null
     updates.cancelRequested = false
     updates.currentGeneratingFile = null
   }
@@ -200,6 +280,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
     updates.actions = FieldValue.arrayUnion(action)
     updates.supabaseBackendApproved = true
+    updates.followUpInstruction = null
     updates.cancelRequested = false
     updates.currentGeneratingFile = null
   }

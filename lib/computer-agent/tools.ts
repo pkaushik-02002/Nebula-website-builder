@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk"
 import { Sandbox } from "@e2b/code-interpreter"
+import { applyPatch, parsePatch } from "diff"
 import { FieldValue } from "firebase-admin/firestore"
 import crypto from "crypto"
 import JSZip from "jszip"
@@ -57,9 +58,22 @@ export interface ToolContext {
   prompt: string
   browserSession: ComputerBrowserSession
   onFileGenerationProgress?: (progress: FileGenerationProgress) => Promise<void> | void
+  shouldCancel?: () => Promise<boolean>
 }
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+
+const CANCELLED_MESSAGE = "Agent run cancelled"
+
+async function throwIfCancelled(shouldCancel?: () => Promise<boolean>): Promise<void> {
+  if (await shouldCancel?.()) {
+    throw new Error(CANCELLED_MESSAGE)
+  }
+}
+
+function isCancelledError(error: unknown): boolean {
+  return error instanceof Error && error.message === CANCELLED_MESSAGE
+}
 
 // ─── Tool definitions ──────────────────────────────────────────────────────────
 
@@ -114,9 +128,24 @@ export const COMPUTER_TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "modify_files",
+    description:
+      "Apply a user's follow-up instruction to an existing project. Return the full merged files array and a list of changed paths. Use this for iterative edits instead of regenerating from scratch.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        files: { type: "array", items: { type: "object" }, description: "Current project files" },
+        instruction: { type: "string", description: "User follow-up instruction" },
+        plan: { type: "object", description: "Current approved project plan" },
+        research: { type: "string", description: "Research and conversation context" },
+      },
+      required: ["files", "instruction", "plan", "research"],
+    },
+  },
+  {
     name: "run_sandbox",
     description:
-      "Write files to an E2B sandbox, install dependencies, start dev server. Returns {previewUrl, sandboxId, errors}.",
+      "Write files to an E2B sandbox, install dependencies, start dev server. Returns {ready, previewUrl, sandboxId, errors}. previewUrl is null unless the app is reachable on port 3000.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -145,7 +174,7 @@ export const COMPUTER_TOOLS: Anthropic.Tool[] = [
   {
     name: "fix_errors",
     description:
-      "Fix issues found during verification. Calls Claude with fix instructions. Returns {files} with updated project files.",
+      "Fix issues found during verification using minimal unified diffs. Applies patches server-side and returns {files, changedPaths, patchApplied}.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -185,6 +214,61 @@ function parseFileBlocks(text: string): ProjectFile[] {
     if (path) files.push({ path, content })
   }
   return files
+}
+
+function stripPatchFences(text: string): string {
+  return text
+    .replace(/^```(?:diff|patch)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim()
+}
+
+function normalizePatchFilePath(path: string | undefined): string | null {
+  if (!path || path === "/dev/null") return null
+  return path.replace(/^"?[ab]\//, "").replace(/"$/, "").trim() || null
+}
+
+function applyUnifiedPatchToFiles(
+  files: ProjectFile[],
+  patchText: string
+): { files: ProjectFile[]; changedPaths: string[] } | null {
+  const normalizedPatchText = stripPatchFences(patchText)
+  if (!normalizedPatchText) return null
+
+  let patches: ReturnType<typeof parsePatch>
+  try {
+    patches = parsePatch(normalizedPatchText)
+  } catch {
+    return null
+  }
+
+  if (!patches.length) return null
+
+  const fileMap = new Map(files.map((file) => [file.path, file.content]))
+  const changedPaths: string[] = []
+
+  for (const patch of patches) {
+    const path =
+      normalizePatchFilePath(patch.newFileName) ??
+      normalizePatchFilePath(patch.oldFileName)
+    if (!path) return null
+
+    const currentContent = fileMap.get(path) ?? ""
+    const patchedContent = applyPatch(currentContent, patch, {
+      autoConvertLineEndings: true,
+      fuzzFactor: 1,
+    })
+
+    if (patchedContent === false) return null
+
+    fileMap.set(path, patchedContent)
+    changedPaths.push(path)
+  }
+
+  return {
+    files: Array.from(fileMap.entries()).map(([path, content]) => ({ path, content })),
+    changedPaths: Array.from(new Set(changedPaths)),
+  }
 }
 
 function extractAgentMessage(text: string): { agentMessage: string | null; contentWithoutAgent: string } {
@@ -488,8 +572,10 @@ async function generateFiles(
   plan: ProjectPlan,
   research: string,
   computerId: string,
-  onProgress?: (progress: FileGenerationProgress) => Promise<void> | void
+  onProgress?: (progress: FileGenerationProgress) => Promise<void> | void,
+  shouldCancel?: () => Promise<boolean>
 ): Promise<ProjectFile[]> {
+  await throwIfCancelled(shouldCancel)
   const stream = anthropic.messages.stream({
     model: "claude-sonnet-4-5",
     max_tokens: 16000,
@@ -515,16 +601,26 @@ Every text element must reflect the research or the user's supplied brief.`,
   let currentText = ""
   let lastProgressSignature = ""
   let progressQueue = Promise.resolve()
+  let cancelled = false
+  const cancelTimer = setInterval(() => {
+    void shouldCancel?.()
+      .then((shouldStop) => {
+        if (!shouldStop || cancelled) return
+        cancelled = true
+        stream.abort()
+      })
+      .catch(() => {})
+  }, 1000)
 
   const queueProgress = (progress: FileGenerationProgress) => {
-    if (!onProgress) return
+    if (!onProgress || cancelled) return
     progressQueue = progressQueue
       .then(() => Promise.resolve(onProgress(progress)))
       .catch(() => {})
   }
 
   const emitProgress = (force = false) => {
-    if (!onProgress) return
+    if (!onProgress || cancelled) return
 
     const progress = buildFileGenerationProgress(currentText)
     const lastFile = progress.files.length > 0 ? progress.files[progress.files.length - 1] : null
@@ -540,6 +636,7 @@ Every text element must reflect the research or the user's supplied brief.`,
   const firestoreRef = adminDb.collection("computers").doc(computerId)
 
   stream.on("text", (_delta, snapshot) => {
+    if (cancelled) return
     currentText = snapshot
 
     // Persist each fully-completed file to Firestore immediately as it arrives
@@ -568,9 +665,26 @@ Every text element must reflect the research or the user's supplied brief.`,
     emitProgress()
   })
 
-  currentText = await stream.finalText()
+  try {
+    currentText = await stream.finalText()
+  } catch (error) {
+    if (!cancelled && !isCancelledError(error)) throw error
+  } finally {
+    clearInterval(cancelTimer)
+  }
+
+  await throwIfCancelled(shouldCancel)
+  if (cancelled) {
+    await firestoreRef.update({
+      currentGeneratingFile: null,
+      updatedAt: FieldValue.serverTimestamp(),
+    }).catch(() => {})
+    throw new Error(CANCELLED_MESSAGE)
+  }
+
   emitProgress(true)
   await progressQueue
+  await throwIfCancelled(shouldCancel)
 
   const finalFiles = buildFileGenerationProgress(currentText).files
   const summaryAction: ComputerAction = {
@@ -587,6 +701,71 @@ Every text element must reflect the research or the user's supplied brief.`,
   }).catch(() => {})
 
   return finalFiles
+}
+
+async function modifyFiles(
+  files: ProjectFile[],
+  instruction: string,
+  plan: ProjectPlan,
+  research: string,
+  shouldCancel?: () => Promise<boolean>
+): Promise<{ files: ProjectFile[]; changedPaths: string[] }> {
+  await throwIfCancelled(shouldCancel)
+  const currentFiles = filterFiles(files)
+  const fileContext = currentFiles
+    .filter((file) => /\.(tsx?|jsx?|css|json|html|mjs|cjs)$/.test(file.path))
+    .map((file) => `===FILE: ${file.path}===\n${file.content}\n===END_FILE===`)
+    .join("\n\n")
+
+  const response = await anthropic.messages.create({
+    model: "claude-sonnet-4-5",
+    max_tokens: 16000,
+    system: [
+      "You are editing an existing React/Vite project.",
+      "Understand the user's follow-up from the current files, plan, and conversation context.",
+      "Output only changed complete files in the strict file-block format.",
+      "Do not regenerate untouched files.",
+      "Do not remove working functionality unless the user explicitly asks.",
+      "Preserve visual quality and responsive behavior.",
+    ].join(" "),
+    messages: [
+      {
+        role: "user",
+        content: `Follow-up instruction:
+${instruction}
+
+Current approved plan:
+${JSON.stringify(plan, null, 2)}
+
+Research and conversation context:
+${research}
+
+Current project files:
+${fileContext}
+
+Return only files that must change:
+===FILE: path/to/file.tsx===
+[complete updated file content]
+===END_FILE===`,
+      },
+    ],
+  })
+
+  await throwIfCancelled(shouldCancel)
+
+  const text =
+    response.content[0].type === "text" ? response.content[0].text : ""
+  const changedFiles = parseFileBlocks(text)
+  const fileMap = new Map(currentFiles.map((file) => [file.path, file]))
+
+  for (const changedFile of changedFiles) {
+    fileMap.set(changedFile.path, changedFile)
+  }
+
+  return {
+    files: Array.from(fileMap.values()),
+    changedPaths: changedFiles.map((file) => file.path),
+  }
 }
 
 function isViteConfigPath(path: string): boolean {
@@ -1110,7 +1289,7 @@ async function injectComputerEnvVars(sandbox: Sandbox, computerId?: string): Pro
 export async function runSandbox(
   files: ProjectFile[],
   options: { computerId?: string } = {}
-): Promise<{ previewUrl: string; sandboxId: string; errors: string[] }> {
+): Promise<{ ready: boolean; previewUrl: string | null; sandboxId: string; errors: string[] }> {
   const errors: string[] = []
   const PROJECT_DIR = "/home/user/project"
   const sandboxFiles = prepareSandboxFiles(files)
@@ -1120,6 +1299,17 @@ export async function runSandbox(
     timeoutMs: 30 * 60 * 1000, // 30 min — enough for full session
   })
   const previewUrl = `https://${sandbox.getHost(3000)}`
+
+  const readLogs = async (lines = 100): Promise<string> => {
+    const logs = await sandbox.commands
+      .run(`tail -${lines} /tmp/dev.log 2>/dev/null || echo ''`, { timeoutMs: 5000 })
+      .catch(() => ({ stdout: "" }))
+    return logs.stdout ?? ""
+  }
+
+  const stopSandbox = async () => {
+    await sandbox.kill().catch(() => {})
+  }
 
   try {
     // Create all unique directories in one shot
@@ -1153,6 +1343,8 @@ export async function runSandbox(
     )
     if (install.exitCode !== 0) {
       errors.push(`npm install failed: ${(install.stderr || install.stdout || "").slice(0, 400)}`)
+      await stopSandbox()
+      return { ready: false, previewUrl: null, sandboxId: sandbox.sandboxId, errors }
     }
 
     // Detect framework and pick dev command using project's own npm script
@@ -1160,11 +1352,25 @@ export async function runSandbox(
     try {
       const pkgFile = sandboxFiles.find((f) => f.path === "package.json")
       if (pkgFile) {
-        const pkg = JSON.parse(pkgFile.content)
+        const pkg = JSON.parse(pkgFile.content) as {
+          scripts?: Record<string, string>
+          dependencies?: Record<string, string>
+          devDependencies?: Record<string, string>
+        }
         const deps = { ...pkg.dependencies, ...pkg.devDependencies }
-        if (deps?.next) devCmd = `npm run dev -- -H 0.0.0.0 -p 3000`
+        if (pkg.scripts?.dev) {
+          devCmd = deps?.next
+            ? `npm run dev -- -H 0.0.0.0 -p 3000`
+            : `npm run dev -- --host 0.0.0.0 --port 3000`
+        } else if (deps?.next) {
+          devCmd = `npx next dev -H 0.0.0.0 -p 3000`
+        } else if (deps?.vite) {
+          devCmd = `npx vite --host 0.0.0.0 --port 3000`
+        }
       }
     } catch {}
+
+    await sandbox.commands.run("rm -f /tmp/dev.log /tmp/dev.pid", { timeoutMs: 5000 }).catch(() => {})
 
     // Use setsid + nohup so the process survives shell session teardown
     await sandbox.commands.run(
@@ -1176,6 +1382,15 @@ export async function runSandbox(
     let ready = false
     for (let i = 0; i < 75; i++) {
       await new Promise((r) => setTimeout(r, 2000))
+      const processCheck = await sandbox.commands
+        .run("test -f /tmp/dev.pid && kill -0 $(cat /tmp/dev.pid) 2>/dev/null && echo running || echo stopped", { timeoutMs: 5000 })
+        .catch(() => ({ stdout: "stopped" }))
+      if ((processCheck.stdout ?? "").trim() !== "running") {
+        const logs = await readLogs()
+        errors.push(`Dev server exited before opening port 3000: ${logs.slice(-900)}`)
+        break
+      }
+
       try {
         const res = await fetch(previewUrl, { signal: AbortSignal.timeout(4000) })
         const body = await res.text().catch(() => "")
@@ -1193,20 +1408,21 @@ export async function runSandbox(
     }
 
     if (!ready) {
-      const logs = await sandbox.commands
-        .run("tail -80 /tmp/dev.log 2>/dev/null || echo ''", { timeoutMs: 5000 })
-        .catch(() => ({ stdout: "" }))
-      errors.push(`Dev server not ready after 150 s: ${(logs.stdout ?? "").slice(-600)}`)
+      const logs = await readLogs()
+      if (!errors.length) {
+        errors.push(`Dev server did not open port 3000 after 150 s: ${logs.slice(-900)}`)
+      }
+      await stopSandbox()
+      return { ready: false, previewUrl: null, sandboxId: sandbox.sandboxId, errors }
     }
 
-    return { previewUrl, sandboxId: sandbox.sandboxId, errors }
+    return { ready: true, previewUrl, sandboxId: sandbox.sandboxId, errors }
   } catch (err: any) {
-    const logs = await sandbox.commands
-      .run("tail -80 /tmp/dev.log 2>/dev/null || echo ''", { timeoutMs: 5000 })
-      .catch(() => ({ stdout: "" }))
-    if (logs.stdout) errors.push(`Sandbox logs: ${(logs.stdout ?? "").slice(-600)}`)
+    const logs = await readLogs()
+    if (logs) errors.push(`Sandbox logs: ${logs.slice(-900)}`)
     errors.push(err?.message ?? "Sandbox error")
-    return { previewUrl, sandboxId: sandbox.sandboxId, errors }
+    await stopSandbox()
+    return { ready: false, previewUrl: null, sandboxId: sandbox.sandboxId, errors }
   }
 }
 
@@ -1281,34 +1497,90 @@ async function verifyPreview(
 
 async function fixErrors(
   files: ProjectFile[],
-  issues: string[]
-): Promise<ProjectFile[]> {
-  const fileContext = files
+  issues: string[],
+  shouldCancel?: () => Promise<boolean>
+): Promise<{ files: ProjectFile[]; changedPaths: string[]; patchApplied: boolean }> {
+  await throwIfCancelled(shouldCancel)
+  const issueText = issues.join("\n")
+  const referencedPaths = new Set(
+    Array.from(issueText.matchAll(/[A-Za-z0-9_.@/-]+\.(?:tsx?|jsx?|css|json|html|mjs|cjs)/g))
+      .map((match) => match[0].replace(/^\.?\//, ""))
+  )
+  const relevantFiles = files
     .filter((f) => /\.(tsx?|jsx?|css|json|html)$/.test(f.path))
+    .filter((file) => {
+      if (referencedPaths.size === 0) return true
+      return (
+        referencedPaths.has(file.path) ||
+        file.path === "package.json" ||
+        file.path.startsWith("src/") && (
+          file.path.endsWith("App.tsx") ||
+          file.path.endsWith("main.tsx") ||
+          file.path.endsWith("index.css")
+        )
+      )
+    })
+
+  const fileContext = relevantFiles
     .map((f) => `===FILE: ${f.path}===\n${f.content}\n===END_FILE===`)
     .join("\n\n")
 
   const response = await anthropic.messages.create({
     model: "claude-sonnet-4-5",
-    max_tokens: 16000,
-    system: `You fix bugs in React/Vite projects. Output only changed files in ===FILE: path=== ... ===END_FILE=== format. Fix exactly the issues listed. Do not touch files that don't need changes.`,
+    max_tokens: 8000,
+    system: [
+      "You fix bugs in React/Vite projects.",
+      "Output a unified git diff patch only. No markdown, no prose.",
+      "Use diff --git headers, --- a/path, +++ b/path, and @@ hunks.",
+      "Patch only the minimal files and lines needed.",
+      "Do not output complete files unless explicitly asked.",
+    ].join(" "),
     messages: [
       {
         role: "user",
-        content: `Fix these issues:\n${issues.map((i) => `- ${i}`).join("\n")}\n\nProject files:\n${fileContext}`,
+        content: `Fix these issues with the smallest possible patch:
+${issues.map((i) => `- ${i}`).join("\n")}
+
+Available project files:
+${files.map((file) => `- ${file.path}`).join("\n")}
+
+Relevant file contents:
+${fileContext}
+
+Return only a unified git diff patch like:
+diff --git a/src/App.tsx b/src/App.tsx
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ ...
+-old line
++new line`,
       },
     ],
   })
 
+  await throwIfCancelled(shouldCancel)
+
   const text =
     response.content[0].type === "text" ? response.content[0].text : ""
-  const updatedFiles = parseFileBlocks(text)
+  const patched = applyUnifiedPatchToFiles(files, text)
+  if (patched) {
+    return {
+      ...patched,
+      patchApplied: true,
+    }
+  }
 
+  // Compatibility fallback for older model outputs. The primary path above is patch-based.
+  const updatedFiles = parseFileBlocks(text)
   const fileMap = new Map(files.map((f) => [f.path, f]))
   for (const updated of updatedFiles) {
     fileMap.set(updated.path, updated)
   }
-  return Array.from(fileMap.values())
+  return {
+    files: Array.from(fileMap.values()),
+    changedPaths: updatedFiles.map((file) => file.path),
+    patchApplied: false,
+  }
 }
 
 // ─── deploy_site ───────────────────────────────────────────────────────────────
@@ -1449,6 +1721,8 @@ export async function executeTool(
   input: Record<string, unknown>,
   context: ToolContext
 ): Promise<unknown> {
+  await throwIfCancelled(context.shouldCancel)
+
   switch (name) {
     case "browserbase_research":
       return browserbaseResearch((input.urls as string[]) || [], context.browserSession)
@@ -1464,8 +1738,10 @@ export async function executeTool(
         input.plan as ProjectPlan,
         (input.research as string) || "",
         context.computerId,
-        context.onFileGenerationProgress
+        context.onFileGenerationProgress,
+        context.shouldCancel
       )
+      await throwIfCancelled(context.shouldCancel)
       const backend = await maybeSetupComputerBackend({
         files,
         plan: input.plan as ProjectPlan,
@@ -1502,6 +1778,55 @@ export async function executeTool(
       return { files: backend.files, backend: backendSummary }
     }
 
+    case "modify_files": {
+      const modified = await modifyFiles(
+        input.files as ProjectFile[],
+        (input.instruction as string) || "",
+        input.plan as ProjectPlan,
+        (input.research as string) || "",
+        context.shouldCancel
+      )
+      await throwIfCancelled(context.shouldCancel)
+      const backend = await maybeSetupComputerBackend({
+        files: modified.files,
+        plan: input.plan as ProjectPlan,
+        prompt: context.prompt,
+        context,
+      }).catch(async (error: unknown): Promise<ComputerBackendSetupResult> => {
+        const message = error instanceof Error ? error.message : "Backend setup failed"
+        await adminDb.collection("computers").doc(context.computerId).set(
+          {
+            supabaseProvisioningStatus: "error",
+            supabaseProvisioningReason: message,
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        )
+
+        return {
+          status: "error",
+          reason: message,
+          files: modified.files,
+          schemaApplied: false,
+          error: message,
+        }
+      })
+      const backendSummary = {
+        status: backend.status,
+        reason: backend.reason,
+        schemaApplied: backend.schemaApplied,
+        projectRef: backend.projectRef,
+        tables: backend.tables,
+        error: backend.error,
+      }
+
+      return {
+        files: backend.files,
+        changedPaths: modified.changedPaths,
+        backend: backendSummary,
+      }
+    }
+
     case "run_sandbox":
       return runSandbox(filterFiles(input.files as ProjectFile[]), { computerId: context.computerId })
 
@@ -1515,9 +1840,10 @@ export async function executeTool(
     case "fix_errors": {
       const fixed = await fixErrors(
         filterFiles(input.files as ProjectFile[]),
-        (input.issues as string[]) || []
+        (input.issues as string[]) || [],
+        context.shouldCancel
       )
-      return { files: fixed }
+      return fixed
     }
 
     case "deploy_site":

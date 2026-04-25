@@ -109,6 +109,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
           emitStep,
           emitStatus,
           shouldCancel: async () => {
+            if (req.signal.aborted) return true
             const latest = await ref.get()
             return latest.data()?.cancelRequested === true
           },
@@ -116,6 +117,16 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
         send({ type: "done" })
       } catch (err: any) {
+        if (err?.message === "Agent run cancelled" || req.signal.aborted) {
+          send({ type: "done" })
+          await ref.update({
+            status: "idle",
+            currentGeneratingFile: null,
+            updatedAt: FieldValue.serverTimestamp(),
+          }).catch(() => {})
+          return
+        }
+
         send({ type: "error", error: err?.message ?? "Orchestrator error" })
         await ref.update({ status: "error", updatedAt: FieldValue.serverTimestamp() }).catch(() => {})
       } finally {

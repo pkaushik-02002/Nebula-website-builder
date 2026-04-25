@@ -48,6 +48,7 @@ const TOOL_STEP_MAP = {
   browserbase_research: "research",
   plan_project: "plan",
   generate_files: "build",
+  modify_files: "build",
   run_sandbox: "build",
   verify_preview: "verify",
   fix_errors: "fix",
@@ -58,6 +59,7 @@ const TOOL_TITLE_MAP: Record<string, string> = {
   browserbase_research: "research references",
   plan_project: "draft plan",
   generate_files: "generate files",
+  modify_files: "apply changes",
   run_sandbox: "start preview",
   verify_preview: "verify preview",
   fix_errors: "repair issues",
@@ -65,7 +67,8 @@ const TOOL_TITLE_MAP: Record<string, string> = {
 }
 
 interface RunSandboxResult {
-  previewUrl: string
+  ready: boolean
+  previewUrl: string | null
   sandboxId: string
   errors: string[]
 }
@@ -82,6 +85,7 @@ interface OrchestratorContext {
   prompt: string
   browserSession: ComputerBrowserSession
   onFileGenerationProgress?: (progress: FileGenerationProgress) => Promise<void>
+  shouldCancel?: () => Promise<boolean>
 }
 
 export interface OrchestratorParams {
@@ -205,10 +209,16 @@ function sanitizeToolPayloadForFeed(payload: Record<string, unknown>): Record<st
   )
 }
 
+function isCancelledError(error: unknown): boolean {
+  return error instanceof Error && error.message === "Agent run cancelled"
+}
+
 async function runBuildAgent({
   plan,
   researchSources,
   prompt,
+  existingFiles = [],
+  followUpInstruction = null,
   context,
   emitAction,
   emitStep,
@@ -219,6 +229,8 @@ async function runBuildAgent({
   plan: ProjectPlan
   researchSources: ComputerResearchSource[]
   prompt: string
+  existingFiles?: ProjectFile[]
+  followUpInstruction?: string | null
   context: OrchestratorContext
   emitAction: OrchestratorParams["emitAction"]
   emitStep: OrchestratorParams["emitStep"]
@@ -236,6 +248,7 @@ You have these tools:
 - browserbase_research: scrape reference URLs for real content
 - plan_project: generate a structured project plan (already done - skip unless revising)
 - generate_files: write all production files for the site
+- modify_files: apply a user's follow-up request to existing files by returning only changed complete files
 - run_sandbox: boot the E2B dev server and get a live preview URL
 - verify_preview: open the live URL in a real browser, check for issues
 - fix_errors: patch specific files to resolve verification issues
@@ -252,11 +265,29 @@ RULES:
 - After 2 fix attempts, if issues persist, summarize remaining issues clearly and stop.
 - Never call deploy_site unless the user explicitly asked to deploy.
 - When verification passes, emit a clear completion message and stop.
+- If a follow-up instruction and existing files are provided, call modify_files instead of generate_files.
+- For follow-ups, preserve the current site unless the user asks for a larger redesign.
 - Do not call plan_project again — a plan has already been drafted and approved.
 
-The plan is already approved. Proceed directly to building.`
+The plan is already approved. Proceed directly to ${followUpInstruction && existingFiles.length > 0 ? "editing the existing build" : "building"}.`
 
-  const initialMessage = `Build this site now.
+  const initialMessage = followUpInstruction && existingFiles.length > 0
+    ? `Apply this follow-up instruction to the existing site.
+
+Follow-up instruction:
+${followUpInstruction}
+
+Approved plan:
+${JSON.stringify(plan, null, 2)}
+
+Research and conversation context:
+${researchDigest}
+
+Existing project files:
+${existingFiles.map((file) => `===FILE: ${file.path}===\n${file.content}\n===END_FILE===`).join("\n\n")}
+
+Start by calling modify_files with the existing files, plan, research, and follow-up instruction.`
+    : `Build this site now.
 
 Approved plan:
 ${JSON.stringify(plan, null, 2)}
@@ -377,8 +408,28 @@ Start by calling generate_files with the plan and research.`
         }).catch(() => {})
       }
 
+      if (toolName === "run_sandbox") {
+        await ref.update({
+          sandboxUrl: null,
+          sandboxId: null,
+          updatedAt: FieldValue.serverTimestamp(),
+        }).catch(() => {})
+      }
+
       try {
         const result = await executeTool(toolName, toolInput, context)
+
+        if (await shouldCancel?.()) {
+          await emitAction({
+            id: nanoid(),
+            timestamp: new Date().toISOString(),
+            type: "message",
+            actor: "system",
+            content: "Stopped by you. Send a message to continue.",
+          })
+          await emitStatus("idle")
+          return
+        }
 
         await persistArtifacts(toolName, result)
 
@@ -409,7 +460,7 @@ Start by calling generate_files with the plan and research.`
         }
 
         const backendStatus =
-          toolName === "generate_files" && result && typeof result === "object"
+          (toolName === "generate_files" || toolName === "modify_files") && result && typeof result === "object"
             ? (result as { backend?: { status?: string; reason?: string } }).backend
             : null
 
@@ -433,6 +484,22 @@ Start by calling generate_files with the plan and research.`
           content: toolOutputStr,
         })
       } catch (err: any) {
+        if (isCancelledError(err) || await shouldCancel?.()) {
+          await ref.update({
+            currentGeneratingFile: null,
+            updatedAt: FieldValue.serverTimestamp(),
+          }).catch(() => {})
+          await emitAction({
+            id: nanoid(),
+            timestamp: new Date().toISOString(),
+            type: "message",
+            actor: "system",
+            content: "Stopped by you. Send a message to continue.",
+          })
+          await emitStatus("idle")
+          return
+        }
+
         const errMsg = err?.message ?? "Tool failed"
 
         await emitAction({
@@ -507,6 +574,7 @@ export async function runComputerOrchestrator(params: OrchestratorParams): Promi
     prompt,
     browserSession,
     onFileGenerationProgress: persistFileGenerationProgress,
+    shouldCancel,
   }
   let cancelHandled = false
 
@@ -538,16 +606,24 @@ export async function runComputerOrchestrator(params: OrchestratorParams): Promi
       updates.plan = result
     }
 
-    if (toolName === "generate_files" || toolName === "fix_errors") {
+    if (toolName === "generate_files" || toolName === "modify_files" || toolName === "fix_errors") {
       const files = (result as { files?: ProjectFile[] } | null)?.files
       if (Array.isArray(files)) {
         updates.files = files
         updates.currentGeneratingFile = null
+        if (toolName === "modify_files") {
+          updates.followUpInstruction = null
+        }
         await createComputerVersion({
           computerId,
           files,
           source: toolName,
-          title: toolName === "fix_errors" ? "Fixed version" : "Generated version",
+          title:
+            toolName === "modify_files"
+              ? "Edited version"
+              : toolName === "fix_errors"
+                ? "Fixed version"
+                : "Generated version",
           prompt,
           createdBy: "agent",
           createdByUid: uid,
@@ -559,7 +635,7 @@ export async function runComputerOrchestrator(params: OrchestratorParams): Promi
 
     if (toolName === "run_sandbox" && result && typeof result === "object") {
       const sandbox = result as Partial<RunSandboxResult>
-      updates.sandboxUrl = sandbox.previewUrl ?? null
+      updates.sandboxUrl = sandbox.ready && sandbox.previewUrl ? sandbox.previewUrl : null
       updates.sandboxId = sandbox.sandboxId ?? null
       updates.currentGeneratingFile = null
     }
@@ -582,6 +658,14 @@ export async function runComputerOrchestrator(params: OrchestratorParams): Promi
       await ref.update({
         files: [],
         currentGeneratingFile: null,
+        updatedAt: FieldValue.serverTimestamp(),
+      }).catch(() => {})
+    }
+
+    if (name === "run_sandbox") {
+      await ref.update({
+        sandboxUrl: null,
+        sandboxId: null,
         updatedAt: FieldValue.serverTimestamp(),
       }).catch(() => {})
     }
@@ -609,6 +693,19 @@ export async function runComputerOrchestrator(params: OrchestratorParams): Promi
 
     try {
       const result = await executeTool(name, input, context)
+
+      if (await shouldCancel?.()) {
+        await emitAction({
+          id: nanoid(),
+          timestamp: new Date().toISOString(),
+          type: "message",
+          actor: "system",
+          content: "Stopped by you. Send another message whenever you're ready to continue.",
+        })
+        await emitStatus("idle")
+        throw new Error("Agent run cancelled")
+      }
+
       const toolOutputForFeed =
         result && typeof result === "object" && !Array.isArray(result)
           ? sanitizeToolPayloadForFeed(result as Record<string, unknown>)
@@ -637,6 +734,15 @@ export async function runComputerOrchestrator(params: OrchestratorParams): Promi
 
       return result as T
     } catch (err: any) {
+      if (isCancelledError(err) || await shouldCancel?.()) {
+        await ref.update({
+          currentGeneratingFile: null,
+          updatedAt: FieldValue.serverTimestamp(),
+        }).catch(() => {})
+        await emitStatus("idle")
+        throw new Error("Agent run cancelled")
+      }
+
       const toolError = err?.message ?? "Tool execution failed"
 
       if (name === "generate_files") {
@@ -675,6 +781,20 @@ export async function runComputerOrchestrator(params: OrchestratorParams): Promi
     const permissions = normalizePermissions(computer.permissions)
     const planningStatus = computer.planningStatus ?? "draft"
     const existingPlan = computer.plan ?? null
+    const existingFiles = Array.isArray(computer.files)
+      ? computer.files.filter((file): file is ProjectFile => {
+          return Boolean(
+            file &&
+            typeof file === "object" &&
+            typeof (file as { path?: unknown }).path === "string" &&
+            typeof (file as { content?: unknown }).content === "string"
+          )
+        })
+      : []
+    const followUpInstruction =
+      typeof computer.followUpInstruction === "string" && computer.followUpInstruction.trim()
+        ? computer.followUpInstruction.trim()
+        : null
     const mergedReferenceUrls = mergeReferenceUrls(
       Array.isArray(computer.referenceUrls) ? computer.referenceUrls : referenceUrls,
       extractReferenceUrlsFromText(prompt),
@@ -885,6 +1005,8 @@ export async function runComputerOrchestrator(params: OrchestratorParams): Promi
       plan: plan as ProjectPlan,
       researchSources,
       prompt,
+      existingFiles,
+      followUpInstruction,
       context,
       emitAction,
       emitStep,

@@ -49,15 +49,21 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       try {
         send({ type: "status", message: "Starting sandbox…" })
 
-        const { previewUrl, sandboxId, errors } = await runSandbox(files, { computerId: id })
+        await ref.update({
+          sandboxUrl: null,
+          sandboxId: null,
+          updatedAt: FieldValue.serverTimestamp(),
+        }).catch(() => {})
+
+        const { ready, previewUrl, sandboxId, errors } = await runSandbox(files, { computerId: id })
 
         await ref.update({
-          sandboxUrl: previewUrl,
+          sandboxUrl: ready && previewUrl ? previewUrl : null,
           sandboxId,
           updatedAt: FieldValue.serverTimestamp(),
         })
 
-        send({ type: "done", previewUrl, sandboxId, errors })
+        send({ type: "done", ready, previewUrl, sandboxId, errors })
       } catch (err: any) {
         send({ type: "error", error: err?.message ?? "Sandbox error" })
       } finally {
