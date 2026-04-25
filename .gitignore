@@ -29,3 +29,5 @@ next-env.d.ts
 
 # 21st Agents
 .an/
+
+firestore.rules
