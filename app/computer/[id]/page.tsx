@@ -1542,6 +1542,10 @@ export default function ComputerPage() {
       (snap) => {
         if (!snap.exists()) { setSession(null); setError("Session not found or access denied."); setLoading(false); return }
         const d = snap.data()
+        // Ownership check — deny access if session belongs to a different user
+        if (d.ownerId && d.ownerId !== user.uid) {
+          setSession(null); setError("Session not found or access denied."); setLoading(false); return
+        }
         setSession({
           id: snap.id,
           prompt:    typeof d.prompt    === "string" ? d.prompt    : undefined,

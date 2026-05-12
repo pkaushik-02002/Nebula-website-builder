@@ -1818,7 +1818,7 @@ function ProjectContent() {
     const poll = async () => {
       try {
         const authHeader = await getAuthHeader()
-        const res = await fetch(`/api/netlify/deploy/${encodeURIComponent(deployId)}`, { headers: authHeader })
+        const res = await fetch(`/api/netlify/deploy/${encodeURIComponent(deployId)}?projectId=${encodeURIComponent(projectId)}`, { headers: authHeader })
         const json = await res.json().catch(() => null)
         if (cancelled) return
         if (json?.state) setNetlifyDeployState(String(json.state))

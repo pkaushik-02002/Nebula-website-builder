@@ -169,6 +169,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing projectId" }, { status: 400 })
     }
 
+    // Verify the requesting user owns or has edit access to this project
+    const { assertProjectCanEdit } = await import("@/lib/project-access")
+    await assertProjectCanEdit(projectId, uid)
+
     const project = await getProject(projectId)
     if (!project || !project.files || project.files.length === 0) {
       return NextResponse.json({ error: "Project not found or has no files" }, { status: 404 })
