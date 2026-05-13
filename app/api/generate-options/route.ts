@@ -69,7 +69,7 @@ Return only valid JSON matching this shape:
 }`
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-4.1-mini",
+      model: "gpt-5-mini",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: `Decide whether quick choices would help for ${itemKey}, and if so generate them.` }

@@ -203,7 +203,7 @@ async function runFixAttempt(params: {
     .join("\n")
 
   const completion = await openai.chat.completions.create({
-    model: "gpt-4.1",
+    model: "gpt-5.5",
     temperature: 0.1,
     messages: [
       {

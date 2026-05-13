@@ -2845,9 +2845,9 @@ function ProjectContent() {
       const response = await fetch("/api/sandbox", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeader },
-        body: JSON.stringify({ 
-          files, 
-          projectId, 
+        body: JSON.stringify({
+          files,
+          projectId,
         }),
         signal,
       })

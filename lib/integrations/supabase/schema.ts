@@ -59,7 +59,7 @@ export async function generatePostgresSchema(input: {
     .join("\n")
 
   const completion = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
+    model: "gpt-5-mini",
     temperature: 0.2,
     messages: [
       {

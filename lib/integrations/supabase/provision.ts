@@ -74,7 +74,7 @@ export async function analyzeSupabaseProvisioningNeed(input: {
     .join("\n\n")
 
   const response = await openai.chat.completions.create({
-    model: "gpt-4.1-mini",
+    model: "gpt-5-mini",
     temperature: 0.1,
     messages: [
       {
@@ -128,7 +128,7 @@ export async function generateSupabaseIntegrationUpdates(input: {
     .join("\n")
 
   const response = await openai.chat.completions.create({
-    model: "gpt-4.1-mini",
+    model: "gpt-5-mini",
     temperature: 0.15,
     messages: [
       {

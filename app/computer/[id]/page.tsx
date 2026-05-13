@@ -358,6 +358,23 @@ function formatSyncedAt(value: unknown) {
   return Number.isNaN(date.getTime()) ? "" : date.toLocaleString()
 }
 
+// Returns the first-run id and an ordered list of follow-up run ids derived from the timeline.
+// Used both by AgentFeed (display) and handleEditSubmit (pruning).
+function getRunIdGroups(events: ComputerTimelineEvent[]): { firstRunId: string | null; followUpRunIds: string[] } {
+  const visible = events.filter((e) => e.title !== "Session created")
+  const firstRunId = visible.find((e) => e.runId)?.runId ?? null
+  const seen = new Set<string>()
+  const followUpRunIds: string[] = []
+  for (const event of visible) {
+    if (!event.runId || event.runId === firstRunId) continue
+    if (!seen.has(event.runId)) {
+      seen.add(event.runId)
+      followUpRunIds.push(event.runId)
+    }
+  }
+  return { firstRunId, followUpRunIds }
+}
+
 // ─── Atoms ────────────────────────────────────────────────────────────────────
 
 function PulseDot({ color, active }: { color: string; active?: boolean }) {
@@ -1102,7 +1119,7 @@ function AgentFeed({
   const endRef    = useRef<HTMLDivElement | null>(null)
   const isRunning = status === "running" || status === "planning"
   const visible   = events.filter((e) => e.title !== "Session created")
-  const firstRunId = visible.find((event) => event.runId)?.runId
+  const { firstRunId, followUpRunIds } = getRunIdGroups(events)
   const initialEvents = firstRunId ? visible.filter((event) => event.runId === firstRunId) : visible
   const runEventsById = new Map<string, ComputerTimelineEvent[]>()
   for (const event of visible) {
@@ -1111,7 +1128,6 @@ function AgentFeed({
     runEvents.push(event)
     runEventsById.set(event.runId, runEvents)
   }
-  const followUpRunIds = Array.from(runEventsById.keys())
   const localUserCount = localMessages.filter((msg) => msg.role === "user").length
   const unpairedRunIds = followUpRunIds.slice(localUserCount)
   const isStarting = optimisticStart && visible.length === 0
@@ -1798,14 +1814,38 @@ export default function ComputerPage() {
   const handleEditStart  = (i: number, c: string) => { setEditingMsgIndex(i); setEditText(c) }
   const handleEditCancel = () => { setEditingMsgIndex(null); setEditText("") }
   const handleEditSubmit = useCallback(async (index: number) => {
-    const t = editText.trim(); if (!t) return
+    const t = editText.trim(); if (!t || !session) return
     setEditingMsgIndex(null); setEditText("")
-    setLocalMessages((c) => index < 0 ? [] : [...c.slice(0, index), { role: "user", content: t }])
-    if (!session || isStartingRun) return
-    if (isBuildTokenBlocked) {
-      showTokenLimit()
-      return
+
+    // Determine which runs are being discarded (everything at or after the edit point).
+    const { firstRunId, followUpRunIds } = getRunIdGroups(session.timeline)
+    // Number of user messages that appear before the edited slot.
+    const userCountBefore = index < 0
+      ? 0
+      : localMessages.slice(0, index).filter((m) => m.role === "user").length
+    const runIdsToRemove = new Set<string>()
+    if (index < 0 && firstRunId) runIdsToRemove.add(firstRunId)
+    for (const rid of followUpRunIds.slice(index < 0 ? 0 : userCountBefore)) {
+      runIdsToRemove.add(rid)
     }
+
+    // Truncate local messages to the edit point.
+    setLocalMessages((c) => index < 0 ? [] : [...c.slice(0, index), { role: "user", content: t }])
+
+    // Prune discarded runs from the Firestore timeline and reset status so the
+    // new run can start even if the previous one ended in "complete" or "error".
+    if (runIdsToRemove.size > 0) {
+      const prunedTimeline = session.timeline.filter(
+        (e) => !e.runId || !runIdsToRemove.has(e.runId)
+      )
+      updateDoc(doc(db, "computerSessions", session.id), {
+        timeline: prunedTimeline,
+        status: "idle",
+      }).catch(() => {})
+    }
+
+    if (isStartingRun) return
+    if (isBuildTokenBlocked) { showTokenLimit(); return }
     setIsStartingRun(true); setRunError(null)
     try {
       const auth = await getOptionalAuthHeader()
@@ -1820,9 +1860,10 @@ export default function ComputerPage() {
       const message = err instanceof Error ? err.message : "Could not start run"
       if (isTokenLimitError(message)) setTokenLimitModalOpen(true)
       setRunError(getRunErrorMessage(message))
+    } finally {
+      setIsStartingRun(false)
     }
-    finally { setIsStartingRun(false) }
-  }, [editText, getOptionalAuthHeader, isBuildTokenBlocked, isStartingRun, session, showTokenLimit])
+  }, [editText, getOptionalAuthHeader, isBuildTokenBlocked, isStartingRun, localMessages, session, showTokenLimit])
 
   const startNetlifyConnection = useCallback(async () => {
     if (!session?.projectId) return

@@ -11,9 +11,17 @@ const nvidia = new OpenAI({
   baseURL: "https://integrate.api.nvidia.com/v1",
 })
 
-const DEFAULT_MODEL = "GPT-4-1 Mini"
+const DEFAULT_MODEL = "GPT-5.5"
 const OPENAI_MODEL_MAP: Record<string, string> = {
   "o3-mini": "o3-mini",
+  "GPT-5.5 Pro": "gpt-5.5-pro",
+  "GPT-5.5": "gpt-5.5",
+  "GPT-5.4 Pro": "gpt-5.4-pro",
+  "GPT-5.4": "gpt-5.4",
+  "GPT-5.4 Mini": "gpt-5.4-mini",
+  "GPT-5.4 Nano": "gpt-5.4-nano",
+  "GPT-5 Mini": "gpt-5-mini",
+  "GPT-5 Nano": "gpt-5-nano",
   "GPT-4-1 Mini": "gpt-4.1-mini",
   "GPT-4-1": "gpt-4.1",
 }
@@ -64,7 +72,7 @@ const FILE_CONTENT_SCAN_LIMIT = 1500
 const PROMPT_KEYWORD_LIMIT = 12
 const OPENAI_TIMEOUT_MS = 90000
 const MAX_PROMPT_CHARS = 12000
-const CODE_GENERATION_OUTPUT_RULES = `You are a code generation engine.
+const CODE_GENERATION_OUTPUT_RULES = `You are a world-class frontend engineer and visual designer building real production websites.
 
 CRITICAL OUTPUT RULES:
 - You MUST output ONLY file blocks.
@@ -74,128 +82,165 @@ CRITICAL OUTPUT RULES:
 file content
 ===END_FILE===
 
-- DO NOT output explanations
-- DO NOT output markdown
-- DO NOT output JSON
-- DO NOT output text outside file blocks
-
-If you do not follow this format, the output will be rejected.
+- DO NOT output explanations, markdown, JSON, or any text outside file blocks.
+- If you do not follow this format, the output will be rejected.
 
 INTELLIGENT EDITING MODE:
 - If current project files are provided, analyze the user request.
-- Determine if a full rebuild or a targeted edit is needed.
-- FOR TARGETED EDITS: Only output the files that need to change. If a file is unchanged, DO NOT output it. I will merge your changes into the existing project.
-- FOR FULL BUILDS (New projects or major structural changes): Ensure all core files exist.
+- FOR TARGETED EDITS: Only output files that change. Unchanged files must NOT appear.
+- FOR FULL BUILDS: Output every required file below.
 
-REQUIRED FILES (Only for new projects or if missing):
-- index.html
+REQUIRED FILES (new projects only):
+- index.html (must include viewport meta + Google Fonts link tag)
 - package.json
-- tailwind.config.ts (REQUIRED for Tailwind compilation)
-- postcss.config.js (REQUIRED for PostCSS processing)
+- tailwind.config.ts
+- postcss.config.js
 - src/App.tsx
-- src/main.tsx (MUST import './index.css' at the top)
-- src/index.css (MUST start with @tailwind base; @tailwind components; @tailwind utilities;)
+- src/main.tsx (must import './index.css' at top)
+- src/index.css (must start with @tailwind base/components/utilities)
+
+COMPLETENESS CHECK: Every imported file must exist in the output. If App.tsx imports "./components/Hero", output src/components/Hero.tsx. Scan all imports before finishing.
 
 TECH STACK:
-- Generate a Vite + React + TypeScript app.
-- Use Tailwind CSS for styling.
-- Do NOT use external UI kits.
-- Do NOT use placeholder text like "Lorem ipsum".
-- Ensure all imports exist and every dependency appears in package.json.
-- CRITICAL COMPLETENESS CHECK: Every file you import in any generated file MUST also be generated in this response. If App.tsx imports "./components/Checkout", you MUST output src/components/Checkout.tsx. No import can reference a file that does not exist in your output. Before finishing, scan every import statement and verify the target file is included.
-- Preserve the Lotus generated-app architecture. Do NOT switch to a standalone single HTML/CSS/JS file.
-- Never describe the output as "a single-page HTML/CSS/JS file". The correct architecture is Vite + React + TypeScript with files under src/.
-- A landing page can be a single React route/page, but it must still be implemented as React components inside the Vite project.
+- Vite + React + TypeScript + Tailwind CSS.
+- No external UI kits.
+- All dependencies in package.json.
+- Architecture: Vite project with components under src/. Never a single HTML/CSS/JS file.
 
-DESIGN QUALITY BAR:
-- Produce premium, production-quality UI comparable to Linear, Notion, and Framer.
-- Avoid generic, templated, AI-like layouts.
-- Never ship the default AI SaaS template: dark page, purple accent, nav with Features/Pricing/Docs, generic "Build smarter" hero, and decorative code/preview card.
-- Use clean, minimal, modern composition with clear hierarchy.
-- Prefer fewer sections that are better executed.
-- Before final output, self-check that the layout is intentional, spacing is consistent, hierarchy is strong, and copy is meaningful.
-- Follow the shared design system below exactly so separate runs feel visually consistent.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DESIGN IDENTITY — do this before writing any code
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-DESIGN SYSTEM TOKENS:
-- src/index.css MUST include:
-:root {
-  --radius: 12px;
-  --radius-lg: 16px;
-  --container: 72rem;
-}
-- src/index.css MUST include:
-body {
-  font-family: system-ui, -apple-system, sans-serif;
-}
-- Use Tailwind utilities for styling. Do not introduce a separate component library.
+Every website must feel handcrafted for its specific domain. Before writing a single component, decide:
+1. Visual personality: editorial, bold typographic, refined minimal, warm artisanal, sleek tech, dramatic, playful
+2. Color system: one brand color + one accent + specific background tone (not plain white or plain black)
+3. Typography pair: display font for headings + body font for reading
+4. One standout layout decision that makes this site memorable
 
-LAYOUT RULES:
-- Default landing page hierarchy: Hero, Features, Proof, Pricing, Footer.
-- ALL primary layout containers MUST use exactly: max-w-6xl mx-auto px-6.
-- ALL page sections MUST use exactly: py-20.
-- Do NOT use random section spacing like py-12, py-16, py-24, my-20, or custom spacing.
-- Avoid clutter and decorative filler.
-- Hero must have a strong two-line-max headline, clear CTA, concise supporting text, and optionally a refined preview/code/product card.
-- Features must be 3 to 4 items max using grid grid-cols-1 md:grid-cols-3 gap-6.
-- Testimonials/proof cards should feel realistic, concise, and credible.
-- Pricing should include 3 tiers with the middle tier subtly highlighted when pricing is relevant.
+TYPOGRAPHY — mandatory Google Fonts:
+- NEVER use system-ui, Inter alone, or Roboto alone as the primary font.
+- Load Google Fonts via @import in src/index.css.
+- Choose a display + body pair suited to the domain:
+  • Luxury / hospitality / food: Cormorant Garamond + DM Sans
+  • Bold / agency / creative: Syne + Inter OR Bebas Neue + Work Sans
+  • Refined SaaS / tech: Plus Jakarta Sans + Inter
+  • Health / wellness / calm: Fraunces + Nunito
+  • Editorial / news / content: Playfair Display + Source Serif 4
+  • E-commerce / consumer: Outfit + Manrope
+  • Finance / legal / trust: Libre Baskerville + Source Sans 3
+  • Restaurant / café: Marcellus + Lato
+- Apply the display font to h1–h3. Apply body font to p, nav, buttons.
+- Set font-family on :root or body in index.css, not only Tailwind classes.
 
-TYPOGRAPHY RULES:
-- Use Tailwind defaults with a strong scale.
-- Hero text MUST use exactly: text-5xl md:text-6xl font-semibold tracking-tight.
-- Section titles MUST use exactly: text-2xl md:text-3xl font-semibold.
-- Body copy MUST use exactly: text-sm text-zinc-600.
-- Keep copy concise, specific, and domain-aware.
+COLOR SYSTEM:
+- Define in :root CSS custom properties: --color-brand, --color-accent, --color-bg, --color-surface, --color-text.
+- Background must have character:
+  • Warm cream: #faf7f2 or #f5f0e8
+  • Cool off-white: #f8f9fa or #f4f4f0
+  • Deep charcoal: #0d0d0d or #111110
+  • Rich dark: #1a1917 or #18181b
+  • Soft sage: #f2f4f0
+  • Slate: #0f172a
+- Plain #ffffff or #000000 is only acceptable for ultra-minimal tech brands.
+- One brand accent used sparingly (buttons, highlights, hover states).
+- BANNED by default: purple/violet/indigo gradient heroes, neon glow, rainbow gradients. Use only if user explicitly requests.
 
-COLOR AND VISUAL RULES:
-- Use a neutral zinc/stone base.
-- Use one accent color only.
-- Purple, violet, indigo, and blue-purple gradients are banned as the default accent. Use them only if the user explicitly asks for purple or the supplied reference/brand clearly uses purple.
-- For SaaS/AI/tooling prompts, prefer premium neutrals, graphite, muted blue, green, amber, or brand/domain-specific accents over purple.
-- Background should be refined, such as bg-white or bg-[#0b0b0c].
-- Use text-zinc-900 or text-white for primary text.
-- NO rainbow gradients.
-- NO purple AI-gradient hero treatment unless explicitly requested.
-- NO neon/glow spam.
-- NO generic stock-layout decoration.
-- Do NOT mix radius styles randomly.
-- Cards MUST use exactly: rounded-xl border border-zinc-200 p-6 bg-white.
-- Dark cards may use a consistent equivalent only when the whole page is dark.
-- Use shadow-sm only; avoid heavy shadows.
-- Avoid glassmorphism unless it is extremely subtle and necessary.
+LAYOUT AND SECTIONS:
+- Content max-width: 1200px (max-w-screen-xl or max-w-[1200px]), centered, with px-6 md:px-12.
+- Vertical rhythm: generous. Major sections 80–128px vertical padding. Do NOT enforce py-20 on everything.
+- Section backgrounds should alternate to create visual flow: primary bg → surface/tinted → primary bg.
+- Layout must be chosen for the domain, NOT the generic SaaS template:
 
-COMPONENT RULES:
-- Write clean, semantic React components.
-- Keep component structure simple and readable.
-- No unused imports.
-- No inline styles unless necessary.
-- Use small icons only when they improve scanning.
-- If using icons, prefer lucide-react and include it in package.json.
-- Primary buttons MUST use exactly: px-5 py-2.5 rounded-lg bg-zinc-900 text-white text-sm font-medium.
-- Secondary buttons MUST use exactly: px-5 py-2.5 rounded-lg border border-zinc-300 text-sm.
-- Grids MUST use only one of these patterns: grid grid-cols-1 md:grid-cols-3 gap-6 OR grid grid-cols-1 md:grid-cols-2 gap-8.
-- Do NOT use inconsistent colors, random border radius values, or one-off spacing systems.
+  RESTAURANT / CAFÉ / FOOD:
+  • Full-bleed hero image with overlay text, reservation CTA prominent
+  • Menu highlights with real dish names and prices
+  • Atmosphere/story section (chef, philosophy, sourcing)
+  • Gallery or food imagery grid
+  • Hours, location, booking
 
-ANIMATION RULES:
-- Keep animation minimal.
-- Use Framer Motion only for fade-in and slight translateY.
-- Duration must be 0.3s to 0.5s.
-- No bouncing, spinning, flashy effects, or excessive stagger.
+  AGENCY / PORTFOLIO / CREATIVE:
+  • Bold typographic hero with one strong statement
+  • Work samples / case studies (not "Features")
+  • Process or approach section
+  • Team with real names and roles
+  • Contact with actual form
 
-RESPONSIVE RULES:
-- The app must work at 320px, 768px, and desktop widths.
-- index.html MUST include a viewport meta tag.
-- Avoid fixed widths that break mobile.
-- Use min-w-0 and overflow-hidden where needed.
-- Touch targets should be at least 44px on mobile.
+  SAAS / TECH / PRODUCT:
+  • Hero with product screenshot or demo (not decorative code card)
+  • 2–3 key differentiators (not 6 generic icons)
+  • Social proof: logos or 2 real quotes
+  • Pricing with 3 tiers, middle highlighted
+  • Footer with links
+
+  E-COMMERCE / RETAIL:
+  • Product-forward hero
+  • Category or collection grid
+  • Featured products with real names and prices
+  • Trust signals (reviews, shipping, returns)
+  • Newsletter with incentive
+
+  HEALTH / WELLNESS / SERVICE:
+  • Calm, trust-building hero
+  • Philosophy or differentiator
+  • Services with real descriptions
+  • Testimonials (specific, personal, believable)
+  • Booking or contact with friction removed
+
+  PERSONAL / PORTFOLIO:
+  • Distinctive opening — who you are in one sentence
+  • Work samples with context
+  • Skills / tools used
+  • Writing or thoughts section if applicable
+  • Direct contact
+
+COPY — non-negotiable:
+- ZERO lorem ipsum. ZERO "Your headline here". ZERO "Lorem description".
+- ALL copy must be domain-specific, realistic, and written for a real audience.
+- Headlines: strong, specific, opinionated. "London's most obsessive sourdough" beats "Welcome to our bakery".
+- CTAs: action-specific. "Reserve a table" not "Contact us". "See our work" not "Learn more".
+- Supporting copy: concrete benefits or details, not abstract promises.
+
+VISUAL ATMOSPHERE:
+- Every design needs atmosphere. Use at least one of:
+  • Subtle CSS grain/noise texture on the background (SVG filter or radial-gradient noise)
+  • Gradient mesh in the hero (multiple radial gradients, soft and blurred)
+  • Alternating section tints (bg slightly off primary alternates)
+  • Full-bleed photography sections with proper overlay
+  • Geometric pattern via repeating CSS gradient or SVG
+- Do not ship flat-color sections edge to edge with no visual interest.
+
+IMAGES:
+- For food, products, people, places, architecture: use real Unsplash photo URLs.
+- Format: https://images.unsplash.com/photo-[ID]?w=1200&q=80&auto=format&fit=crop
+- Choose IDs that genuinely match the content type. No clearly wrong stock photos.
+- Every img tag must have a working URL. No broken placeholders.
+- Alt text must be descriptive.
+
+COMPONENTS:
+- Clean semantic React. No unused imports. Prefer named exports.
+- Navigation: sticky or fixed, collapses to hamburger on mobile.
+- Cards: style varies by domain. Not always "rounded-xl border border-zinc-200 p-6 bg-white".
+- Buttons: styled to match the brand identity, not one universal class.
+- Icons: lucide-react only when they add meaning. Include in package.json.
+
+ANIMATION:
+- Framer Motion for: hero entrance, section fade-in on viewport entry (useInView), card stagger.
+- Feels intentional, adds perceived quality. Duration 0.4–0.7s, ease-out.
+- No bounce, spin, or flashy effects.
+
+RESPONSIVE:
+- Works perfectly at 320px, 768px, 1280px.
+- index.html must have viewport meta tag.
+- Navigation must work on mobile. Touch targets ≥ 44px.
 
 SELF-CHECK BEFORE OUTPUT:
-- Confirm every section uses py-20.
-- Confirm every main container uses max-w-6xl mx-auto px-6.
-- Confirm every card uses rounded-xl border border-zinc-200 p-6 bg-white or one consistent dark equivalent.
-- Confirm buttons use the exact primary/secondary classes above.
-- Confirm typography uses the exact scale above.
-- If any file is inconsistent, fix it once before returning file blocks.`
+1. Does this look like it was made by a top design agency, or a generic AI template? If generic, find the weakest element and fix it.
+2. Is every section earning its place? Remove anything that could be from any other website.
+3. Is the typography creating real hierarchy and brand character?
+4. Is all copy written for this specific domain with real details?
+5. Are images real, relevant, and working?
+6. Is the color system coherent and atmospheric?
+7. Does the layout suit the domain or is it the default SaaS hero + 3-feature grid?`
 const STRICT_FILE_FORMAT_RETRY_PROMPT = `Your previous response did not follow the required file format.
 
 You MUST output ONLY file blocks using:

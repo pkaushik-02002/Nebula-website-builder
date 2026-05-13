@@ -6,7 +6,8 @@
       "Bash(git check-ignore *)",
       "Bash(node -e ' *)",
       "Bash(powershell -Command \"\\(Get-Content app/terms/page.tsx -Raw\\) -replace 'support@lotus-build\\\\.app', 'arpkwebsitedevelopment@gmail.com' -replace 'https://lotus-build\\\\.app', 'https://lotus-build.vercel.app' | Set-Content app/terms/page.tsx -Encoding utf8\")",
-      "Bash(powershell -Command \"\\(Get-Content app/privacy/page.tsx -Raw\\) -replace 'support@lotus-build\\\\.app', 'arpkwebsitedevelopment@gmail.com' -replace 'https://lotus-build\\\\.app', 'https://lotus-build.vercel.app' | Set-Content app/privacy/page.tsx -Encoding utf8\")"
+      "Bash(powershell -Command \"\\(Get-Content app/privacy/page.tsx -Raw\\) -replace 'support@lotus-build\\\\.app', 'arpkwebsitedevelopment@gmail.com' -replace 'https://lotus-build\\\\.app', 'https://lotus-build.vercel.app' | Set-Content app/privacy/page.tsx -Encoding utf8\")",
+      "Bash(e2b template *)"
     ]
   }
 }

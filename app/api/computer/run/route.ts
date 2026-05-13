@@ -1233,36 +1233,31 @@ async function createAgentWebPlan(prompt: string, planText: string, profile?: Co
     const response = await createComputerAgentMessage(anthropic, {
       max_tokens: 250,
       temperature: 0,
-      system: `
-You are planning autonomous web tool use for an AI website/app builder.
+      system: `You are directing web research for an AI website builder. Your job is to maximise the quality of design evidence gathered before code generation.
 
-Available actions:
-- search_web
-- inspect_page
-- collect_dom
-- scrape_fallback
-- generate_frontend
-- skip
+Available actions: search_web, inspect_page, collect_dom, scrape_fallback, generate_frontend, skip
 
-Rules:
-- Return ONLY JSON.
-- Detected URLs strongly favor inspect_page and collect_dom.
-- Localhost, 127.0.0.1, .local, and Lotus /computer/ URLs are internal app/runtime URLs. Never inspect them with browser tools.
-- Clone/reference URLs require page inspection.
-- Research/latest/current/competitor requests may use search_web.
-- New website/app builds without URLs should usually use search_web, then inspect_page and collect_dom for design inspiration before generation.
-- Simple edits to an existing project can skip web tools.
-- TinyFish is not a browser; it is only fallback scrape context and is not part of this plan.
+Decision rules:
+- User provides a URL → always inspect_page + collect_dom on that URL. This is a reference or clone request.
+- User says "like X" or "similar to X" or "inspired by X" (no URL) → search_web to find X, then inspect_page + collect_dom on the top result.
+- New website build with no URL and no reference → search_web for "[domain] website design [year]" to collect real design patterns and competitor layouts before generating.
+- Simple edit to existing project (color, text, single component) → skip.
+- Never inspect localhost, 127.0.0.1, .local, or /computer/ URLs — these are internal runtime URLs.
+- TinyFish is not a browser tool and must not appear in actions.
 
-Format:
+Search query rules:
+- Be specific. For a bakery: "artisan bakery website design 2024" not "bakery website".
+- Target design-forward sources: Awwwards, Behance, actual business websites — not template galleries.
+- For competitor research: "[industry] [location] [business type]" to find real competitors.
+
+Return ONLY valid JSON:
 {
-  "actions": ["..."],
+  "actions": ["search_web"|"inspect_page"|"collect_dom"|"skip"],
   "targetUrls": ["https://..."],
-  "searchQuery": "query or empty string",
+  "searchQuery": "specific search query or empty string",
   "intent": "inspiration|reference|research|build|edit|unknown",
-  "reason": "short reason"
-}
-`,
+  "reason": "one sentence explaining the research strategy"
+}`,
       messages: [
         {
           role: "user",
@@ -1343,29 +1338,54 @@ DESIGN SPECIFICATION — treat the web context above as a hard design brief, not
 - Copy must be domain-specific and written for the actual business. Zero placeholder text, zero "Lorem ipsum", zero "Your tagline here".
 - If multiple pages were inspected, use the strongest consistent signals across all of them.
 
-FRONTEND DESIGN SKILL — apply before writing any code:
-- Commit to a bold aesthetic direction suited to the domain.
-- Pair a distinctive display font with a body font via Google Fonts. Never default to Inter, Roboto, or system-ui.
-- Build a CSS custom property palette. One dominant color with one sharp accent.
-- Purple, violet, indigo gradients are banned as defaults. Use them only if the reference or user explicitly calls for them.
-- Every interactive element needs a hover state and transition.
-- Use Framer Motion for entrance animations and stagger effects.
-- Create atmosphere with gradient meshes, textures, or geometric patterns appropriate to the domain.
-- If no web evidence was collected, apply domain intelligence:
-    food/hospitality → warm palette, serif, appetite-triggering copy
-    SaaS/tech → clean density, muted blue or graphite, data-forward
-    creative/agency → bold type, asymmetric, portfolio-style
-    health/wellness → calming palette, trust signals, clean minimal
-    finance/legal → authoritative, conservative, trust-first
-    e-commerce → product-first, conversion-optimized, social proof
+DESIGN IDENTITY — decide before writing any component:
+1. Visual personality (editorial, bold typographic, warm artisanal, sleek tech, dramatic, playful — pick one)
+2. Color system: brand color + accent + atmospheric background — not plain white or black
+3. Typography pair from Google Fonts suited to the domain
+4. One standout layout decision that makes this site distinctive
+
+TYPOGRAPHY — mandatory Google Fonts (load via @import in index.css):
+- NEVER use system-ui or Inter alone. Always pair a display font with a body font.
+- Domain pairings:
+    food/hospitality/luxury → Cormorant Garamond + DM Sans OR Marcellus + Lato
+    agency/creative/bold → Syne + Inter OR Bebas Neue + Work Sans
+    SaaS/tech/product → Plus Jakarta Sans + Inter
+    health/wellness → Fraunces + Nunito
+    e-commerce/retail → Outfit + Manrope
+    finance/legal/trust → Libre Baskerville + Source Sans 3
+    editorial/content → Playfair Display + Source Serif 4
+- Display font on h1–h3. Body font on p, nav, buttons.
+
+COLOR AND ATMOSPHERE:
+- Define --color-brand, --color-accent, --color-bg, --color-surface, --color-text in :root.
+- Background must have character: warm cream (#faf7f2), cool off-white (#f4f4f0), deep charcoal (#111110), rich dark (#1a1917).
+- Every design needs atmosphere: CSS grain texture, gradient mesh, alternating section tints, or full-bleed photography.
+- BANNED: purple/violet gradient defaults, neon glow, rainbow gradients, flat white with no texture.
+
+COPY — non-negotiable:
+- ZERO lorem ipsum. ZERO placeholder text. ZERO generic taglines.
+- ALL copy must be domain-specific, opinionated, written for a real audience.
+- Headlines: strong and specific. "London's most obsessive sourdough" not "Welcome to our bakery".
+- CTAs: action-specific. "Reserve a table" not "Contact us".
+
+LAYOUT — domain-driven, not template-driven:
+- Restaurant/food: full-bleed hero image → menu highlights with real prices → story/atmosphere → hours/location
+- Agency/creative: bold typographic hero → work samples → process → team → contact form
+- SaaS/tech: product screenshot hero → 2–3 key differentiators → social proof → pricing → CTA
+- E-commerce: product-forward hero → category grid → featured items with prices → trust signals
+- Health/wellness: calm trust-building hero → philosophy → services with descriptions → testimonials → booking
+- Section backgrounds must alternate for visual flow. Vertical padding: 80–128px on major sections.
+
+IMAGES:
+- Use real Unsplash URLs: https://images.unsplash.com/photo-[ID]?w=1200&q=80&auto=format&fit=crop
+- Match photo IDs to actual content. Every img must have a working URL.
 
 ABSOLUTE BANS:
-- Default dark page, purple accent, Features/Pricing/Docs nav, generic hero, decorative code preview card.
-- Inter or Space Grotesk as the only font.
-- Flat solid backgrounds with no atmosphere.
-- Placeholder copy anywhere in the output.
-- Repeating the exact same Lotus self-promotional template.
-- "Build websites faster, smarter..." style generic AI-builder hero copy unless the user specifically asks for that wording.
+- Generic AI template: dark page + purple gradient + Features/Pricing/Docs nav + "Build smarter" hero.
+- Flat backgrounds with no atmosphere.
+- Placeholder copy anywhere.
+- system-ui as the only font.
+- Decorative code/preview card as a hero element unless the product IS a code tool.
 
 If the request is to recreate or draw inspiration from a website, build a frontend-only React/Tailwind implementation with responsive layout and local-only interactions. Do not reproduce backend behavior, authentication, payments, private data, or third-party scripts unless explicitly asked.`
 }
@@ -1409,7 +1429,7 @@ export async function POST(req: Request) {
     const runProfile = getComputerRunProfile(prompt, projectFiles.length > 0)
     const builderModel = typeof data.model === "string" && data.model.trim()
       ? data.model.trim()
-      : "GPT-4-1 Mini"
+      : "GPT-5.5"
     const authHeader =
       req.headers.get("authorization") || req.headers.get("Authorization") || ""
     const now = new Date()
@@ -1464,12 +1484,12 @@ export async function POST(req: Request) {
 
     if (runProfile.shouldShowDetailedNarration) {
       const understandingNarration = await createComputerAgentMessage(anthropic, {
-        max_tokens: 160,
+        max_tokens: 200,
         temperature: 0.3,
-        system: "You are an autonomous agent narrating your reasoning. First person. 2-3 sentences. Plain text. No markdown.",
+        system: "You are an autonomous website builder agent. Write 2-3 sentences in first person, plain text, no markdown. State: (1) what you understand the user wants built and the specific domain or business type, (2) your immediate instinct for the visual direction or key design challenge this presents, (3) one specific thing you will do to make this feel authentic to the domain rather than generic.",
         messages: [{
           role: "user",
-          content: `User request: ${prompt}\n\nRun profile: ${JSON.stringify(runProfile)}\n\nIn 2-3 sentences, explain what you understand this request to be and what your first instinct is for how to approach it.`
+          content: `User request: ${prompt}`
         }]
       }).catch(() => null)
 
@@ -1495,16 +1515,26 @@ export async function POST(req: Request) {
         const clarificationRes = await createComputerAgentMessage(anthropic, {
           max_tokens: 500,
           temperature: 0,
-          system: `You analyze user prompts for a web/app builder and decide if the request is too vague to build meaningfully.
+          system: `You are a design consultant for an AI website builder. Your job is to decide whether the user's request has enough detail to produce a great, domain-specific website — and if not, ask the one or two questions that would make the biggest difference to design quality.
 
-ONLY ask for clarification when the request is genuinely ambiguous — e.g. single words, "make me an app", "build a website", "create something cool", or domain+nothing (e.g. "a todo app" is fine, but "an app" is not).
+Ask for clarification ONLY when the request is genuinely too vague to make good design decisions. Trigger conditions:
+- Bare domain with no context: "a bakery", "a gym", "a portfolio" — need to know what makes it distinctive
+- No indication of tone, audience, or business personality
+- Missing critical content: a restaurant with no name, a portfolio with no profession
 
 Do NOT ask when:
-- The request has enough domain, purpose, or content context to produce a reasonable result
-- The request mentions a specific type, industry, or feature
-- A URL is present in the prompt
+- The request names a specific business, product, or person
+- The request mentions style, colors, or references ("like Apple's site", "dark and minimal")
+- A URL is provided
+- The request is specific enough: "a landing page for a London sushi restaurant" is fine
 
-If clarification IS needed, generate 1–3 focused QuestionConfig objects. Keep question titles short, options practical (max 5 per question). At least one question must have kind "single" or "multi" with options.
+When asking, ask the questions that MOST affect visual design quality:
+- Business name / tagline (for copy and identity)
+- Visual style preference (bold/editorial vs minimal/clean vs warm/artisanal vs bold/dark)
+- Target audience or key differentiator (one sentence)
+- Specific color or feel preferences
+
+Generate 1–3 QuestionConfig objects max. Options must be concrete and visually distinct (not "modern" and "classic" — those are meaningless). At least one question must have kind "single" or "multi" with options.
 
 Return ONLY valid JSON, no markdown:
 {
@@ -1581,21 +1611,38 @@ Return ONLY valid JSON, no markdown:
       })
     } else try {
       const response = await createComputerAgentMessage(anthropic, {
-        max_tokens: 500,
+        max_tokens: 700,
         temperature: 0.2,
-        system: `
-You are an expert product and software planning agent.
+        system: `You are a senior product designer and frontend architect creating a build brief for a website or web application.
 
-Your job is to evaluate the user request and decide if an explicit execution plan is needed.
-- For simple requests (e.g., color changes, minor bug fixes, updating text, single component tweaks), output EXACTLY: SKIP_PLAN
-- For complex requests (e.g., building a new app, adding a complex feature, architectural changes), produce a clear, structured, and concise execution plan.
+For simple edits (text change, color tweak, single component fix, minor layout adjustment): output exactly SKIP_PLAN.
+
+For all other requests, produce a precise BUILD BRIEF using this structure:
+
+**Purpose & Audience**
+One sentence: what this site does and who it is for.
+
+**Domain & Tone**
+Identify the domain (restaurant, SaaS, portfolio, e-commerce, agency, health, finance, etc.) and the correct visual tone for that domain. Be specific — "warm artisanal bakery" beats "food website".
+
+**Visual Identity**
+- Color: primary brand color + accent + background tone (with specific hex values)
+- Typography: Google Fonts display/heading font + body font pair appropriate for the domain
+- Mood: 3 adjectives that define the visual character
+
+**Section Architecture**
+List exactly which sections to build, in order, with one sentence on what each must accomplish. No filler sections. Minimum 4, maximum 7 sections for a landing page.
+
+**Standout Element**
+One specific design decision that makes this site distinctive and not generic. Be concrete: "full-bleed hero image with parallax text overlay" or "large editorial headline spanning full viewport width" or "asymmetric two-column feature layout with floating stat cards".
+
+**Copy Strategy**
+Key headline (write the actual hero headline), primary CTA text, and tone of voice guide for the rest of the copy.
 
 Rules:
-- No code
-- No assumptions about tools
-- Focus on real-world steps
-- Keep it structured and concise
-`,
+- No code. No assumptions about implementation details.
+- Every decision must be justified by the domain. A bakery and a SaaS product must look completely different.
+- Be opinionated. Vague plans produce generic output.`,
         messages: [
           {
             role: "user",
@@ -1707,12 +1754,12 @@ Rules:
         })
 
         const researchNarration = await createComputerAgentMessage(anthropic, {
-          max_tokens: 160,
+          max_tokens: 200,
           temperature: 0.3,
-          system: "You are an autonomous agent narrating your reasoning. First person. 2-3 sentences. Plain text. No markdown.",
+          system: "You are an autonomous website builder agent narrating a research phase. First person, plain text, no markdown, 2-3 sentences. Extract design-relevant signals: what color palettes, layout patterns, typography styles, or content structures appeared across the results that are worth applying to this build. Be specific — name colors, describe layouts, mention font styles.",
           messages: [{
             role: "user",
-            content: `User request: ${prompt}\n\nSearch results summary:\n${summarizeWebEvidence(searchEvidence)}\n\nIn 2-3 sentences, describe what you found in these results and how you plan to use this information in the build.`
+            content: `User request: ${prompt}\n\nSearch results:\n${summarizeWebEvidence(searchEvidence)}`
           }]
         }).catch(() => null)
 
@@ -1804,12 +1851,12 @@ Rules:
         })
 
         const browserNarration = await createComputerAgentMessage(anthropic, {
-          max_tokens: 160,
+          max_tokens: 220,
           temperature: 0.3,
-          system: "You are an autonomous agent narrating your reasoning. First person. 2-3 sentences. Plain text. No markdown.",
+          system: "You are an autonomous website builder agent narrating a page inspection. First person, plain text, no markdown, 2-3 sentences. Extract and name specific design decisions you observed: exact color palette, heading font style, layout structure, hero treatment, spacing density, button style, background treatment. State concretely what you will carry into the build.",
           messages: [{
             role: "user",
-            content: `User request: ${prompt}\n\nPage inspected: ${targetUrl}\nPage title: ${inspection.pageTitle}\n\nWhat I found:\n${inspection.summary.slice(0, 800)}\n\nIn 2-3 sentences, describe what stood out on this page and what specific elements you plan to incorporate or recreate.`
+            content: `User request: ${prompt}\n\nPage: ${targetUrl}\nTitle: ${inspection.pageTitle}\n\nInspection data:\n${inspection.summary.slice(0, 1000)}`
           }]
         }).catch(() => null)
 
@@ -1986,12 +2033,12 @@ ${formatWebEvidenceList(usableWebEvidence.filter((evidence) => evidence.sourceUr
 
     if (runProfile.shouldShowDetailedNarration) {
     const buildNarration = await createComputerAgentMessage(anthropic, {
-      max_tokens: 160,
+      max_tokens: 220,
       temperature: 0.3,
-      system: "You are an autonomous agent narrating your reasoning. First person. 2-3 sentences. Plain text. No markdown.",
+      system: "You are an autonomous design and engineering agent. Write a commit statement in first person — 3-4 sentences, no markdown. State: (1) the specific visual identity you are committing to, naming the font pair and color direction, (2) the standout layout decision for the hero or most important section, (3) what makes this site feel handcrafted for this domain rather than generic.",
       messages: [{
         role: "user",
-        content: `User request: ${prompt}\n\nPlan:\n${planText.slice(0, 600)}\n\nResearch summary:\n${formatWebEvidenceList(usableWebEvidence).slice(0, 400)}\n\nIn 2-3 sentences, explain your concrete approach to building this — what you will prioritise, what it will look like, and what framework or structure you will use.`
+        content: `User request: ${prompt}\n\nBuild plan:\n${planText.slice(0, 800)}\n\nResearch gathered:\n${formatWebEvidenceList(usableWebEvidence).slice(0, 500)}`
       }]
     }).catch(() => null)
 
@@ -2017,6 +2064,19 @@ ${formatWebEvidenceList(usableWebEvidence.filter((evidence) => evidence.sourceUr
 
     const requestOrigin = new URL(req.url).origin
     const baseUrl = process.env.BASE_URL || process.env.NEXTAUTH_URL || requestOrigin
+
+    // Fire-and-forget: pre-create a sandbox and warm its npm cache while generation runs.
+    // By the time generation finishes (~15-30s), most packages are cached → sandbox install
+    // takes 2-5s instead of 25s.
+    let prewarmSandboxId: string | null = null
+    fetch(`${baseUrl}/api/sandbox/prewarm`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: authHeader },
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d?.sandboxId) prewarmSandboxId = d.sandboxId })
+      .catch(() => {})
+
     const generationPrompt = buildAgentGenerationPrompt({
       prompt,
       planText,
@@ -2528,7 +2588,11 @@ Instructions:
             "Content-Type": "application/json",
             Authorization: authHeader,
           },
-          body: JSON.stringify({ files: generatedFiles, projectId: sandboxProjectId }),
+          body: JSON.stringify({
+            files: generatedFiles,
+            projectId: sandboxProjectId,
+            ...(prewarmSandboxId ? { sandboxId: prewarmSandboxId } : {}),
+          }),
         })
 
         // Sandbox route streams NDJSON — consume all lines to find success/error events

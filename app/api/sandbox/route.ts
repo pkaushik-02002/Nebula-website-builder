@@ -165,7 +165,7 @@ async function portListening(sandbox: Sandbox, port: number): Promise<boolean> {
       sandbox,
       `bash -c '
         if command -v ss >/dev/null 2>&1; then
-          ss -tln 2>/dev/null | awk "{print \\$4}" | grep -Eq "(^|:)${port}$" && echo "LISTEN" && exit 0
+          ss -tln 2>/dev/null | grep -qE ":${port}[^0-9]" && echo "LISTEN" && exit 0
         fi
         if command -v lsof >/dev/null 2>&1; then
           lsof -iTCP:${port} -sTCP:LISTEN -n -P 2>/dev/null | grep -q . && echo "LISTEN" && exit 0
@@ -174,7 +174,7 @@ async function portListening(sandbox: Sandbox, port: number): Promise<boolean> {
           nc -z 127.0.0.1 ${port} >/dev/null 2>&1 && echo "LISTEN" && exit 0
         fi
         if command -v node >/dev/null 2>&1; then
-          node -e "const net=require('net');const s=net.connect(${port},'127.0.0.1');s.setTimeout(1000);s.on('connect',()=>{console.log('LISTEN');s.destroy();});s.on('timeout',()=>{console.log('NO');s.destroy();});s.on('error',()=>console.log('NO'));"
+          node -e "const net=require('"'"'net'"'"');const s=net.connect(${port},'"'"'127.0.0.1'"'"');s.setTimeout(1000);s.on('"'"'connect'"'"',()=>{console.log('"'"'LISTEN'"'"');s.destroy();});s.on('"'"'timeout'"'"',()=>{console.log('"'"'NO'"'"');s.destroy();});s.on('"'"'error'"'"',()=>console.log('"'"'NO'"'"'));"
           exit 0
         fi
         echo "NO"
@@ -1211,7 +1211,8 @@ export async function POST(req: Request) {
           }
 
           try {
-            sandbox = await Sandbox.create("base", opts)
+            const templateId = process.env.E2B_TEMPLATE_ID || "base"
+            sandbox = await Sandbox.create(templateId, opts)
             console.log(`[sandbox] Created new sandbox: ${sandbox.sandboxId}`)
           } catch (createErr: any) {
             const msg = createErr?.message ?? ""
@@ -1328,7 +1329,7 @@ export async function POST(req: Request) {
           console.log("[sandbox] Skipping install, using cached node_modules")
           send({ type: "step", step: "install", status: "success", message: "Using cached dependencies" })
         } else {
-          const installCmd = `cd ${PROJECT_DIR} && npm install --legacy-peer-deps --no-audit --no-fund 2>&1`
+          const installCmd = `cd ${PROJECT_DIR} && npm install --prefer-offline --legacy-peer-deps --no-audit --no-fund 2>&1`
           let installOutput = ""
 
           send({
